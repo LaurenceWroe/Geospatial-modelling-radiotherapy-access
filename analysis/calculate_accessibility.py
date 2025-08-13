@@ -231,7 +231,7 @@ def allocate_patients(
                 continue
                 
             processed_cells.add((i, j))
-            
+            # hello there
             # Calculate how many patients this LINAC can take
             patients_to_treat = min(patients, linac.remaining_capacity)
             
