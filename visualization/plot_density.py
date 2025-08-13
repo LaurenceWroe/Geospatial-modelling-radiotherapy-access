@@ -104,7 +104,7 @@ def plot_cancer_density(raster_path: str, title: str = "Nigeria Cancer Density",
 if __name__ == "__main__":
     # Generate population density map with log scale
     data_dir = Path(__file__).parent.parent.parent / "data"
-    population_raster = data_dir / "raw" / "nga_pd_2020_1km_UNadj.tif"
+    population_raster = data_dir / "raw" / "nga_pd_2020_1km_UNadj.tif" #setting the data input path here
     population_save_path = data_dir / "processed" / "nga_population_density_log.png"
     
     plot_density(
@@ -112,4 +112,4 @@ if __name__ == "__main__":
         title="Nigeria Population Density (2020, Log Scale)", 
         save_path=str(population_save_path),
         use_log_scale=True
-    ) 
+    )
