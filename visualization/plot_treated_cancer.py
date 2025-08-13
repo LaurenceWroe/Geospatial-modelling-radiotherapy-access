@@ -6,10 +6,10 @@ from matplotlib.colors import LogNorm
 import matplotlib.cm as cm
 
 def plot_treated_cancer_density(
-    treated_cancer_raster_path: str | Path,
-    population_raster_path: str | Path | None = None,
-    linac_excel_path: str | Path | None = None,
-    output_path: str | Path = "",
+    treated_cancer_raster_path: str,
+    population_raster_path: str = None,
+    linac_excel_path: str = None,
+    output_path: str = "",
     dpi: int = 300,
     lambda_km: float = 30.0,
     patients_per_linac_per_year: int = 600

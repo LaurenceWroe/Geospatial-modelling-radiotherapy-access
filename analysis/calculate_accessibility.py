@@ -29,7 +29,7 @@ def distance_decay(distance_km: float, lambda_km: float) -> float:
     return np.exp(-distance_km / lambda_km)
 
 def calculate_treatable_cancer_density(
-    population_raster_path: str | Path,
+    population_raster_path: str,
     cancer_incidence_per_year: int,
     fraction_treatable: float
 ) -> Tuple[np.ndarray, rasterio.transform.Affine, rasterio.crs.CRS]:
@@ -123,7 +123,7 @@ def calculate_distances(
 def calculate_combined_probability(
     treatable_cancer: np.ndarray,
     linac_facilities: List[LinacFacility],
-    population_raster_path: str | Path,
+    population_raster_path: str,
     lambda_km: float,
     max_distance_km: float = 100.0
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -174,7 +174,7 @@ def calculate_combined_probability(
 def allocate_patients(
     treatable_cancer: np.ndarray,
     linac_facilities: List[LinacFacility],
-    population_raster_path: str | Path,
+    population_raster_path: str,
     lambda_km: float,
     max_distance_km: float = 100.0
 ) -> Tuple[np.ndarray, List[LinacFacility]]:
@@ -253,9 +253,9 @@ def allocate_patients(
     return unallocated, linac_facilities
 
 def calculate_accessibility(
-    population_raster_path: str | Path,
-    linac_excel_path: str | Path,
-    output_path: str | Path = None,
+    population_raster_path: str,
+    linac_excel_path: str,
+    output_path: str = None,
     cancer_incidence_per_year: int = 128000,
     fraction_treatable: float = 0.5,
     patients_per_linac_per_year: int = 600,

@@ -93,6 +93,7 @@ def _standardize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     - Accepts alternate column headers for name and count.
     - Builds 'Coordinates' from either a single column or separate lat/lon columns.
+    - Filters out summary/header rows.
     """
     df = _normalize_columns(df)
     selected = _find_best_columns(list(df.columns))
@@ -110,8 +111,9 @@ def _standardize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         coords_series = working[selected["coordinates"]]
         # Normalize separators to comma
         coords_series = coords_series.astype(str).str.replace(";", ",", regex=False)
-        # Ensure there's a comma separator between two numbers if space-separated
-        coords_series = coords_series.str.replace(r"\s+", ", ", regex=True)
+        # Clean up multiple spaces and ensure single comma separator
+        coords_series = coords_series.str.replace(r"\s+", " ", regex=True)  # Normalize spaces
+        coords_series = coords_series.str.replace(r"\s*,\s*", ", ", regex=True)  # Normalize comma spacing
         working[out_coords_col] = coords_series
     elif selected["lat"] and selected["lon"] and selected["lat"] in working.columns and selected["lon"] in working.columns:
         def _fmt(lat, lon):
@@ -155,22 +157,40 @@ def _standardize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
                 found_count = c
                 break
         if found_count is not None:
-            working[out_count_col] = working[found_count]
+            working[out_count_col] = working[selected["count"]]
         else:
             working[out_count_col] = 0
+
+    # Filter out summary/header rows that don't have valid coordinates
+    # Look for rows where coordinates contain actual lat,lon values
+    def is_valid_coord(coord_str):
+        if pd.isna(coord_str) or coord_str == "None" or coord_str == "":
+            return False
+        try:
+            # Check if it looks like "lat, lon" format
+            parts = str(coord_str).split(',')
+            if len(parts) != 2:
+                return False
+            lat = float(parts[0].strip())
+            lon = float(parts[1].strip())
+            # Basic validation: lat should be between -90 and 90, lon between -180 and 180
+            return -90 <= lat <= 90 and -180 <= lon <= 180
+        except (ValueError, AttributeError):
+            return False
+    
+    # Filter out summary/header rows that don't have valid coordinates
+    valid_coords = working[out_coords_col].apply(is_valid_coord)
+    working = working[valid_coords]
 
     # Ensure types are correct
     # Count should be numeric
     working[out_count_col] = pd.to_numeric(working[out_count_col], errors="coerce").fillna(0).astype(int)
 
-    # Drop rows missing coordinates entirely
-    working = working[working[out_coords_col].notna() & (working[out_coords_col] != "None")]
-
-    # Return only required columns + keep original for downstream if needed
+    # Return only required columns
     return working[[out_name_col, out_coords_col, out_count_col]]
 
 
-def read_linac_excel(filepath: str | Path, sheet: Optional[str | int] = None) -> pd.DataFrame:
+def read_linac_excel(filepath: str, sheet: Optional[str | int] = None) -> pd.DataFrame:
     """Read LINAC Excel robustly, picking a sheet with expected columns.
 
     Tries in order:

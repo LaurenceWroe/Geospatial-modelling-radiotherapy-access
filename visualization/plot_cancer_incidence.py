@@ -5,8 +5,8 @@ from pathlib import Path
 from matplotlib.colors import LogNorm
 
 def plot_cancer_incidence_density(
-    population_raster_path: str | Path,
-    output_path: str | Path = "",
+    population_raster_path: str,
+    output_path: str = "",
     cancer_incidence_per_year: int = 128000,
     fraction_treatable: float = 0.5,
     dpi: int = 300
@@ -72,8 +72,8 @@ def plot_cancer_incidence_density(
     plt.close()
 
 def plot_treatable_cancer_density(
-    population_raster_path: str | Path,
-    output_path: str | Path = "",
+    population_raster_path: str,
+    output_path: str = "",
     cancer_incidence_per_year: int = 128000,
     fraction_treatable: float = 0.5,
     dpi: int = 300
@@ -132,8 +132,8 @@ def plot_treatable_cancer_density(
     plt.close()
 
 def plot_treatable_cancer_density_km(
-    population_raster_path: str | Path,
-    output_path: str | Path = "",
+    population_raster_path: str,
+    output_path: str = "",
     cancer_incidence_per_year: int = 128000,
     fraction_treatable: float = 0.5,
     dpi: int = 300,

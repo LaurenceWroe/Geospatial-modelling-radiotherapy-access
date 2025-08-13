@@ -10,8 +10,8 @@ from pyproj import Geod
 from typing import Optional
 
 def calculate_accessibility_probability(
-    population_raster_path: str | Path,
-    linac_excel_path: str | Path,
+    population_raster_path: str,
+    linac_excel_path: str,
     lambda_km: float = 30.0,
     max_distance_km: Optional[float] = None
 ) -> np.ndarray:
@@ -109,9 +109,9 @@ def calculate_accessibility_probability(
     return combined_probability
 
 def plot_accessibility_probability(
-    population_raster_path: str | Path,
-    linac_excel_path: str | Path,
-    output_path: Optional[str | Path] = None,
+    population_raster_path: str,
+    linac_excel_path: str,
+    output_path: str = None,
     lambda_km: float = 30.0,
     max_distance_km: Optional[float] = None,
     dpi: int = 300
