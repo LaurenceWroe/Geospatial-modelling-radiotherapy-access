@@ -10,3 +10,7 @@ To do
 - centres from IAEA are in the wrong place, need to fix the coordinates
 - untreated cases are high - how to model radiotherapy requirements (instead of just 50%)
 - generalise code to PyQt GUI
+
+
+
+![Alt text](Data_flow.png?raw=true "Data Flow Plan Diagram")
