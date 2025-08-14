@@ -14,7 +14,7 @@ def resample_population_rioxarray(
     output_dir: str,
     country_bounds: Dict[str, float],
     target_resolution_km: float = 1.0,
-    output_path: str | None = None
+    output_path: str = None
 ) -> Dict[str, Any]:
     """
     Resample population data to target resolution using rioxarray.
