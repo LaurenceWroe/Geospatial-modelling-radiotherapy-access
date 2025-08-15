@@ -57,9 +57,22 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
         
         # Load the data
         with rioxarray.open_rasterio(input_file) as src:
-            # Calculate original population
-            original_pop = float(src.sum().values)
+            # Explicitly handle values with no data 
+            src = src.rio.write_nodata(-9999)  # WorldPop standard
+            src = src.where(src != src.rio.nodata, 0) # Replaces nodata with 0
+
+            # Clip any negative values to zero
+            src = src.where(src >= 0, 0)
             
+            # Calculate original population
+            original_pop = float(src.sum(skipna=True).values)
+            
+            print("Data stats before processing:")
+            print(f"Min: {src.min().values}, Max: {src.max().values}")
+            print(f"NaN count: {src.isnull().sum().values}")
+            print(f"Negative count: {(src < 0).sum().values}")
+
+
             # Reproject to target resolution
             resampled = src.rio.reproject(
                 src.rio.crs,
