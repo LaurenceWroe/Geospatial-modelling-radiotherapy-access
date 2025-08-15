@@ -13,23 +13,28 @@ from pycountry import countries
 from download_worldpop_tif import download_worldpop_tif
 
 class DownloadThread(QThread):
-    update_progress = pyqtSignal(int)
+    progress_updated = pyqtSignal(int)
     finished = pyqtSignal(bool, str)
-    download_size = 0
-    downloaded = 0
 
-    def __init__(self, country_name, output_dir):
+    def __init__(self, country_name, output_dir, overwrite=False):
         super().__init__()
         self.country_name = country_name
         self.output_dir = output_dir
+        self.overwrite = overwrite
 
     def run(self):
         try:
-            result = download_worldpop_tif(self.country_name, self.output_dir, self.update_progress)
-            if result[0]:
-                self.finished.emit(True, result[1])
-            else:
-                self.finished.emit(False, result[1])
+            # Create a callback that emits the progress signal
+            def progress_callback(progress):
+                self.progress_updated.emit(progress)
+
+            success, message = download_worldpop_tif(
+                self.country_name,
+                self.output_dir,
+                progress_callback,
+                self.overwrite
+            )
+            self.finished.emit(success, message)
         except Exception as e:
             self.finished.emit(False, str(e))
 
@@ -39,14 +44,14 @@ class WorldPopDownloader(QMainWindow):
         self.setup_ui()
 
     def setup_ui(self):
-        self.setWindowTitle("WorldPop 2020 Data Downloader")
+        self.setWindowTitle("WorldPop Data Downloader")
         self.setFixedSize(400, 200)
 
         # Widgets
         self.label = QLabel("Select a country:")
         self.combo = QComboBox()
         self.combo.addItems(sorted([country.name for country in countries]))
-        self.download_btn = QPushButton("Download Worldpop.org TIF")
+        self.download_btn = QPushButton("Download TIF")
         self.progress = QProgressBar()
         self.progress.setVisible(False)
 
@@ -77,11 +82,11 @@ class WorldPopDownloader(QMainWindow):
         if not output_dir:
             return
 
-        # Check if file exists before downloading
+        # Check if file exists
         try:
             country_obj = countries.lookup(country)
             country_code = country_obj.alpha_3.lower()
-            target_file = f"{output_dir}/{country_code}_ppp_2020_UNadj.tif"
+            target_file = os.path.join(output_dir, f"{country_code}_ppp_2020_UNadj.tif")
             
             if os.path.exists(target_file):
                 reply = QMessageBox.question(
@@ -97,14 +102,14 @@ class WorldPopDownloader(QMainWindow):
                 overwrite = False
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
-            return   
+            return
 
         self.progress.setValue(0)
         self.progress.setVisible(True)
         self.download_btn.setEnabled(False)
 
-        self.thread = DownloadThread(country, output_dir)
-        self.thread.update_progress.connect(self.update_progress_bar)
+        self.thread = DownloadThread(country, output_dir, overwrite)
+        self.thread.progress_updated.connect(self.update_progress_bar)
         self.thread.finished.connect(self.download_complete)
         self.thread.start()
 
