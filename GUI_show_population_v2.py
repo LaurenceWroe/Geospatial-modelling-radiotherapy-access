@@ -9,12 +9,13 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 from pycountry import countries
-from download_worldpop_tif import download_worldpop_tif  # Import your function
+from download_worldpop_tif import download_worldpop_tif
 
 class DownloadThread(QThread):
-    """Thread to handle the download without freezing the GUI."""
-    progress_signal = pyqtSignal(int)
-    finished_signal = pyqtSignal(bool, str)
+    update_progress = pyqtSignal(int)
+    finished = pyqtSignal(bool, str)
+    download_size = 0
+    downloaded = 0
 
     def __init__(self, country_name, output_dir):
         super().__init__()
@@ -23,21 +24,27 @@ class DownloadThread(QThread):
 
     def run(self):
         try:
-            success, result = download_worldpop_tif(self.country_name, self.output_dir)
-            self.finished_signal.emit(success, result)
+            result = download_worldpop_tif(self.country_name, self.output_dir, self.update_progress)
+            if result[0]:
+                self.finished.emit(True, result[1])
+            else:
+                self.finished.emit(False, result[1])
         except Exception as e:
-            self.finished_signal.emit(False, str(e))
+            self.finished.emit(False, str(e))
 
 class WorldPopDownloader(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setup_ui()
+
+    def setup_ui(self):
         self.setWindowTitle("WorldPop Data Downloader")
-        self.setGeometry(100, 100, 400, 200)
+        self.setFixedSize(400, 200)
 
         # Widgets
         self.label = QLabel("Select a country:")
         self.combo = QComboBox()
-        self.combo.addItems([country.name for country in countries])
+        self.combo.addItems(sorted([country.name for country in countries]))
         self.download_btn = QPushButton("Download TIF")
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -54,37 +61,41 @@ class WorldPopDownloader(QMainWindow):
         self.setCentralWidget(container)
 
         # Signals
-        self.download_btn.clicked.connect(self.start_download)
+        self.download_btn.clicked.connect(self.initiate_download)
 
-    def start_download(self):
+    def initiate_download(self):
         country = self.combo.currentText()
         if not country:
             QMessageBox.critical(self, "Error", "Please select a country.")
             return
 
-        # Ask for output directory
         output_dir = QFileDialog.getExistingDirectory(
-            self, "Select Download Directory", "actual_data/raw_from_worldpop"
+            self, "Select Download Directory", "", 
+            QFileDialog.ShowDirsOnly
         )
         if not output_dir:
             return
 
+        self.progress.setValue(0)
         self.progress.setVisible(True)
         self.download_btn.setEnabled(False)
 
-        # Start download in a thread
         self.thread = DownloadThread(country, output_dir)
-        self.thread.finished_signal.connect(self.on_download_finished)
+        self.thread.update_progress.connect(self.update_progress_bar)
+        self.thread.finished.connect(self.download_complete)
         self.thread.start()
 
-    def on_download_finished(self, success, result):
+    def update_progress_bar(self, value):
+        self.progress.setValue(value)
+
+    def download_complete(self, success, message):
         self.progress.setVisible(False)
         self.download_btn.setEnabled(True)
 
         if success:
-            QMessageBox.information(self, "Success", f"File saved to:\n{result}")
+            QMessageBox.information(self, "Success", message)
         else:
-            QMessageBox.critical(self, "Error", f"Download failed:\n{result}")
+            QMessageBox.critical(self, "Error", message)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
