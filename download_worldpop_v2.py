@@ -15,14 +15,18 @@ def download_worldpop_v2(country_name, output_dir="actual_data/raw_from_worldpop
     Returns:
         tuple: (success: bool, message: str)
     """
+
     try:
         country = countries.lookup(country_name)
         country_code = country.alpha_3.lower()
     except LookupError:
         return False, f"Country '{country_name}' not found."
 
-    url = f"https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/{country_code.upper()}/{country_code}_ppp_2020_UNadj.tif"
-    output_file = os.path.join(output_dir, f"{country_code}_ppp_2020_UNadj.tif")
+    url = f"https://data.worldpop.org/GIS/Population_Density/Global_2000_2020_1km_UNadj/2020/{country_code.upper()}/{country_code}_pd_2020_1km_UNadj.tif"
+    #url = f"https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2020/{country_code.upper()}/{country_code}_ppp_2020_1km_Aggregated.tif"
+    # this old url was for the 2020 population data, but the new one is for population density
+
+    output_file = os.path.join(output_dir, f"{country_code}_1km.tif")
     
     # Check if file exists and we shouldn't overwrite
     if not overwrite and os.path.exists(output_file):
@@ -77,8 +81,9 @@ def download_worldpop_v2(country_name, output_dir="actual_data/raw_from_worldpop
     except Exception as e:
         return False, f"An error occurred: {str(e)}"
     
-
-download_worldpop_v2(country_name="United Kingdom", output_dir="actual_data/raw_from_worldpop", overwrite=True)
+print("Download WorldPop TIF file for a specific country")
+result = download_worldpop_v2("United States of America")
+print(result)
 # Example usage:
 # result = download_worldpop_v2("United Kingdom")
 # print(result)

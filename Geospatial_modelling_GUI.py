@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 from pycountry import countries
-from download_worldpop_tif import download_worldpop_tif
+from download_worldpop_v2 import download_worldpop_v2
 from resample_population_v3 import resample_population
 
 class ResampleThread(QThread):
@@ -37,7 +37,7 @@ class DownloadThread(QThread):
             def progress_callback(progress):
                 self.progress_updated.emit(progress)
 
-            success, message = download_worldpop_tif(
+            success, message = download_worldpop_v2(
                 self.country_name,
                 self.output_dir,
                 progress_callback,
