@@ -2,7 +2,7 @@ import os
 import requests
 from pycountry import countries
 
-def download_worldpop(country_name, output_dir="actual_data/raw_from_worldpop", progress_callback=None, overwrite=False):
+def download_worldpop(country_name, output_dir="a_population_density/raw_from_worldpop", progress_callback=None, overwrite=False):
     """
     Downloads WorldPop population TIF file with proper compression handling.
     
