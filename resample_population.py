@@ -4,6 +4,7 @@
 
 import os
 import rioxarray
+import shutil
 import numpy as np
 import xarray as xr
 from pycountry import countries
@@ -34,6 +35,27 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
         if not isinstance(resolution_km, (int, float)) or resolution_km <= 0:
             raise ValueError("Resolution must be a positive number")
         
+        if resolution_km == 1.0:
+            
+            output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
+            
+            # Simply copy the file instead of processing
+            shutil.copy2(input_file, output_file)
+            
+            # Calculate population from the original file
+            with rioxarray.open_rasterio(input_file, masked=True) as src:
+                src = src.rio.write_nodata(-9999)
+                src = src.where(src >= 0, 0)
+                original_pop = float(src.sum(skipna=True).values)
+            
+            return {
+                'success': True,
+                'message': f"Copied original 1km data to:\n{output_file}",
+                'output_path': output_file,
+                'original_population': original_pop,
+                'resampled_population': original_pop
+            }
+
         # Get country code and bounds
         country = countries.lookup(country_name)
         country_code = country.alpha_3.lower()
@@ -77,12 +99,19 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
             resampled = src.rio.reproject(
                 src.rio.crs,
                 resolution=resolution_deg,
-                resampling=Resampling.bilinear,
+                resampling=Resampling.sum, # Use sum to aggregate population counts
                 nodata=np.nan
             )
             
+             # Explicitly handle values with no data for the resampled data 
+            resampled = resampled.rio.write_nodata(-9999)  # WorldPop standard
+            resampled = resampled.where(resampled != resampled.rio.nodata, 0) # Replaces nodata with 0
+
+            # Clip any negative values to zero for the resampled data
+            resampled = resampled.where(resampled >= 0, 0)
+            
             # Calculate resampled population
-            resampled_pop = float(resampled.sum().values)
+            resampled_pop = float(resampled.sum(skipna=True).values)
             
             # Save output
             resampled.rio.to_raster(output_file)
