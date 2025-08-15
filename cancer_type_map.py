@@ -19,6 +19,7 @@ from unittest import result
 import numpy as np
 import pandas as pd
 import rasterio
+import math
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
@@ -174,21 +175,50 @@ def plot_cancer_type_map(
     # Prepare data for plotting
     plot_data = array.copy()
     # Set a minimum floor for log-scale visualization (ignore zeros)
-    positive_mask = plot_data > 0
-    min_positive = plot_data[positive_mask].min() if np.any(positive_mask) else 1e-6
-    floor_value = max(min_positive, 1e-6)
-    plot_data = np.where(plot_data > 0, plot_data, np.nan)
+    #positive_mask = plot_data > 0
+    #min_positive = plot_data[positive_mask].min() if np.any(positive_mask) else 1e-6
+    #floor_value = max(min_positive, 1e-6)
+    #plot_data = np.where(plot_data > 0, plot_data, np.nan)
 
     fig, ax = plt.subplots(figsize=(10, 8))
+    #im = ax.imshow(
+        #plot_data,
+        #extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
+        #origin="upper",
+        #cmap="viridis",
+        #norm=LogNorm(vmin=floor_value, vmax=np.nanmax(plot_data) if np.isfinite(np.nanmax(plot_data)) else 1)
+    #)
+
+# Mask to find positive values (required for LogNorm)
+    positive_mask = plot_data > 0
+
+    if np.any(positive_mask):
+        vmin = np.min(plot_data[positive_mask])
+        vmax = np.max(plot_data[positive_mask])
+    # Make sure vmin and vmax are valid for LogNorm
+        if vmin <= 0 or not np.isfinite(vmin):
+            vmin = 1e-6
+        if vmax <= vmin or not np.isfinite(vmax):
+            vmax = vmin * 10
+    else:
+    # No positive values in plot_data: fallback safe defaults
+        vmin = 1e-6
+        vmax = 1
+
+# Use np.where to mask zero or negative values (to avoid log(0))
+    plot_data_masked = np.where(plot_data > 0, plot_data, np.nan)
+
     im = ax.imshow(
-        plot_data,
+        plot_data_masked,
         extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
         origin="upper",
         cmap="viridis",
-        norm=LogNorm(vmin=floor_value, vmax=np.nanmax(plot_data) if np.isfinite(np.nanmax(plot_data)) else 1)
+        norm=LogNorm(vmin=vmin, vmax=vmax)
     )
+
     cbar = plt.colorbar(im, ax=ax)
-    cbar.clim(min(population), max(population))
+    cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
+
     cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
     ax.set_title(title)
     ax.set_xlabel("Longitude")
@@ -222,7 +252,7 @@ def main():
         type=str,
         default=None,
         help=(
-            "Path to population raster (GeoTIFF). If omitted, uses data/raw/resampled/"
+            "Path to population raster (GeoTIFF). If omitted, uses actual_data/resampled/"
             "{code}_population_{resolution}km.tif based on --resolution."
         )
     )
@@ -284,15 +314,15 @@ def main():
 
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
-    data_dir = base_dir / "actual_data"
+    data_dir = base_dir / "src" / "actual_data"
     if args.output_dir is None:
-        output_dir = data_dir / "cancer_type_maps"
+        output_dir = base_dir / "cancer_type_maps"
     else:
         output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.population_raster is None:
-        pop_default = data_dir / "raw" / "resampled" / f"{args.country_code.lower()}_population_{args.resolution}km.tif"
+        pop_default = data_dir / "resampled" / f"{args.country_code.lower()}_{args.resolution}.0km.tif"
         population_raster_path = str(pop_default)
     else:
         population_raster_path = args.population_raster

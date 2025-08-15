@@ -83,7 +83,7 @@ class WorldPopDownloader(QMainWindow):
         
         self.resolution_label = QLabel("Select resolution (km):")
         self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["0.5", "1", "2", "5", "10", "50"])
+        self.resolution_combo.addItems(["0.5", "1.0", "2.0", "5.0", "10.0", "50.0"])
         
         self.resample_btn = QPushButton("Resample")
         self.resample_btn.setEnabled(False)
