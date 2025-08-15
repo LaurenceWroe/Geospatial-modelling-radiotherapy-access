@@ -25,7 +25,7 @@ from matplotlib.colors import LogNorm
 
 
 DEFAULT_EXCEL_PATH = \
-    "/Users/sophiamartin/Desktop/data/raw/cancer_type_radiotherapy.xlsx"
+    "/Users/sophiamartin/Desktop/src/actual_data/cancer_type_radiotherapy.xlsx"
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
