@@ -1,0 +1,96 @@
+# This function inputs a country name and resolution and resamples the WorldPop population TIF file for that country.
+# It saves the resampled data into actual_data/resampled
+# It is called by the GUI_show_population_v2.py file
+
+import os
+import rioxarray
+import numpy as np
+import xarray as xr
+from pycountry import countries
+from rasterio.enums import Resampling
+from pathlib import Path
+
+def resample_population(country_name, resolution_km, input_dir="actual_data/raw_from_worldpop", output_dir="actual_data/resampled"):
+    """
+    Resamples population data to specified resolution using rioxarray
+    
+    Args:
+        country_name: Name of the country (e.g., "United Kingdom")
+        resolution_km: Target resolution in kilometers
+        input_dir: Directory containing raw WorldPop files
+        output_dir: Directory to save resampled files
+        
+    Returns:
+        dict: {
+            'success': bool,
+            'message': str,
+            'output_path': str,
+            'original_population': float,
+            'resampled_population': float
+        }
+    """
+    try:
+        # Validate inputs
+        if not isinstance(resolution_km, (int, float)) or resolution_km <= 0:
+            raise ValueError("Resolution must be a positive number")
+        
+        # Get country code and bounds
+        country = countries.lookup(country_name)
+        country_code = country.alpha_3.lower()
+        
+        # Convert resolution from km to degrees (approximate)
+        resolution_deg = resolution_km / 111
+        
+        # Prepare file paths
+        input_file = os.path.join(input_dir, f"{country_code}_ppp_2020_UNadj.tif")
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
+        
+        if not os.path.exists(input_file):
+            return {
+                'success': False,
+                'message': f"Input file not found: {input_file}",
+                'output_path': None,
+                'original_population': None,
+                'resampled_population': None
+            }
+        
+        # Load the data
+        with rioxarray.open_rasterio(input_file) as src:
+            # Calculate original population
+            original_pop = float(src.sum().values)
+            
+            # Reproject to target resolution
+            resampled = src.rio.reproject(
+                src.rio.crs,
+                resolution=resolution_deg,
+                resampling=Resampling.bilinear,
+                nodata=np.nan
+            )
+            
+            # Calculate resampled population
+            resampled_pop = float(resampled.sum().values)
+            
+            # Save output
+            resampled.rio.to_raster(output_file)
+            
+            return {
+                'success': True,
+                'message': f"Successfully resampled to {resolution_km}km",
+                'output_path': output_file,
+                'original_population': original_pop,
+                'resampled_population': resampled_pop
+            }
+            
+    except Exception as e:
+        return {
+            'success': False,
+            'message': f"Resampling failed: {str(e)}",
+            'output_path': None,
+            'original_population': None,
+            'resampled_population': None
+        }
+    
+
+result = resample_population("United Kingdom", 0.5)
+print(result)
