@@ -114,7 +114,7 @@ class WorldPopDownloader(QMainWindow):
         try:
             country_obj = countries.lookup(country)
             country_code = country_obj.alpha_3.lower()
-            input_file = os.path.join("actual_data/raw_from_worldpop", f"{country_code}_ppp_2020_UNadj.tif")
+            input_file = os.path.join("actual_data/raw_from_worldpop", f"{country_code}_raw.tif")
             self.resample_btn.setEnabled(os.path.exists(input_file))
         except:
             self.resample_btn.setEnabled(False)
@@ -125,10 +125,7 @@ class WorldPopDownloader(QMainWindow):
             QMessageBox.critical(self, "Error", "Please select a country.")
             return
 
-        output_dir = QFileDialog.getExistingDirectory(
-            self, "Select Download Directory", "", 
-            QFileDialog.ShowDirsOnly
-        )
+        output_dir = "actual_data/raw_from_worldpop"
         if not output_dir:
             return
 
@@ -136,7 +133,7 @@ class WorldPopDownloader(QMainWindow):
         try:
             country_obj = countries.lookup(country)
             country_code = country_obj.alpha_3.lower()
-            target_file = os.path.join(output_dir, f"{country_code}_ppp_2020_UNadj.tif")
+            target_file = os.path.join(output_dir, f"{country_code}_raw.tif")
             
             if os.path.exists(target_file):
                 reply = QMessageBox.question(

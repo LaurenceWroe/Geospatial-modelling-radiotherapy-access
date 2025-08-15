@@ -26,7 +26,7 @@ def download_worldpop_v2(country_name, output_dir="actual_data/raw_from_worldpop
     #url = f"https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2020/{country_code.upper()}/{country_code}_ppp_2020_1km_Aggregated.tif"
     # this old url was for the 2020 population data, but the new one is for population density
 
-    output_file = os.path.join(output_dir, f"{country_code}_1km.tif")
+    output_file = os.path.join(output_dir, f"{country_code}_raw.tif")
     
     # Check if file exists and we shouldn't overwrite
     if not overwrite and os.path.exists(output_file):
@@ -81,9 +81,8 @@ def download_worldpop_v2(country_name, output_dir="actual_data/raw_from_worldpop
     except Exception as e:
         return False, f"An error occurred: {str(e)}"
     
-print("Download WorldPop TIF file for a specific country")
-result = download_worldpop_v2("United States of America")
-print(result)
+
 # Example usage:
-# result = download_worldpop_v2("United Kingdom")
+# print("Download WorldPop TIF file for a specific country")
+# result = download_worldpop_v2("United States of America")
 # print(result)

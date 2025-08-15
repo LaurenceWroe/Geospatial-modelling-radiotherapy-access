@@ -42,7 +42,7 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
         resolution_deg = resolution_km / 111
         
         # Prepare file paths
-        input_file = os.path.join(input_dir, f"{country_code}_ppp_2020_UNadj.tif")
+        input_file = os.path.join(input_dir, f"{country_code}_raw.tif")
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
         
@@ -91,6 +91,6 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
             'resampled_population': None
         }
     
-
-result = resample_population("United Kingdom", 0.5)
-print(result)
+# example usage
+# result = resample_population("United Kingdom", 0.5)
+# print(result)
