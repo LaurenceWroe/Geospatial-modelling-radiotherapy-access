@@ -7,8 +7,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 from pycountry import countries
-from download_worldpop_v2 import download_worldpop_v2
-from resample_population_v3 import resample_population
+from download_worldpop import download_worldpop
+from resample_population import resample_population
 
 class ResampleThread(QThread):
     finished = pyqtSignal(dict)  # Emits the full result dictionary
@@ -37,7 +37,7 @@ class DownloadThread(QThread):
             def progress_callback(progress):
                 self.progress_updated.emit(progress)
 
-            success, message = download_worldpop_v2(
+            success, message = download_worldpop(
                 self.country_name,
                 self.output_dir,
                 progress_callback,
@@ -86,7 +86,8 @@ class WorldPopDownloader(QMainWindow):
         self.resolution_combo.addItems(["0.5", "1.0", "2.0", "5.0", "10.0", "50.0"])
         
         self.resample_btn = QPushButton("Resample")
-        self.resample_btn.setEnabled(False)
+        self.resample_btn.setEnabled(False) # initially disabled
+        self.check_resample_availability() # check if resampling is available
         
         resample_layout.addWidget(self.resolution_label)
         resample_layout.addWidget(self.resolution_combo)

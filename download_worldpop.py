@@ -1,62 +1,88 @@
-#!/usr/bin/env python3
-"""
-Downloads and saves WorldPop data for supported countries.
-"""
+import os
 import requests
-from pathlib import Path
-import logging
+from pycountry import countries
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def download_worldpop(country_name, output_dir="actual_data/raw_from_worldpop", progress_callback=None, overwrite=False):
+    """
+    Downloads WorldPop population TIF file with proper compression handling.
+    
+    Args:
+        country_name: Name of the country (e.g., "United Kingdom")
+        output_dir: Directory to save the downloaded file
+        progress_callback: Function to report download progress
+        overwrite: Whether to overwrite existing files
+        
+    Returns:
+        tuple: (success: bool, message: str)
+    """
 
-
-# WorldPop data configuration - Updated with actual URLs
-COUNTRY_DATA = {
-    'GBR': {
-        'name': 'United Kingdom',
-        'url': 'https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/GBR/gbr_ppp_2020_UNadj.tif'
-    },
-    'NGA': {
-        'name': 'Nigeria',
-        'url': 'https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/NGA/nga_ppp_2020_UNadj.tif'
-    },
-    'USA': {
-        'name': 'United States',
-        'url': 'https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/USA/usa_ppp_2020_UNadj.tif'
-    }
-}
-
-def download_file(url: str, save_path: Path) -> None:
-    """Downloads a file from URL and saves it locally"""
     try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        country = countries.lookup(country_name)
+        country_code = country.alpha_3.lower()
+    except LookupError:
+        return False, f"Country '{country_name}' not found."
+
+    url = f"https://data.worldpop.org/GIS/Population_Density/Global_2000_2020_1km_UNadj/2020/{country_code.upper()}/{country_code}_pd_2020_1km_UNadj.tif"
+    #url = f"https://data.worldpop.org/GIS/Population/Global_2000_2020_1km/2020/{country_code.upper()}/{country_code}_ppp_2020_1km_Aggregated.tif"
+    # this old url was for the 2020 population data, but the new one is for population density
+
+    output_file = os.path.join(output_dir, f"{country_code}_raw.tif")
+    
+    # Check if file exists and we shouldn't overwrite
+    if not overwrite and os.path.exists(output_file):
+        return True, f"File already exists at:\n{output_file}"
+
+    try:
+        # Use session to enable connection pooling and compression
+        with requests.Session() as session:
+            session.headers.update({
+                'Accept-Encoding': 'gzip, deflate',
+                'User-Agent': 'Mozilla/5.0'
+            })
+            
+            # First get the headers to check file size
+            with session.head(url) as response:
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length', 0))
                 
-        logger.info(f"Downloaded: {save_path}")
-    except Exception as e:
-        logger.error(f"Failed to download {url}: {e}")
-        raise
+                # Verify expected file size (3-10MB typical)
+                if total_size > 50 * 1024 * 1024:  # 50MB threshold
+                    return False, f"Unexpected large file size ({total_size/1024/1024:.1f}MB). Aborting download."
 
-def main():
-    """Main download function"""
-    raw_data_dir = Path("actual_data/raw_from_worldpop") 
-    raw_data_dir.mkdir(parents=True, exist_ok=True)
-    
-    logger.info("Starting WorldPop data download...")
-    
-    for country_code, data in COUNTRY_DATA.items():
-        output_file = raw_data_dir / f"{country_code.lower()}_population.tif"
+            # Stream the download with compression
+            with session.get(url, stream=True) as response:
+                response.raise_for_status()
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Use chunked download with progress
+                downloaded = 0
+                with open(output_file, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_callback and total_size > 0:
+                                progress = int(100 * downloaded / total_size)
+                                progress_callback(progress)
+            
+        # Verify downloaded file size
+        actual_size = os.path.getsize(output_file) / (1024 * 1024)
+        if actual_size > 50:  # MB
+            os.remove(output_file)
+            return False, f"Downloaded file too large ({actual_size:.1f}MB). Removed suspicious file."
         
-        if not output_file.exists():
-            logger.info(f"Downloading {data['name']} data...")
-            download_file(data['url'], output_file)
-        else:
-            logger.info(f"{data['name']} data already exists at {output_file}")
+        return True, f"Successfully downloaded to:\n{output_file} ({actual_size:.1f}MB)"
+    
+    except requests.exceptions.RequestException as e:
+        # Clean up partial download on failure
+        if os.path.exists(output_file):
+            os.remove(output_file)
+        return False, f"Download failed: {str(e)}"
+    except Exception as e:
+        return False, f"An error occurred: {str(e)}"
+    
 
-if __name__ == "__main__":
-    main()
+# Example usage:
+# print("Download WorldPop TIF file for a specific country")
+# result = download_worldpop_v2("United States of America")
+# print(result)
