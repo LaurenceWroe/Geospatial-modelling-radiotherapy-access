@@ -2,6 +2,7 @@
 # Includes a select a country dropdown, a download button, and a progress bar.
 
 import sys
+import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QComboBox, 
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
@@ -38,14 +39,14 @@ class WorldPopDownloader(QMainWindow):
         self.setup_ui()
 
     def setup_ui(self):
-        self.setWindowTitle("WorldPop Data Downloader")
+        self.setWindowTitle("WorldPop 2020 Data Downloader")
         self.setFixedSize(400, 200)
 
         # Widgets
         self.label = QLabel("Select a country:")
         self.combo = QComboBox()
         self.combo.addItems(sorted([country.name for country in countries]))
-        self.download_btn = QPushButton("Download TIF")
+        self.download_btn = QPushButton("Download Worldpop.org TIF")
         self.progress = QProgressBar()
         self.progress.setVisible(False)
 
@@ -75,6 +76,28 @@ class WorldPopDownloader(QMainWindow):
         )
         if not output_dir:
             return
+
+        # Check if file exists before downloading
+        try:
+            country_obj = countries.lookup(country)
+            country_code = country_obj.alpha_3.lower()
+            target_file = f"{output_dir}/{country_code}_ppp_2020_UNadj.tif"
+            
+            if os.path.exists(target_file):
+                reply = QMessageBox.question(
+                    self,
+                    "File Exists",
+                    f"File already exists at:\n{target_file}\n\nOverwrite?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+                overwrite = True
+            else:
+                overwrite = False
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
+            return   
 
         self.progress.setValue(0)
         self.progress.setVisible(True)
