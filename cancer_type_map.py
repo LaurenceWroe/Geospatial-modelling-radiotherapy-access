@@ -14,6 +14,7 @@ Typical GUI flow:
 import argparse
 from pathlib import Path
 from typing import Optional, Dict
+from unittest import result
 
 import numpy as np
 import pandas as pd
@@ -129,7 +130,7 @@ def multiply_population_by_fraction(
     # Clean population values
     population = np.where(population > 0, population, 0)
     result = population.astype(np.float64) * float(fraction)
-    return result
+    return population,result
 
 
 def save_raster_like(
@@ -156,6 +157,7 @@ def save_raster_like(
 
 
 def plot_cancer_type_map(
+    population: np.ndarray,
     array: np.ndarray,
     template_raster_path: str,
     output_png_path: str,
@@ -186,6 +188,7 @@ def plot_cancer_type_map(
         norm=LogNorm(vmin=floor_value, vmax=np.nanmax(plot_data) if np.isfinite(np.nanmax(plot_data)) else 1)
     )
     cbar = plt.colorbar(im, ax=ax)
+    cbar.clim(min(population), max(population))
     cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
     ax.set_title(title)
     ax.set_xlabel("Longitude")
@@ -306,7 +309,7 @@ def main():
     # Calculation
     print(f"Loading population raster: {population_raster_path}")
     print(f"Using cancer-type proportion: {fraction} ({cancer_key})")
-    array = multiply_population_by_fraction(population_raster_path, fraction)
+    population, array = multiply_population_by_fraction(population_raster_path, fraction)
 
     # Save GeoTIFF
     print(f"Saving GeoTIFF: {output_tif}")
@@ -315,7 +318,7 @@ def main():
     # Save PNG map
     title = f"{args.country_code.upper()} — {args.cancer_type} (population × proportion)"
     print(f"Saving PNG map: {output_png}")
-    plot_cancer_type_map(array, population_raster_path, output_png, title)
+    plot_cancer_type_map(population,array, population_raster_path, output_png, title)
 
     print("Done.")
 
