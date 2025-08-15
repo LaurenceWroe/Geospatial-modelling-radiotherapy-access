@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate a country map for a selected cancer type by multiplying the
-population density raster by the cancer-type proportion from an Excel file.
+population density raster with the by the cancer-type proportion from an Excel file.
 
 Default Excel path (can be overridden):
   /Users/sophiamartin/Desktop/data/raw/cancer_type_radiotherapy.xlsx
