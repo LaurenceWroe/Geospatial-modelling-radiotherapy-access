@@ -15,6 +15,7 @@ import argparse
 from pathlib import Path
 from typing import Optional, Dict
 from unittest import result
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -47,9 +48,10 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, float]:
     df = _normalize_columns(df)
 
     # Find best matching columns
-    col_map: Dict[str, Optional[str]] = {
+    col_map: Dict[str, Tuple[Optional[str], Optional[str]]] = {
         "type": None,
         "prop": None,
+        "frac": None,
     }
     for c in df.columns:
         lc = c.strip().lower()
@@ -57,35 +59,44 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, float]:
             col_map["type"] = c
         if col_map["prop"] is None and (lc == "proportion of cases" or "proportion" in lc):
             col_map["prop"] = c
+        if col_map["frac"] is None and (lc == "fraction" or "fraction" in lc):
+            col_map["frac"] = c
 
-    if col_map["type"] is None or col_map["prop"] is None:
+    if col_map["type"] is None or col_map["prop"] is None or col_map["frac"] is None:
         raise ValueError(
             f"Could not find required columns in {excel_path}. Found columns: {list(df.columns)}"
         )
 
+
+
     # Build mapping
-    mapping: Dict[str, float] = {}
+    mapping: Dict[str, Tuple[float, float]] = {}  # Mapping from cancer type to (prop, frac)
+
     for _, row in df.iterrows():
         ct = str(row[col_map["type"]]).strip()
         if ct.lower() in ("nan", "", "none"):
             continue
         try:
             prop = float(row[col_map["prop"]])
+            frac = float(row[col_map["frac"]])
         except Exception:
             continue
-        mapping[ct.lower()] = prop
+        mapping[ct.lower()] = (prop, frac)
+
     if not mapping:
         raise ValueError(f"No valid cancer-type proportions found in {excel_path}")
+
     return mapping
 
 
-def prompt_for_cancer_type(fractions: Dict[str, float]) -> str:
+def prompt_for_cancer_type(fractions: Dict[str, Tuple[float, float]]) -> str:
     """
     Interactively prompt the user to choose a cancer type.
 
     Returns the selected cancer type key (lowercased) present in fractions.
     """
-    options = sorted(fractions.keys())
+    #sort fractions alphabephetically
+    options = sorted(fractions.keys())#dict(sorted(fractions.items(), key = lambda item: item[1][0]))
     print("\nAvailable cancer types:")
     for idx, key in enumerate(options, start=1):
         print(f"  {idx}. {key} ")
@@ -117,20 +128,25 @@ def prompt_for_cancer_type(fractions: Dict[str, float]) -> str:
 
 def multiply_population_by_fraction(
     population_raster_path: str,
+    proportion: float,
     fraction: float,
 ) -> np.ndarray:
-    """Load population raster and return population * fraction array.
+    """Load population raster and return population * proportion * fraction array.
 
     Notes:
     - Any nodata or non-positive population values are treated as 0 for plotting
-    - Returns the calculated array; raster metadata should be reused by caller
+    - Returns the cleaned population and the calculated array; raster metadata should be reused by caller
     """
     with rasterio.open(population_raster_path) as src:
         population = src.read(1)
-    # Clean population values
+
+    # Clean population values (remove nodata / negatives)
     population = np.where(population > 0, population, 0)
-    result = population.astype(np.float64) * float(fraction)
-    return population,result
+
+    # Multiply by proportion and fraction
+    result = population.astype(np.float64) * float(proportion) * float(fraction)
+
+    return population, result
 
 
 def save_raster_like(
@@ -336,10 +352,17 @@ def main():
     output_png = str(output_dir / f"{base_name}_cancer_type_density.png")
 
     # Calculation
-    print(f"Loading population raster: {population_raster_path}")
-    print(f"Using cancer-type proportion: {fraction} ({cancer_key})")
-    population, array = multiply_population_by_fraction(population_raster_path, fraction)
+    #print(f"Loading population raster: {population_raster_path}")
+    #print(f"Using cancer-type proportion: {fraction} ({cancer_key})")
+    #population, array = multiply_population_by_fraction(population_raster_path, fraction)
+# Get the cancer type values (both proportion and fraction)
+    proportion, fraction = fractions[cancer_key]
 
+    print(f"Loading population raster: {population_raster_path}")
+    print(f"Using cancer-type proportion: {proportion} and fraction: {fraction} ({cancer_key})")
+
+    # Pass both arguments now
+    population, array = multiply_population_by_fraction(population_raster_path, proportion, fraction)
     # Save GeoTIFF
     print(f"Saving GeoTIFF: {output_tif}")
     save_raster_like(population_raster_path, array, output_tif)
