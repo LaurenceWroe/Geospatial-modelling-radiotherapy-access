@@ -4,7 +4,7 @@ Generate a country map for a selected cancer type by multiplying the
 population density raster with the by the cancer-type proportion from an Excel file.
 
 Default Excel path (can be overridden):
-  /Users/sophiamartin/Desktop/data/raw/cancer_type_radiotherapy.xlsx
+  /Users/sophiamartin/Desktop/src/b_cancer_incidence/cancer_type_radiotherapy.xlsx
 
 Typical GUI flow:
   1) Run resample_population.py to create the country population raster at a target resolution
@@ -24,8 +24,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
 
-DEFAULT_EXCEL_PATH = \
-    "/Users/sophiamartin/Desktop/src/actual_data/cancer_type_radiotherapy.xlsx"
+DEFAULT_EXCEL_PATH = "/Users/sophiamartin/Desktop/src/b_cancer_incidence/cancer_type_radiotherapy.xlsx"
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -253,7 +252,7 @@ def main():
         default=None,
         help=(
             "Path to population raster (GeoTIFF). If omitted, uses actual_data/resampled/"
-            "{code}_population_{resolution}km.tif based on --resolution."
+            "{code}_{resolution}km.tif based on --resolution."
         )
     )
     parser.add_argument(
@@ -266,7 +265,7 @@ def main():
         "--output-dir",
         type=str,
         default=None,
-        help="Directory to save outputs (default: actual_data/cancer_type_maps)"
+        help="Directory to save outputs (default: b_cancer_incidence/cancer_type_maps)"
     )
     parser.add_argument(
         "--basename",
@@ -314,15 +313,15 @@ def main():
 
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
-    data_dir = base_dir / "src" / "actual_data"
+    #data_dir = base_dir 
     if args.output_dir is None:
-        output_dir = base_dir / "cancer_type_maps"
+        output_dir = base_dir / "b_cancer_incidence" / "cancer_type_maps"
     else:
         output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.population_raster is None:
-        pop_default = data_dir / "resampled" / f"{args.country_code.lower()}_{args.resolution}.0km.tif"
+        pop_default = base_dir /"actual_data"/ "resampled" / f"{args.country_code.lower()}_{args.resolution}.0km.tif"
         population_raster_path = str(pop_default)
     else:
         population_raster_path = args.population_raster
