@@ -1,5 +1,7 @@
 import sys
 import os
+import subprocess
+import pandas as pd 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QComboBox, 
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
@@ -21,6 +23,7 @@ class ResampleThread(QThread):
     def run(self):
         result = resample_population(self.country_name, self.resolution)
         self.finished.emit(result)
+    
 
 class DownloadThread(QThread):
     progress_updated = pyqtSignal(int)
@@ -51,6 +54,19 @@ class WorldPopDownloader(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setup_ui()
+
+    def load_cancer_types(self, excel_path="b_cancer_incidence/cancer_type_radiotherapy.xlsx"):
+        try:
+            df = pd.read_excel(excel_path)
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            if "cancer type" in df.columns:
+                types = sorted(df["cancer type"].dropna().unique())
+                return types
+            else:
+                return []
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load cancer types: {e}")
+            return []
 
     def setup_ui(self):
         self.setWindowTitle("WorldPop Data Processor")
@@ -94,6 +110,25 @@ class WorldPopDownloader(QMainWindow):
         resample_layout.addWidget(self.resample_btn)
         resample_group.setLayout(resample_layout)
 
+        # --- Cancer Type & Map Generation Group ---
+        map_group = QGroupBox("Generate Cancer Type Map")
+        map_layout = QVBoxLayout()
+
+        self.cancer_label = QLabel("Select a cancer type:")
+        self.cancer_combo = QComboBox()
+        cancer_types = self.load_cancer_types()
+        self.cancer_combo.addItems(cancer_types)
+
+        self.generate_map_btn = QPushButton("Generate Map")
+        self.generate_map_btn.setEnabled(False)  # initially disabled
+
+        map_layout.addWidget(self.cancer_label)
+        map_layout.addWidget(self.cancer_combo)
+        map_layout.addWidget(self.generate_map_btn)
+        map_group.setLayout(map_layout)
+
+        main_layout.addWidget(map_group)
+
         # Add groups to main layout
         main_layout.addWidget(download_group)
         main_layout.addWidget(resample_group)
@@ -106,6 +141,7 @@ class WorldPopDownloader(QMainWindow):
         self.download_btn.clicked.connect(self.initiate_download)
         self.resample_btn.clicked.connect(self.initiate_resample)
         self.country_combo.currentTextChanged.connect(self.check_resample_availability)
+        self.generate_map_btn.clicked.connect(self.run_cancer_map_script)
 
     def check_resample_availability(self):
         country = self.country_combo.currentText()
@@ -196,8 +232,42 @@ class WorldPopDownloader(QMainWindow):
                 f"Saved to: {result['output_path']}"
             )
             QMessageBox.information(self, "Success", msg)
+            self.generate_map_btn.setEnabled(True)  # enable map generation
         else:
             QMessageBox.critical(self, "Error", result['message'])
+
+    def run_cancer_map_script(self):
+        country = self.country_combo.currentText()
+        cancer_type = self.cancer_combo.currentText()
+        resolution = self.resolution_combo.currentText()
+
+        if not (country and cancer_type and resolution):
+            QMessageBox.critical(self, "Error", "Missing inputs.")
+            return
+
+        try:
+            from pycountry import countries
+            country_obj = countries.lookup(country)
+            country_code = country_obj.alpha_3
+        except:
+            QMessageBox.critical(self, "Error", f"Invalid country name: {country}")
+            return
+
+        script_path = os.path.abspath("b_cancer_incidence/cancer_type_map.py")
+
+        cmd = [
+            sys.executable,  # Path to Python interpreter
+            script_path,
+            country_code,
+            cancer_type,
+            "--resolution", resolution
+    ]
+
+        try:
+            subprocess.run(cmd, check=True)
+            QMessageBox.information(self, "Success", f"Map generated for {cancer_type} in {country_code}.")
+        except subprocess.CalledProcessError as e:
+            QMessageBox.critical(self, "Error", f"Map generation failed:\n{e}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
