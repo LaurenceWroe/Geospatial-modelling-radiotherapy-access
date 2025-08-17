@@ -179,6 +179,8 @@ def plot_cancer_type_map(
     output_png_path: str,
     title: str,
     dpi: int = 300,
+    global_vmin: Optional[float] = None,
+    global_vmax: Optional[float] = None,
 ) -> None:
     """
     Plot the cancer-type density array using the template raster's bounds.
@@ -208,17 +210,15 @@ def plot_cancer_type_map(
     positive_mask = plot_data > 0
 
     if np.any(positive_mask):
-        vmin = np.min(plot_data[positive_mask])
-        vmax = np.max(plot_data[positive_mask])
-    # Make sure vmin and vmax are valid for LogNorm
-        if vmin <= 0 or not np.isfinite(vmin):
-            vmin = 1e-6
-        if vmax <= vmin or not np.isfinite(vmax):
-            vmax = vmin * 10
+        # Default logic if no global values are passed
+        local_vmin = np.min(plot_data[positive_mask])
+        local_vmax = np.max(plot_data[positive_mask])
+        vmin = global_vmin if global_vmin is not None else max(local_vmin, 1e-6)
+        vmax = global_vmax if global_vmax is not None else max(local_vmax, vmin * 10)
     else:
-    # No positive values in plot_data: fallback safe defaults
-        vmin = 1e-6
-        vmax = 1
+        # Fallback if no positive values
+        vmin = global_vmin if global_vmin is not None else 1e-6
+        vmax = global_vmax if global_vmax is not None else 1
 
 # Use np.where to mask zero or negative values (to avoid log(0))
     plot_data_masked = np.where(plot_data > 0, plot_data, np.nan)
@@ -299,6 +299,18 @@ def main():
         action="store_true",
         help="Force interactive prompt for cancer type selection"
     )
+    parser.add_argument(
+    "--global-vmax",
+    type=float,
+    default=None,
+    help="Use a consistent maximum value for color scale across all maps (e.g., 5000)"
+    )
+    parser.add_argument(
+    "--global-vmin",
+    type=float,
+    default=1e-6,
+    help="Minimum value for log color scale (default: 1e-6)"
+    )
 
     args = parser.parse_args()
 
@@ -368,9 +380,18 @@ def main():
     save_raster_like(population_raster_path, array, output_tif)
 
     # Save PNG map
-    title = f"{args.country_code.upper()} — {args.cancer_type} (population × proportion)"
+    title = f"{args.country_code.upper()} — {args.cancer_type} (population × proportion × fraction of cases treated by radiotherapy)"
     print(f"Saving PNG map: {output_png}")
-    plot_cancer_type_map(population,array, population_raster_path, output_png, title)
+    plot_cancer_type_map(
+    population,
+    array,
+    population_raster_path,
+    output_png,
+    title,
+    dpi=300,
+    global_vmin=args.global_vmin,
+    global_vmax=args.global_vmax,
+    )
 
     print("Done.")
 
