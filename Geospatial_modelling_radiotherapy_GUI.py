@@ -7,10 +7,10 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import QThread, pyqtSignal
 from pycountry import countries
-from download_worldpop import download_worldpop
-from resample_population import resample_population
+from a_population_density.download_worldpop import download_worldpop
+from a_population_density.resample_population import resample_population
 
-class ResampleThread(QThread):
+class ResampleThread(QThread): 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
 
     def __init__(self, country_name, resolution):
@@ -115,7 +115,7 @@ class WorldPopDownloader(QMainWindow):
         try:
             country_obj = countries.lookup(country)
             country_code = country_obj.alpha_3.lower()
-            input_file = os.path.join("actual_data/raw_from_worldpop", f"{country_code}_raw.tif")
+            input_file = os.path.join("a_population_density/raw_from_worldpop", f"{country_code}_raw.tif")
             self.resample_btn.setEnabled(os.path.exists(input_file))
         except:
             self.resample_btn.setEnabled(False)
@@ -126,7 +126,7 @@ class WorldPopDownloader(QMainWindow):
             QMessageBox.critical(self, "Error", "Please select a country.")
             return
 
-        output_dir = "actual_data/raw_from_worldpop"
+        output_dir = "a_population_density/raw_from_worldpop"
         if not output_dir:
             return
 

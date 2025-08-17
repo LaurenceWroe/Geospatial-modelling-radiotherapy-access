@@ -11,7 +11,7 @@ from pycountry import countries
 from rasterio.enums import Resampling
 from pathlib import Path
 
-def resample_population(country_name, resolution_km, input_dir="actual_data/raw_from_worldpop", output_dir="actual_data/resampled"):
+def resample_population(country_name, resolution_km, input_dir="a_population_density/raw_from_worldpop", output_dir="a_population_density/resampled"):
     """
     Resamples population data to specified resolution using rioxarray
     
@@ -34,7 +34,30 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
         # Validate inputs
         if not isinstance(resolution_km, (int, float)) or resolution_km <= 0:
             raise ValueError("Resolution must be a positive number")
+
+        # Get country code and bounds
+        country = countries.lookup(country_name)
+        country_code = country.alpha_3.lower()
+
+        # Convert resolution from km to degrees (approximate)
+        resolution_deg = resolution_km / 111
         
+        # Prepare file paths
+        input_file = os.path.join(input_dir, f"{country_code}_raw.tif")
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
+        
+        # Check if input file exists
+        if not os.path.exists(input_file):
+            return {
+                'success': False,
+                'message': f"Input file not found: {input_file}",
+                'output_path': None,
+                'original_population': None,
+                'resampled_population': None
+            }
+        
+        # If resolution is 1km, just copy the original file
         if resolution_km == 1.0:
             
             output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
@@ -56,28 +79,8 @@ def resample_population(country_name, resolution_km, input_dir="actual_data/raw_
                 'resampled_population': original_pop
             }
 
-        # Get country code and bounds
-        country = countries.lookup(country_name)
-        country_code = country.alpha_3.lower()
         
-        # Convert resolution from km to degrees (approximate)
-        resolution_deg = resolution_km / 111
-        
-        # Prepare file paths
-        input_file = os.path.join(input_dir, f"{country_code}_raw.tif")
-        os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
-        
-        if not os.path.exists(input_file):
-            return {
-                'success': False,
-                'message': f"Input file not found: {input_file}",
-                'output_path': None,
-                'original_population': None,
-                'resampled_population': None
-            }
-        
-        # Load the data
+        # For resolution not 1km, load the data and resample:
         with rioxarray.open_rasterio(input_file) as src:
             # Explicitly handle values with no data 
             src = src.rio.write_nodata(-9999)  # WorldPop standard
