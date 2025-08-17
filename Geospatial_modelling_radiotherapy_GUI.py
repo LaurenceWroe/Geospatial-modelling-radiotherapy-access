@@ -99,7 +99,7 @@ class WorldPopDownloader(QMainWindow):
         
         self.resolution_label = QLabel("Select resolution (km):")
         self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["0.5", "1.0", "2.0", "5.0", "10.0", "50.0"])
+        self.resolution_combo.addItems(["0.5", "1", "2", "5", "10", "50"])
         
         self.resample_btn = QPushButton("Resample")
         self.resample_btn.setEnabled(False) # initially disabled
@@ -127,11 +127,11 @@ class WorldPopDownloader(QMainWindow):
         map_layout.addWidget(self.generate_map_btn)
         map_group.setLayout(map_layout)
 
-        main_layout.addWidget(map_group)
 
         # Add groups to main layout
         main_layout.addWidget(download_group)
         main_layout.addWidget(resample_group)
+        main_layout.addWidget(map_group)
 
         container = QWidget()
         container.setLayout(main_layout)

@@ -349,7 +349,8 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.population_raster is None:
-        pop_default = base_dir /"actual_data"/ "resampled" / f"{args.country_code.lower()}_{args.resolution}.0km.tif"
+        resolution_str = f"{args.resolution:.1f}"
+        pop_default = base_dir / "actual_data" / "resampled" / f"{args.country_code.lower()}_{resolution_str}km.tif"
         population_raster_path = str(pop_default)
     else:
         population_raster_path = args.population_raster
