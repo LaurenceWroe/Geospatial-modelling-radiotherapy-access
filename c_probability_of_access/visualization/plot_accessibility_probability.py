@@ -48,7 +48,7 @@ def calculate_accessibility_probability(
     height, width = population.shape
     
     # Load LINAC locations
-    from analysis.excel_utils import read_linac_excel
+    from c_probability_of_access.analysis.excel_utils import read_linac_excel
     df = read_linac_excel(linac_excel_path)
     linac_locations = []
     

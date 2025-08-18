@@ -1,0 +1,103 @@
+pop_code,country,Cancer
+12,Algeria,Breast
+12,Algeria,Colorectum
+12,Algeria,Lung
+12,Algeria,Prostate
+12,Algeria,Bladder
+12,Algeria,Stomach
+12,Algeria,Thyroid
+12,Algeria,NHL
+12,Algeria,Brain CNS
+12,Algeria,Cervix uteri
+12,Algeria,Leukaemia
+12,Algeria,Nasopharynx
+12,Algeria,Gallbladder
+12,Algeria,Pancreas
+12,Algeria,Ovary
+12,Algeria,Hodgkin lymphoma
+12,Algeria,Larynx
+12,Algeria,Multiple myeloma
+12,Algeria,Liver
+12,Algeria,Kidney
+12,Algeria,Corpus uteri
+12,Algeria,"Lip, oral cavity"
+12,Algeria,Melanoma
+12,Algeria,Oesophagus
+12,Algeria,Testis
+12,Algeria,Salivary glands
+12,Algeria,Vulva
+12,Algeria,Oropharynx
+12,Algeria,Hypopharynx
+12,Algeria,Mesothelioma
+12,Algeria,Kaposi sarcoma
+12,Algeria,Vagina
+12,Algeria,All cancers
+12,Algeria,All cancers excl. NMSC
+4,Afghanistan,Breast
+4,Afghanistan,Stomach
+4,Afghanistan,Lung
+4,Afghanistan,Cervix uteri
+4,Afghanistan,Leukaemia
+4,Afghanistan,Colorectum
+4,Afghanistan,Brain CNS
+4,Afghanistan,"Lip, oral cavity"
+4,Afghanistan,Oesophagus
+4,Afghanistan,Liver
+4,Afghanistan,NHL
+4,Afghanistan,Kidney
+4,Afghanistan,Prostate
+4,Afghanistan,Ovary
+4,Afghanistan,Corpus uteri
+4,Afghanistan,Bladder
+4,Afghanistan,Pancreas
+4,Afghanistan,Thyroid
+4,Afghanistan,Hodgkin lymphoma
+4,Afghanistan,Larynx
+4,Afghanistan,Testis
+4,Afghanistan,Gallbladder
+4,Afghanistan,Oropharynx
+4,Afghanistan,Hypopharynx
+4,Afghanistan,Nasopharynx
+4,Afghanistan,Multiple myeloma
+4,Afghanistan,Melanoma
+4,Afghanistan,Salivary glands
+4,Afghanistan,Vulva
+4,Afghanistan,Kaposi sarcoma
+4,Afghanistan,Vagina
+4,Afghanistan,Mesothelioma
+4,Afghanistan,All cancers
+4,Afghanistan,All cancers excl. NMSC
+8,Albania,Lung
+8,Albania,Breast
+8,Albania,Stomach
+8,Albania,Colorectum
+8,Albania,Bladder
+8,Albania,Prostate
+8,Albania,Pancreas
+8,Albania,Leukaemia
+8,Albania,Brain CNS
+8,Albania,Corpus uteri
+8,Albania,Ovary
+8,Albania,Liver
+8,Albania,Kidney
+8,Albania,Cervix uteri
+8,Albania,Larynx
+8,Albania,NHL
+8,Albania,"Lip, oral cavity"
+8,Albania,Melanoma
+8,Albania,Oesophagus
+8,Albania,Multiple myeloma
+8,Albania,Hodgkin lymphoma
+8,Albania,Testis
+8,Albania,Thyroid
+8,Albania,Gallbladder
+8,Albania,Nasopharynx
+8,Albania,Vulva
+8,Albania,Mesothelioma
+8,Albania,Oropharynx
+8,Albania,Salivary glands
+8,Albania,Hypopharynx
+8,Albania,Vagina
+8,Albania,Penis
+8,Albania,All cancers
+8,Albania,All cancers excl. NMSC
