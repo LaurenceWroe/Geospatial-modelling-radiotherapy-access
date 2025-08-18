@@ -70,7 +70,7 @@ class WorldPopDownloader(QMainWindow):
 
     def setup_ui(self):
         self.setWindowTitle("WorldPop Data Processor")
-        self.setFixedSize(500, 300)
+        self.setFixedSize(500, 600)
 
         # Main layout
         main_layout = QVBoxLayout()
