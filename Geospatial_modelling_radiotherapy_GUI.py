@@ -18,6 +18,7 @@ from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
 
 
+# All threads below for resampling, downloading and mapping:
 
 class ResampleThread(QThread): 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
@@ -60,6 +61,38 @@ class DownloadThread(QThread):
         except Exception as e:
             self.finished.emit(False, str(e))
 
+
+class MapGenerationThread(QThread):
+    finished = pyqtSignal(bytes, str, str)  # image_data, tif_path, png_path
+    error = pyqtSignal(str)
+
+    def __init__(self, country_code, cancer_type, resolution):
+        super().__init__()
+        self.country_code = country_code
+        self.cancer_type = cancer_type
+        self.resolution = resolution
+
+    def run(self):
+        try:
+            # Set matplotlib to use Agg backend in the thread, otherwise GUI crashes
+            import matplotlib
+            matplotlib.use('Agg')
+            from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
+            
+            image_data, tif_path, png_path = generate_cancer_type_map(
+                country_code=self.country_code,
+                cancer_type=self.cancer_type,
+                resolution=self.resolution,
+                return_image=True
+            )
+            self.finished.emit(image_data, tif_path, png_path)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+
+
+
 class WorldPopDownloader(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -79,7 +112,7 @@ class WorldPopDownloader(QMainWindow):
             return []
 
     def setup_ui(self):
-        self.setWindowTitle("WorldPop Data Processor")
+        self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
         self.setFixedSize(800, 600)
 
         # Left panel for controls
@@ -346,28 +379,27 @@ class WorldPopDownloader(QMainWindow):
             QMessageBox.critical(self, "Error", f"Invalid country name: {country}")
             return
 
-        try:
-       
-            self.update_status(f"Generating map for {cancer_type} in {country_code}...")
-            
-            # Call the function directly
-            image_data, tif_path, png_path = generate_cancer_type_map(
-                country_code=country_code,
-                cancer_type=cancer_type,
-                resolution=resolution,
-                return_image=True
-            )
-            
-            if image_data:
-                self.display_image(image_data)
-                self.update_status(f"Map generated successfully!\nTIFF: {tif_path}\nPNG: {png_path}")
-            else:
-                self.update_status("Map generated but no image data returned.")
-                
-        except Exception as e:
-            error_msg = f"Map generation failed:\n{str(e)}"
-            QMessageBox.critical(self, "Error", error_msg)
-            self.update_status(error_msg)
+        self.update_status(f"Generating map for {cancer_type} in {country_code}...")
+        self.generate_map_btn.setEnabled(False)  # Disable button during generation
+        
+        # Create and start the thread
+        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution)
+        self.map_thread.finished.connect(self.on_map_generation_finished)
+        self.map_thread.error.connect(self.on_map_generation_error)
+        self.map_thread.start()
+
+    def on_map_generation_finished(self, image_data, tif_path, png_path):
+        self.generate_map_btn.setEnabled(True)
+        if image_data:
+            self.display_image(image_data)
+            self.update_status(f"Map generated successfully!\nTIFF: {tif_path}\nPNG: {png_path}")
+        else:
+            self.update_status("Map generated but no image data returned.")
+
+    def on_map_generation_error(self, error_msg):
+        self.generate_map_btn.setEnabled(True)
+        QMessageBox.critical(self, "Error", f"Map generation failed:\n{error_msg}")
+        self.update_status(f"Error: {error_msg}")
 
 
 
