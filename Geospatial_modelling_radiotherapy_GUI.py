@@ -18,38 +18,6 @@ from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
 
 
-# class ResampleThread(QThread): 
-#     finished = pyqtSignal(dict)  # Emits the full result dictionary
-
-#     def __init__(self, country_name, resolution, overwrite_resample=False):
-#         super().__init__()
-#         self.country_name = country_name
-#         self.resolution = resolution
-#         self.overwrite_resample = overwrite_resample
-
-#     def run(self):
-#         result = resample_population(self.country_name, self.resolution)
-        
-#         # Check if result is a tuple and convert to dict if needed
-#         if isinstance(result, tuple):
-#             # Convert tuple to dictionary (you may need to adjust this based on what resample_population returns)
-#             result_dict = {
-#                 'success': True,
-#                 'original_population': result[0] if len(result) > 0 else 0,
-#                 'resampled_population': result[1] if len(result) > 1 else 0,
-#                 'output_path': result[2] if len(result) > 2 else '',
-#                 'message': 'Resampling completed successfully'
-#             }
-#             self.finished.emit(result_dict)
-#         elif isinstance(result, dict):
-#             self.finished.emit(result)
-#         else:
-#             # Handle unexpected return type
-#             self.finished.emit({
-#                 'success': False,
-#                 'message': f'Unexpected return type from resample_population: {type(result)}'
-#             })
-    
 
 class ResampleThread(QThread): 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
@@ -323,27 +291,6 @@ class WorldPopDownloader(QMainWindow):
         else:
             QMessageBox.critical(self, "Error", message)
 
-    # def resample_complete(self, result):
-    #     self.resample_btn.setEnabled(True)
-        
-    #     if result['success']:
-    #         # Safely format the population values (handle None or string values)
-    #         original_pop = result.get('original_population')
-    #         resampled_pop = result.get('resampled_population')
-            
-    #         print(original_pop)
-            
-    #         msg = (
-    #             f"Resampling successful!\n\n"
-    #             f"Original population: {original_pop_str}\n"
-    #             f"Resampled population: {resampled_pop_str}\n"
-    #             f"Saved to: {result.get('output_path', 'N/A')}"
-    #         )
-    #         QMessageBox.information(self, "Success", msg)
-    #         self.generate_map_btn.setEnabled(True)  # enable map generation
-    #     else:
-    #         QMessageBox.critical(self, "Error", result.get('message', 'Unknown error occurred'))
-
 
     def resample_complete(self, result):
         self.resample_btn.setEnabled(True)
@@ -380,6 +327,7 @@ class WorldPopDownloader(QMainWindow):
             self.image_label.clear()
             self.image_label.setText("No image to display")
             self.update_status("Failed to generate map image.")
+
 
     def run_cancer_map_script(self):
         country = self.country_combo.currentText()
