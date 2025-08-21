@@ -15,11 +15,10 @@ from a_population_density.resample_population import resample_population
 class ResampleThread(QThread): 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
 
-    def __init__(self, country_name, resolution, overwrite_resample=False):
+    def __init__(self, country_name, resolution):
         super().__init__()
         self.country_name = country_name
         self.resolution = resolution
-        self.overwrite_resample = overwrite_resample
 
     def run(self):
         result = resample_population(self.country_name, self.resolution)
@@ -30,11 +29,11 @@ class DownloadThread(QThread):
     progress_updated = pyqtSignal(int)
     finished = pyqtSignal(bool, str)
 
-    def __init__(self, country_name, output_dir, overwrite_download=False):
+    def __init__(self, country_name, output_dir, overwrite=False):
         super().__init__()
         self.country_name = country_name
         self.output_dir = output_dir
-        self.overwrite_download = overwrite_download
+        self.overwrite = overwrite
 
     def run(self):
         try:
@@ -45,7 +44,7 @@ class DownloadThread(QThread):
                 self.country_name,
                 self.output_dir,
                 progress_callback,
-                self.overwrite_download
+                self.overwrite
             )
             self.finished.emit(success, message)
         except Exception as e:
@@ -144,7 +143,7 @@ class WorldPopDownloader(QMainWindow):
         self.country_combo.currentTextChanged.connect(self.check_resample_availability)
         self.generate_map_btn.clicked.connect(self.run_cancer_map_script)
 
-    def check_resample_availability(self):
+    def check_resample_availability(self): # checks whether the resample button should be enabled depending on whether the country is downloaded yet.
         country = self.country_combo.currentText()
         if not country:
             return
@@ -182,9 +181,9 @@ class WorldPopDownloader(QMainWindow):
                 )
                 if reply == QMessageBox.No:
                     return
-                overwrite_download = True
+                overwrite = True
             else:
-                overwrite_download = False
+                overwrite = False
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
             return
@@ -193,7 +192,7 @@ class WorldPopDownloader(QMainWindow):
         self.progress.setVisible(True)
         self.download_btn.setEnabled(False)
 
-        self.download_thread = DownloadThread(country, output_dir, overwrite_download)
+        self.download_thread = DownloadThread(country, output_dir, overwrite)
         self.download_thread.progress_updated.connect(self.update_progress_bar)
         self.download_thread.finished.connect(self.download_complete)
         self.download_thread.start()
@@ -202,31 +201,7 @@ class WorldPopDownloader(QMainWindow):
         country = self.country_combo.currentText()
         resolution = float(self.resolution_combo.currentText())
         
-
-        output_dir = "a_population_density/resampled"
-        # Check if file exists already
-        try:
-            country_obj = countries.lookup(country)
-            country_code = country_obj.alpha_3.lower()
-            target_file = os.path.join(output_dir, f"{country_code}_{resolution}km.tif")
-            
-            if os.path.exists(target_file):
-                reply = QMessageBox.question(
-                    self,
-                    "File Exists",
-                    f"File already exists at:\n{target_file}\n\nOverwrite?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.No:
-                    return
-                overwrite_resample = True
-            else:
-                overwrite_resample = False
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
-            return
-
-        self.resample_thread = ResampleThread(country, resolution, overwrite_resample)
+        self.resample_thread = ResampleThread(country, resolution)
         self.resample_thread.finished.connect(self.resample_complete)
         self.resample_thread.start()
         
