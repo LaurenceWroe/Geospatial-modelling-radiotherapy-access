@@ -2,6 +2,7 @@
 """
 Generate a country map for a selected cancer type by multiplying the
 population density raster with the by the cancer-type proportion from an Excel file.
+THIS IS THE NEW FUNCTION THAT WORKS WITH THE GUI BETTER AND IS NOT DEPENDENT ON COMMAND LINE INPUTS
 """
 
 import os
@@ -142,6 +143,11 @@ def generate_cancer_type_map(
     Returns:
         Tuple of (image_bytes, output_tif_path, output_png_path)
     """
+    # Set matplotlib backend to Agg to avoid GUI conflicts (otherwise GUI will crash)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
     # Load cancer fractions
     fractions = load_cancer_fractions(excel_path)
     
