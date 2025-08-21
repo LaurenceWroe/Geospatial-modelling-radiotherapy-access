@@ -7,24 +7,65 @@ from PyQt5.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
     QProgressBar, QFileDialog, QHBoxLayout, QGroupBox
 )
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap
+from PyQt5.QtWidgets import QScrollArea, QTextEdit
+import io
+from PIL import Image
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from pycountry import countries
 from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
+from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
+
+
+# class ResampleThread(QThread): 
+#     finished = pyqtSignal(dict)  # Emits the full result dictionary
+
+#     def __init__(self, country_name, resolution, overwrite_resample=False):
+#         super().__init__()
+#         self.country_name = country_name
+#         self.resolution = resolution
+#         self.overwrite_resample = overwrite_resample
+
+#     def run(self):
+#         result = resample_population(self.country_name, self.resolution)
+        
+#         # Check if result is a tuple and convert to dict if needed
+#         if isinstance(result, tuple):
+#             # Convert tuple to dictionary (you may need to adjust this based on what resample_population returns)
+#             result_dict = {
+#                 'success': True,
+#                 'original_population': result[0] if len(result) > 0 else 0,
+#                 'resampled_population': result[1] if len(result) > 1 else 0,
+#                 'output_path': result[2] if len(result) > 2 else '',
+#                 'message': 'Resampling completed successfully'
+#             }
+#             self.finished.emit(result_dict)
+#         elif isinstance(result, dict):
+#             self.finished.emit(result)
+#         else:
+#             # Handle unexpected return type
+#             self.finished.emit({
+#                 'success': False,
+#                 'message': f'Unexpected return type from resample_population: {type(result)}'
+#             })
+    
 
 class ResampleThread(QThread): 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
 
-    def __init__(self, country_name, resolution, overwrite_resample=False):
+    def __init__(self, country_name, resolution, input_dir, output_dir, overwrite_resample=False):
         super().__init__()
         self.country_name = country_name
         self.resolution = resolution
+        self.input_dir = input_dir
+        self.output_dir = output_dir
         self.overwrite_resample = overwrite_resample
 
     def run(self):
-        result = resample_population(self.country_name, self.resolution)
+        result = resample_population(self.country_name, self.resolution, self.input_dir, self.output_dir, self.overwrite_resample)
         self.finished.emit(result)
-    
+
 
 class DownloadThread(QThread):
     progress_updated = pyqtSignal(int)
@@ -71,10 +112,11 @@ class WorldPopDownloader(QMainWindow):
 
     def setup_ui(self):
         self.setWindowTitle("WorldPop Data Processor")
-        self.setFixedSize(500, 600)
+        self.setFixedSize(800, 600)
 
-        # Main layout
-        main_layout = QVBoxLayout()
+        # Left panel for controls
+        left_panel = QWidget()
+        left_layout = QVBoxLayout()
 
         # Download Group
         download_group = QGroupBox("Download Raw Data")
@@ -129,13 +171,40 @@ class WorldPopDownloader(QMainWindow):
         map_group.setLayout(map_layout)
 
 
-        # Add groups to main layout
-        main_layout.addWidget(download_group)
-        main_layout.addWidget(resample_group)
-        main_layout.addWidget(map_group)
+        # Add groups to left layout
+        left_layout.addWidget(download_group)
+        left_layout.addWidget(resample_group)
+        left_layout.addWidget(map_group)
+        left_panel.setLayout(left_layout)
+        left_panel.setMaximumWidth(400)
 
+
+        # Right panel for image display
+        right_panel = QWidget()
+        right_layout = QVBoxLayout()
+        
+        self.image_label = QLabel("Generated map will appear here")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(400, 400)
+        self.image_label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
+        
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(100)
+        self.status_text.setReadOnly(True)
+        
+        right_layout.addWidget(QLabel("Generated Map:"))
+        right_layout.addWidget(self.image_label)
+        right_layout.addWidget(QLabel("Status:"))
+        right_layout.addWidget(self.status_text)
+        right_panel.setLayout(right_layout)
+        
+        # Split layout
+        split_layout = QHBoxLayout()
+        split_layout.addWidget(left_panel)
+        split_layout.addWidget(right_panel)
+        
         container = QWidget()
-        container.setLayout(main_layout)
+        container.setLayout(split_layout)
         self.setCentralWidget(container)
 
         # Signals
@@ -143,6 +212,7 @@ class WorldPopDownloader(QMainWindow):
         self.resample_btn.clicked.connect(self.initiate_resample)
         self.country_combo.currentTextChanged.connect(self.check_resample_availability)
         self.generate_map_btn.clicked.connect(self.run_cancer_map_script)
+
 
     def check_resample_availability(self):
         country = self.country_combo.currentText()
@@ -204,6 +274,13 @@ class WorldPopDownloader(QMainWindow):
         
 
         output_dir = "a_population_density/resampled"
+        if not output_dir:
+            return
+        
+        input_dir = "a_population_density/raw_from_worldpop"
+        if not input_dir:
+            return        
+
         # Check if file exists already
         try:
             country_obj = countries.lookup(country)
@@ -226,7 +303,7 @@ class WorldPopDownloader(QMainWindow):
             QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
             return
 
-        self.resample_thread = ResampleThread(country, resolution, overwrite_resample)
+        self.resample_thread = ResampleThread(country, resolution, input_dir, output_dir, overwrite_resample)
         self.resample_thread.finished.connect(self.resample_complete)
         self.resample_thread.start()
         
@@ -246,6 +323,28 @@ class WorldPopDownloader(QMainWindow):
         else:
             QMessageBox.critical(self, "Error", message)
 
+    # def resample_complete(self, result):
+    #     self.resample_btn.setEnabled(True)
+        
+    #     if result['success']:
+    #         # Safely format the population values (handle None or string values)
+    #         original_pop = result.get('original_population')
+    #         resampled_pop = result.get('resampled_population')
+            
+    #         print(original_pop)
+            
+    #         msg = (
+    #             f"Resampling successful!\n\n"
+    #             f"Original population: {original_pop_str}\n"
+    #             f"Resampled population: {resampled_pop_str}\n"
+    #             f"Saved to: {result.get('output_path', 'N/A')}"
+    #         )
+    #         QMessageBox.information(self, "Success", msg)
+    #         self.generate_map_btn.setEnabled(True)  # enable map generation
+    #     else:
+    #         QMessageBox.critical(self, "Error", result.get('message', 'Unknown error occurred'))
+
+
     def resample_complete(self, result):
         self.resample_btn.setEnabled(True)
         
@@ -261,10 +360,31 @@ class WorldPopDownloader(QMainWindow):
         else:
             QMessageBox.critical(self, "Error", result['message'])
 
+    def update_status(self, message):
+        """Update status text area"""
+        self.status_text.append(message)
+
+    def display_image(self, image_data):
+        """Display image data in the image label"""
+        if image_data:
+            pixmap = QPixmap()
+            pixmap.loadFromData(image_data)
+            self.image_label.setPixmap(pixmap.scaled(
+                self.image_label.width(), 
+                self.image_label.height(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            ))
+            self.update_status("Map displayed successfully!")
+        else:
+            self.image_label.clear()
+            self.image_label.setText("No image to display")
+            self.update_status("Failed to generate map image.")
+
     def run_cancer_map_script(self):
         country = self.country_combo.currentText()
         cancer_type = self.cancer_combo.currentText()
-        resolution = self.resolution_combo.currentText()
+        resolution = float(self.resolution_combo.currentText())
 
         if not (country and cancer_type and resolution):
             QMessageBox.critical(self, "Error", "Missing inputs.")
@@ -278,21 +398,30 @@ class WorldPopDownloader(QMainWindow):
             QMessageBox.critical(self, "Error", f"Invalid country name: {country}")
             return
 
-        script_path = os.path.abspath("b_cancer_incidence/cancer_type_map.py")
-
-        cmd = [
-            sys.executable,  # Path to Python interpreter
-            script_path,
-            country_code,
-            cancer_type,
-            "--resolution", resolution
-    ]
-
         try:
-            subprocess.run(cmd, check=True)
-            QMessageBox.information(self, "Success", f"Map generated for {cancer_type} in {country_code}.")
-        except subprocess.CalledProcessError as e:
-            QMessageBox.critical(self, "Error", f"Map generation failed:\n{e}")
+       
+            self.update_status(f"Generating map for {cancer_type} in {country_code}...")
+            
+            # Call the function directly
+            image_data, tif_path, png_path = generate_cancer_type_map(
+                country_code=country_code,
+                cancer_type=cancer_type,
+                resolution=resolution,
+                return_image=True
+            )
+            
+            if image_data:
+                self.display_image(image_data)
+                self.update_status(f"Map generated successfully!\nTIFF: {tif_path}\nPNG: {png_path}")
+            else:
+                self.update_status("Map generated but no image data returned.")
+                
+        except Exception as e:
+            error_msg = f"Map generation failed:\n{str(e)}"
+            QMessageBox.critical(self, "Error", error_msg)
+            self.update_status(error_msg)
+
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -24,6 +24,8 @@ import math
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
+import io
+from PIL import Image
 
 DEFAULT_EXCEL_PATH = "/Users/sophiamartin/Desktop/src/b_cancer_incidence/cancer_type_radiotherapy.xlsx"
 
@@ -181,48 +183,31 @@ def plot_cancer_type_map(
     dpi: int = 300,
     global_vmin: Optional[float] = None,
     global_vmax: Optional[float] = None,
-) -> None:
+    return_image: bool = False  # New parameter
+) -> Optional[bytes]:
     """
     Plot the cancer-type density array using the template raster's bounds.
-    Uses log color scaling with a small floor to improve visibility.
+    Returns image bytes if return_image=True, otherwise saves to file.
     """
     with rasterio.open(template_raster_path) as src:
         bounds = src.bounds
 
     # Prepare data for plotting
     plot_data = array.copy()
-    # Set a minimum floor for log-scale visualization (ignore zeros)
-    #positive_mask = plot_data > 0
-    #min_positive = plot_data[positive_mask].min() if np.any(positive_mask) else 1e-6
-    #floor_value = max(min_positive, 1e-6)
-    #plot_data = np.where(plot_data > 0, plot_data, np.nan)
-
-    fig, ax = plt.subplots(figsize=(10, 8))
-    #im = ax.imshow(
-        #plot_data,
-        #extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
-        #origin="upper",
-        #cmap="viridis",
-        #norm=LogNorm(vmin=floor_value, vmax=np.nanmax(plot_data) if np.isfinite(np.nanmax(plot_data)) else 1)
-    #)
-
-# Mask to find positive values (required for LogNorm)
     positive_mask = plot_data > 0
 
     if np.any(positive_mask):
-        # Default logic if no global values are passed
         local_vmin = np.min(plot_data[positive_mask])
         local_vmax = np.max(plot_data[positive_mask])
         vmin = global_vmin if global_vmin is not None else max(local_vmin, 1e-6)
         vmax = global_vmax if global_vmax is not None else max(local_vmax, vmin * 10)
     else:
-        # Fallback if no positive values
         vmin = global_vmin if global_vmin is not None else 1e-6
         vmax = global_vmax if global_vmax is not None else 1
 
-# Use np.where to mask zero or negative values (to avoid log(0))
     plot_data_masked = np.where(plot_data > 0, plot_data, np.nan)
 
+    fig, ax = plt.subplots(figsize=(10, 8))
     im = ax.imshow(
         plot_data_masked,
         extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
@@ -233,86 +218,117 @@ def plot_cancer_type_map(
 
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
-
-    cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
     ax.set_title(title)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
     plt.tight_layout()
-    plt.savefig(output_png_path, dpi=dpi)
-    plt.close()
+    
+    if return_image:
+        # Save to buffer and return bytes
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=dpi)
+        buf.seek(0)
+        plt.close()
+        return buf.getvalue()
+    else:
+        # Save to file as before
+        plt.savefig(output_png_path, dpi=dpi)
+        plt.close()
+        return None
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Create a cancer-type map by multiplying population density by a cancer-type proportion."
-    )
-    parser.add_argument(
-        "country_code",
-        help="ISO country code (e.g., NGA, GBR, USA) used to infer default paths"
-    )
-    parser.add_argument(
-        "cancer_type",
-        nargs='?',
-        help="Cancer type name as listed in the Excel (case-insensitive). If omitted, you will be prompted."
-    )
-    parser.add_argument(
-        "--excel-path",
-        type=str,
-        default=DEFAULT_EXCEL_PATH,
-        help=f"Path to Excel with cancer-type proportions (default: {DEFAULT_EXCEL_PATH})"
-    )
-    parser.add_argument(
-        "--population-raster",
-        type=str,
-        default=None,
-        help=(
-            "Path to population raster (GeoTIFF). If omitted, uses actual_data/resampled/"
-            "{code}_{resolution}km.tif based on --resolution."
+def main(country_code=None, cancer_type=None, resolution=None, excel_path=None, 
+         population_raster=None, output_dir=None, basename=None, list_cancers=False,
+         interactive=False, global_vmax=None, global_vmin=1e-6, return_image=False):
+
+    # If called from GUI with direct parameters, use them
+    if country_code is not None:
+        # Use direct parameters instead of argparse
+        args = type('Args', (), {
+            'country_code': country_code,
+            'cancer_type': cancer_type,
+            'excel_path': excel_path or DEFAULT_EXCEL_PATH,
+            'population_raster': population_raster,
+            'resolution': resolution or 1.0,
+            'output_dir': output_dir,
+            'basename': basename,
+            'list_cancers': list_cancers,
+            'interactive': interactive,
+            'global_vmax': global_vmax,
+            'global_vmin': global_vmin
+        })()
+
+    # If this is not called from GUI, use argparse, ie command line interface (CLI)    
+    else:
+        parser = argparse.ArgumentParser(
+            description="Create a cancer-type map by multiplying population density by a cancer-type proportion."
         )
-    )
-    parser.add_argument(
-        "--resolution",
+        parser.add_argument(
+            "country_code",
+            help="ISO country code (e.g., NGA, GBR, USA) used to infer default paths"
+        )
+        parser.add_argument(
+            "cancer_type",
+            nargs='?',
+            help="Cancer type name as listed in the Excel (case-insensitive). If omitted, you will be prompted."
+        )
+        parser.add_argument(
+            "--excel-path",
+            type=str,
+            default=DEFAULT_EXCEL_PATH,
+            help=f"Path to Excel with cancer-type proportions (default: {DEFAULT_EXCEL_PATH})"
+        )
+        parser.add_argument(
+            "--population-raster",
+            type=str,
+            default=None,
+            help=(
+                "Path to population raster (GeoTIFF). If omitted, uses actual_data/resampled/"
+                "{code}_{resolution}km.tif based on --resolution."
+            )
+        )
+        parser.add_argument(
+            "--resolution",
+            type=float,
+            default=1,
+            help="Resolution in km used to infer default population raster and output file names (default: 1)"
+        )
+        parser.add_argument(
+            "--output-dir",
+            type=str,
+            default=None,
+            help="Directory to save outputs (default: b_cancer_incidence/cancer_type_maps)"
+        )
+        parser.add_argument(
+            "--basename",
+            type=str,
+            default=None,
+            help="Optional custom base name for outputs (without extension)."
+        )
+        parser.add_argument(
+            "--list-cancers",
+            action="store_true",
+            help="List available cancer types from the Excel and exit"
+        )
+        parser.add_argument(
+            "--interactive",
+            action="store_true",
+            help="Force interactive prompt for cancer type selection"
+        )
+        parser.add_argument(
+        "--global-vmax",
         type=float,
-        default=1,
-        help="Resolution in km used to infer default population raster and output file names (default: 1)"
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
         default=None,
-        help="Directory to save outputs (default: b_cancer_incidence/cancer_type_maps)"
-    )
-    parser.add_argument(
-        "--basename",
-        type=str,
-        default=None,
-        help="Optional custom base name for outputs (without extension)."
-    )
-    parser.add_argument(
-        "--list-cancers",
-        action="store_true",
-        help="List available cancer types from the Excel and exit"
-    )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Force interactive prompt for cancer type selection"
-    )
-    parser.add_argument(
-    "--global-vmax",
-    type=float,
-    default=None,
-    help="Use a consistent maximum value for color scale across all maps (e.g., 5000)"
-    )
-    parser.add_argument(
-    "--global-vmin",
-    type=float,
-    default=1e-6,
-    help="Minimum value for log color scale (default: 1e-6)"
-    )
+        help="Use a consistent maximum value for color scale across all maps (e.g., 5000)"
+        )
+        parser.add_argument(
+        "--global-vmin",
+        type=float,
+        default=1e-6,
+        help="Minimum value for log color scale (default: 1e-6)"
+        )
 
-    args = parser.parse_args()
+        args = parser.parse_args()
 
     # Load proportions
     fractions = load_cancer_fractions(args.excel_path)
@@ -381,23 +397,30 @@ def main():
     save_raster_like(population_raster_path, array, output_tif)
 
     # Save PNG map
-    title = f"{args.country_code.upper()} — {args.cancer_type} (population × proportion × fraction of cases treated by radiotherapy)"
+    title = f"{args.country_code.upper()} — {cancer_key} (population × proportion × fraction of cases treated by radiotherapy)"
     print(f"Saving PNG map: {output_png}")
-    plot_cancer_type_map(
-    population,
-    array,
-    population_raster_path,
-    output_png,
-    title,
-    dpi=300,
-    global_vmin=args.global_vmin,
-    global_vmax=args.global_vmax,
+    
+    image_data = plot_cancer_type_map(
+        population,
+        array,
+        population_raster_path,
+        output_png,
+        title,
+        dpi=300,
+        global_vmin=args.global_vmin,
+        global_vmax=args.global_vmax,
+        return_image=return_image  # Pass the return_image parameter
     )
-
+    
     print("Done.")
+    
+    if return_image:
+        return image_data, output_png  # Return both image data and file path
+    else:
+        return None, output_png
+
 
 
 if __name__ == "__main__":
-    main()
-
+    main(return_image=False)
 
