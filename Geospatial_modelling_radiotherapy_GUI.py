@@ -5,7 +5,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QComboBox, 
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
-    QProgressBar, QFileDialog, QHBoxLayout, QGroupBox
+    QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, QSplitter
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QScrollArea, QTextEdit
@@ -113,8 +113,12 @@ class WorldPopDownloader(QMainWindow):
 
     def setup_ui(self):
         self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
-        self.setFixedSize(800, 600)
+        self.setFixedSize(1200, 800)
 
+
+        # Main splitter
+        splitter = QSplitter(Qt.Horizontal)
+    
         # Left panel for controls
         left_panel = QWidget()
         left_layout = QVBoxLayout()
@@ -147,14 +151,14 @@ class WorldPopDownloader(QMainWindow):
         
         self.resample_btn = QPushButton("Resample")
         self.resample_btn.setEnabled(False) # initially disabled
-        self.check_resample_availability() # check if resampling is available
+        self.check_resample_availability() # check if resampling is available, if so enable the button
         
         resample_layout.addWidget(self.resolution_label)
         resample_layout.addWidget(self.resolution_combo)
         resample_layout.addWidget(self.resample_btn)
         resample_group.setLayout(resample_layout)
 
-        # --- Cancer Type & Map Generation Group ---
+        # Cancer Type & Map Generation Group
         map_group = QGroupBox("Generate Cancer Type Map")
         map_layout = QVBoxLayout()
 
@@ -165,7 +169,8 @@ class WorldPopDownloader(QMainWindow):
 
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  # initially disabled
-
+        self.check_cancer_map_availability() # check if resampling is available, if so enable the button
+        
         map_layout.addWidget(self.cancer_label)
         map_layout.addWidget(self.cancer_combo)
         map_layout.addWidget(self.generate_map_btn)
@@ -179,6 +184,10 @@ class WorldPopDownloader(QMainWindow):
         left_panel.setLayout(left_layout)
         left_panel.setMaximumWidth(400)
 
+        # Setting size of left panel
+        left_panel.setLayout(left_layout)
+        left_panel.setMaximumWidth(450)
+        left_panel.setMinimumWidth(350)
 
         # Right panel for image display
         right_panel = QWidget()
@@ -186,11 +195,11 @@ class WorldPopDownloader(QMainWindow):
         
         self.image_label = QLabel("Generated map will appear here")
         self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(400, 400)
+        self.image_label.setMinimumSize(600, 500)
         self.image_label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
         
         self.status_text = QTextEdit()
-        self.status_text.setMaximumHeight(100)
+        self.status_text.setMaximumHeight(80)
         self.status_text.setReadOnly(True)
         
         right_layout.addWidget(QLabel("Generated Map:"))
@@ -199,13 +208,15 @@ class WorldPopDownloader(QMainWindow):
         right_layout.addWidget(self.status_text)
         right_panel.setLayout(right_layout)
         
-        # Split layout
-        split_layout = QHBoxLayout()
-        split_layout.addWidget(left_panel)
-        split_layout.addWidget(right_panel)
-        
+        # Splitter add panels
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([400, 800])
+
         container = QWidget()
-        container.setLayout(split_layout)
+        container_layout = QHBoxLayout()
+        container_layout.addWidget(splitter)
+        container.setLayout(container_layout)
         self.setCentralWidget(container)
 
         # Signals
@@ -227,6 +238,22 @@ class WorldPopDownloader(QMainWindow):
             self.resample_btn.setEnabled(os.path.exists(input_file))
         except:
             self.resample_btn.setEnabled(False)
+
+    def check_cancer_map_availability(self): # Check whether resampled file exists for map generation, if so enable the cancer map generate button
+        country = self.country_combo.currentText()
+        resolution = float(self.resolution_combo.currentText())
+        if not country:
+            return
+        if not resolution:
+            return
+            
+        try:
+            country_obj = countries.lookup(country)
+            country_code = country_obj.alpha_3.lower()
+            input_file = os.path.join("a_population_density/resampled", f"{country_code}_{resolution}km.tif")
+            self.generate_map_btn.setEnabled(os.path.exists(input_file))
+        except:
+            self.generate_map_btn.setEnabled(False)
 
     def initiate_download(self):
         country = self.country_combo.currentText()
