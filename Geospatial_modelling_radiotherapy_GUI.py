@@ -394,7 +394,7 @@ class WorldPopDownloader(QMainWindow):
             safe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
             # Check if file exists already
             target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_cancer_type_density.png")
-            print(target_file)
+            print("INITIATE CANCER TYPE MAP GENERATE")
 
             if os.path.exists(target_file):
                 reply = QMessageBox.question(
@@ -404,10 +404,11 @@ class WorldPopDownloader(QMainWindow):
                     QMessageBox.Yes | QMessageBox.No
                 )
                 if reply == QMessageBox.No:
-                    return
-                overwrite_cancer_type_map = True
+                    overwrite_cancer_type_map = False # User chose not to overwrite
+                else:    
+                    overwrite_cancer_type_map = True # User chose to overwrite
             else:
-                overwrite_cancer_type_map = False
+                overwrite_cancer_type_map = False # File doesn't exist, so no need to overwrite
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
             return

@@ -184,11 +184,13 @@ def generate_cancer_type_map(
     output_tif = str(output_dir / f"{base_name}_cancer_type_density.tif")
     output_png = str(output_dir / f"{base_name}_cancer_type_density.png")
 
+    print(output_png)
 
     # Check if file exists and we shouldn't overwrite
-    if not overwrite_cancer_type_map and os.path.exists(output_png):
+    if not overwrite_cancer_type_map and os.path.exists(output_png): # if overwrite is False and file exists, we don't to overwrite simply to plot
         # Load the existing image and return it
         image_bytes = None
+        print('WE ARE IN THE DON"T OVERWRITE SECTION')
         if return_image and os.path.exists(output_png):
             with open(output_png, 'rb') as f:
                 image_bytes = f.read()
@@ -261,7 +263,7 @@ def generate_cancer_type_map(
 
 
 # Example usage of function:
-generate_cancer_type_map(
-    'GBR',
-    'Bladder')
+# generate_cancer_type_map(
+#     'GBR',
+#     'Bladder')
 
