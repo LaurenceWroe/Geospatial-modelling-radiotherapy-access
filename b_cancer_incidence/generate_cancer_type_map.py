@@ -177,7 +177,7 @@ def generate_cancer_type_map(
     
     if basename is None:
         safe_cancer = cancer_key.replace(" ", "_")
-        base_name = f"{country_code.lower()}_{safe_cancer}_{resolution}km"
+        base_name = f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km"
     else:
         base_name = basename
     
