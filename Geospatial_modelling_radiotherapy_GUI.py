@@ -66,11 +66,12 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)  # image_data, tif_path, png_path
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_type, resolution):
+    def __init__(self, country_code, cancer_type, resolution, overwrite_cancer_type_map=False):
         super().__init__()
         self.country_code = country_code
         self.cancer_type = cancer_type
         self.resolution = resolution
+        self.overwrite_cancer_type_map = overwrite_cancer_type_map
 
     def run(self):
         try:
@@ -83,7 +84,8 @@ class MapGenerationThread(QThread):
                 country_code=self.country_code,
                 cancer_type=self.cancer_type,
                 resolution=self.resolution,
-                return_image=True
+                return_image=True,
+                overwrite_cancer_type_map=self.overwrite_cancer_type_map
             )
             self.finished.emit(image_data, tif_path, png_path)
         except Exception as e:
@@ -169,7 +171,7 @@ class WorldPopDownloader(QMainWindow):
 
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  # initially disabled
-        self.check_cancer_map_availability() # check if resampling is available, if so enable the button
+        self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
         
         map_layout.addWidget(self.cancer_label)
         map_layout.addWidget(self.cancer_combo)
@@ -222,8 +224,11 @@ class WorldPopDownloader(QMainWindow):
         # Signals
         self.download_btn.clicked.connect(self.initiate_download)
         self.resample_btn.clicked.connect(self.initiate_resample)
-        self.country_combo.currentTextChanged.connect(self.check_resample_availability)
-        self.generate_map_btn.clicked.connect(self.run_cancer_map_script)
+        self.generate_map_btn.clicked.connect(self.initiate_cancer_type_map_generate)
+
+        self.country_combo.currentTextChanged.connect(self.check_resample_availability) # Whenever the country changes, check if there exists a downloaded raw file for resampling
+        self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
+        self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
 
 
     def check_resample_availability(self):
@@ -255,7 +260,7 @@ class WorldPopDownloader(QMainWindow):
         except:
             self.generate_map_btn.setEnabled(False)
 
-    def initiate_download(self):
+    def initiate_download(self): # Called when download button is clicked
         country = self.country_combo.currentText()
         if not country:
             QMessageBox.critical(self, "Error", "Please select a country.")
@@ -296,7 +301,21 @@ class WorldPopDownloader(QMainWindow):
         self.download_thread.finished.connect(self.download_complete)
         self.download_thread.start()
 
-    def initiate_resample(self):
+
+    def update_progress_bar(self, value):
+        self.progress.setValue(value)
+
+    def download_complete(self, success, message):
+        self.progress.setVisible(False)
+        self.download_btn.setEnabled(True)
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+            self.check_resample_availability()
+        else:
+            QMessageBox.critical(self, "Error", message)
+
+    def initiate_resample(self): # Called when resample button is clicked
         country = self.country_combo.currentText()
         resolution = float(self.resolution_combo.currentText())
         
@@ -338,20 +357,6 @@ class WorldPopDownloader(QMainWindow):
         self.resample_btn.setEnabled(False)
         QMessageBox.information(self, "Processing", "Resampling in progress...")
 
-    def update_progress_bar(self, value):
-        self.progress.setValue(value)
-
-    def download_complete(self, success, message):
-        self.progress.setVisible(False)
-        self.download_btn.setEnabled(True)
-        
-        if success:
-            QMessageBox.information(self, "Success", message)
-            self.check_resample_availability()
-        else:
-            QMessageBox.critical(self, "Error", message)
-
-
     def resample_complete(self, result):
         self.resample_btn.setEnabled(True)
         
@@ -366,6 +371,56 @@ class WorldPopDownloader(QMainWindow):
             self.generate_map_btn.setEnabled(True)  # enable map generation
         else:
             QMessageBox.critical(self, "Error", result['message'])
+
+
+
+    def initiate_cancer_type_map_generate(self): # Called when generate map button is clicked
+        country = self.country_combo.currentText()
+        cancer_type = self.cancer_combo.currentText()
+        resolution = float(self.resolution_combo.currentText())
+
+        output_dir = "b_cancer_incidence/cancer_type_maps"
+        if not output_dir:
+            return
+
+        if not (country and cancer_type and resolution):
+            QMessageBox.critical(self, "Error", "Missing inputs.")
+            return
+
+        try:
+            from pycountry import countries
+            country_obj = countries.lookup(country)
+            country_code = country_obj.alpha_3
+            safe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
+            # Check if file exists already
+            target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer}_{resolution}km.png")
+            
+            if os.path.exists(target_file):
+                reply = QMessageBox.question(
+                    self,
+                    "File Exists",
+                    f"File already exists at:\n{target_file}\n\nOverwrite?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.No:
+                    return
+                overwrite_cancer_type_map = True
+            else:
+                overwrite_cancer_type_map = False
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
+            return
+
+
+        self.update_status(f"Generating map for {cancer_type} in {country_code}...")
+        self.generate_map_btn.setEnabled(False)  # Disable button during generation
+        
+        # Create and start the thread
+        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, overwrite_cancer_type_map)
+        self.map_thread.finished.connect(self.cancer_type_map_completed)
+        self.map_thread.error.connect(self.on_map_generation_error)
+        self.map_thread.start()
+
 
     def update_status(self, message):
         """Update status text area"""
@@ -389,39 +444,14 @@ class WorldPopDownloader(QMainWindow):
             self.update_status("Failed to generate map image.")
 
 
-    def run_cancer_map_script(self):
-        country = self.country_combo.currentText()
-        cancer_type = self.cancer_combo.currentText()
-        resolution = float(self.resolution_combo.currentText())
-
-        if not (country and cancer_type and resolution):
-            QMessageBox.critical(self, "Error", "Missing inputs.")
-            return
-
-        try:
-            from pycountry import countries
-            country_obj = countries.lookup(country)
-            country_code = country_obj.alpha_3
-        except:
-            QMessageBox.critical(self, "Error", f"Invalid country name: {country}")
-            return
-
-        self.update_status(f"Generating map for {cancer_type} in {country_code}...")
-        self.generate_map_btn.setEnabled(False)  # Disable button during generation
-        
-        # Create and start the thread
-        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution)
-        self.map_thread.finished.connect(self.on_map_generation_finished)
-        self.map_thread.error.connect(self.on_map_generation_error)
-        self.map_thread.start()
-
-    def on_map_generation_finished(self, image_data, tif_path, png_path):
+    def cancer_type_map_completed(self, image_data, tif_path, png_path):
         self.generate_map_btn.setEnabled(True)
         if image_data:
             self.display_image(image_data)
             self.update_status(f"Map generated successfully!\nTIFF: {tif_path}\nPNG: {png_path}")
         else:
             self.update_status("Map generated but no image data returned.")
+
 
     def on_map_generation_error(self, error_msg):
         self.generate_map_btn.setEnabled(True)

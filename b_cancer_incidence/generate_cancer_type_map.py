@@ -123,7 +123,8 @@ def generate_cancer_type_map(
     basename: Optional[str] = None,
     global_vmin: float = 1e-6,
     global_vmax: Optional[float] = None,
-    return_image: bool = True
+    return_image: bool = True,
+    overwrite_cancer_type_map: bool = False,
 ) -> Tuple[Optional[bytes], str, str]:
     """
     Main function to generate cancer type map.
@@ -143,10 +144,7 @@ def generate_cancer_type_map(
     Returns:
         Tuple of (image_bytes, output_tif_path, output_png_path)
     """
-    # Set matplotlib backend to Agg to avoid GUI conflicts (otherwise GUI will crash)
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
+
 
     # Load cancer fractions
     fractions = load_cancer_fractions(excel_path)
@@ -162,7 +160,7 @@ def generate_cancer_type_map(
             raise ValueError(f"Cancer type '{cancer_type}' not found. Available types: {sorted(fractions.keys())}")
     
     proportion, fraction_val = fractions[cancer_key]
-    
+
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
     
@@ -185,6 +183,22 @@ def generate_cancer_type_map(
     
     output_tif = str(output_dir / f"{base_name}_cancer_type_density.tif")
     output_png = str(output_dir / f"{base_name}_cancer_type_density.png")
+
+
+    # Check if file exists and we shouldn't overwrite
+    if not overwrite_cancer_type_map and os.path.exists(output_png):
+        # Load the existing image and return it
+        image_bytes = None
+        if return_image and os.path.exists(output_png):
+            with open(output_png, 'rb') as f:
+                image_bytes = f.read()
+        return image_bytes, output_tif, output_png  # Return 3 values
+    
+
+    # Set matplotlib backend to Agg to avoid GUI conflicts (otherwise GUI will crash)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
     
     # Calculation
     population, array = multiply_population_by_fraction(population_raster_path, proportion, fraction_val)
