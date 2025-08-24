@@ -3,6 +3,8 @@
 Generate a country map for a selected cancer type by multiplying the
 population density raster with the by the cancer-type proportion from an Excel file.
 
+This script just checks that the correct maps are produced, it is not compatible with GUI operation since it operates via command line
+
 Default Excel path (can be overridden):
   /Users/sophiamartin/Desktop/src/b_cancer_incidence/cancer_type_radiotherapy.xlsx
 
