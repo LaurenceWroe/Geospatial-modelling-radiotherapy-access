@@ -11,7 +11,7 @@ from pycountry import countries
 from rasterio.enums import Resampling
 from pathlib import Path
 
-def resample_population(country_name, resolution_km, input_dir="a_population_density/raw_from_worldpop", output_dir="a_population_density/resampled"):
+def resample_population(country_name, resolution_km, input_dir="a_population_density/raw_from_worldpop", output_dir="a_population_density/resampled", overwrite_resample=False):
     """
     Resamples population data to specified resolution using rioxarray
     
@@ -47,6 +47,11 @@ def resample_population(country_name, resolution_km, input_dir="a_population_den
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, f"{country_code}_{resolution_km}km.tif")
         
+        # Check if file exists and we shouldn't overwrite
+        if not overwrite_resample and os.path.exists(output_file):
+            return True, f"File already exists at:\n{output_file}"
+
+
         # Check if input file exists
         if not os.path.exists(input_file):
             return {

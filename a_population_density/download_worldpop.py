@@ -2,7 +2,7 @@ import os
 import requests
 from pycountry import countries
 
-def download_worldpop(country_name, output_dir="a_population_density/raw_from_worldpop", progress_callback=None, overwrite=False):
+def download_worldpop(country_name, output_dir="a_population_density/raw_from_worldpop", progress_callback=None, overwrite_download=False):
     """
     Downloads WorldPop population TIF file with proper compression handling.
     
@@ -10,7 +10,7 @@ def download_worldpop(country_name, output_dir="a_population_density/raw_from_wo
         country_name: Name of the country (e.g., "United Kingdom")
         output_dir: Directory to save the downloaded file
         progress_callback: Function to report download progress
-        overwrite: Whether to overwrite existing files
+        overwrite_downlaod: Whether to overwrite existing files
         
     Returns:
         tuple: (success: bool, message: str)
@@ -29,7 +29,7 @@ def download_worldpop(country_name, output_dir="a_population_density/raw_from_wo
     output_file = os.path.join(output_dir, f"{country_code}_raw.tif")
     
     # Check if file exists and we shouldn't overwrite
-    if not overwrite and os.path.exists(output_file):
+    if not overwrite_download and os.path.exists(output_file):
         return True, f"File already exists at:\n{output_file}"
 
     try:
