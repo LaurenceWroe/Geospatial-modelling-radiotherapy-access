@@ -215,25 +215,19 @@ def generate_cancer_type_map(
     with rasterio.open(population_raster_path) as src:
         bounds = src.bounds
     
-    # Copy and clean the data
     plot_data = array.copy()
-
-    # Mask values less than 1 to appear as "no data" (darkest color)
-    plot_data[plot_data < 1] = np.nan  # This ensures these pixels are not visible
-
-    # Determine min and max only from valid (≥1) pixels
-    positive_mask = np.isfinite(plot_data)
+    positive_mask = plot_data > 0
 
     if np.any(positive_mask):
-        local_vmin = np.nanmin(plot_data)
-        local_vmax = np.nanmax(plot_data)
-        vmin = global_vmin if global_vmin is not None else 1  # Force vmin to be at least 1
+        local_vmin = np.min(plot_data[positive_mask])
+        local_vmax = np.max(plot_data[positive_mask])
+        vmin = global_vmin if global_vmin is not None else max(local_vmin, 1e-6)
         vmax = global_vmax if global_vmax is not None else max(local_vmax, vmin * 10)
     else:
-    vmin = 1
-    vmax = 10
+        vmin = global_vmin if global_vmin is not None else 1e-6
+        vmax = global_vmax if global_vmax is not None else 1
 
-    plot_data_masked = plot_data  # Already has NaNs for <1
+    plot_data_masked = np.where(plot_data > 0, plot_data, np.nan)
     
     fig, ax = plt.subplots(figsize=(10, 8))
     im = ax.imshow(
