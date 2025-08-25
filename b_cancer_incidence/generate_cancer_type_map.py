@@ -186,8 +186,10 @@ def generate_cancer_type_map(
     
     if output_dir is None:
         output_dir = base_dir / "b_cancer_incidence" / "cancer_type_maps"
+        output_dir /= "treated_maps" if include_fraction else "incidence_maps"
     else:
         output_dir = Path(output_dir)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     
     if population_raster_path is None:
@@ -201,10 +203,12 @@ def generate_cancer_type_map(
     else:
         base_name = basename
     
-    output_tif = str(output_dir / f"{base_name}_cancer_type_density.tif")
-    output_png = str(output_dir / f"{base_name}_cancer_type_density.png")
+    suffix = "treated" if include_fraction else "incidence"
+    output_tif = str(output_dir / f"{base_name}_{suffix}_density.tif")
+    output_png = str(output_dir / f"{base_name}_{suffix}_density.png")
 
-    print(output_png)
+    print(f"Saving to: {output_png}")
+    print(f"Overwrite allowed? {'Yes' if overwrite_cancer_type_map else 'No'}")
 
     # Check if file exists and we shouldn't overwrite
     if not overwrite_cancer_type_map and os.path.exists(output_png): # if overwrite is False and file exists, we don't to overwrite simply to plot

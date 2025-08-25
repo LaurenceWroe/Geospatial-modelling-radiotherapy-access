@@ -390,10 +390,10 @@ class WorldPopDownloader(QMainWindow):
             #return
         # Determine output subfolder and filename prefix based on whether fraction is included
         if include_fraction:
-            output_subfolder = "b_cancer_incidence/treated_maps"
+            output_subfolder = "b_cancer_incidence/cancer_type_maps/treated_maps"
             filename_prefix = "treated"
         else:
-            output_subfolder = "b_cancer_incidence/incidence_maps"
+            output_subfolder = "b_cancer_incidence/cancer_type_maps/incidence_maps"
             filename_prefix = "incidence"
 
         # Make sure the output directory exists
@@ -412,7 +412,11 @@ class WorldPopDownloader(QMainWindow):
             safe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
             # Check if file exists already
             #target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_cancer_type_density.png")
-            target_file = os.path.join(output_subfolder,f"{filename_prefix}_{country_code.lower()}_{safe_cancer.lower()}_{resolution}km.png")
+            #target_file = os.path.join(output_subfolder, f"{filename_prefix}_{country_code.lower()}_{safe_cancer.lower()}_{resolution}km.png")
+            target_file = os.path.join(
+            output_subfolder,
+            f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_{filename_prefix}_density.png")
+            
             print("INITIATE CANCER TYPE MAP GENERATE")
 
             if os.path.exists(target_file):
@@ -438,11 +442,13 @@ class WorldPopDownloader(QMainWindow):
             self.update_status(f"Generating *treatable burden* map for {cancer_type} in {country_code}...")
         else:
             self.update_status(f"Generating *cancer incidence* map for {cancer_type} in {country_code}...")
+        
         self.generate_map_btn.setEnabled(False)  # Disable button during generation
         
 
         # Create and start the thread
-        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, population_raster_path=population_raster_path, overwrite_cancer_type_map=overwrite_cancer_type_map, include_fraction=include_fraction)
+        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, population_raster_path, 
+        overwrite_cancer_type_map, include_fraction)
         self.map_thread.finished.connect(self.cancer_type_map_completed)
         self.map_thread.error.connect(self.on_map_generation_error)
         self.map_thread.start()
