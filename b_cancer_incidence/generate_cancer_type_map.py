@@ -113,6 +113,19 @@ def save_raster_like(
         data = np.where(np.isfinite(array), array, nodata_value).astype(np.float32)
         dst.write(data, 1)
 
+def multiply_population_by_multiplier(
+    population_raster_path: str,
+    multiplier: float,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Load population raster and return population * multiplier array."""
+    with rasterio.open(population_raster_path) as src:
+        population = src.read(1)
+
+    population = np.where(population > 0, population, 0)
+    result = population.astype(np.float64) * float(multiplier)
+
+    return population, result
+
 
 def generate_cancer_type_map(
     country_code: str,
@@ -164,11 +177,9 @@ def generate_cancer_type_map(
     proportion, fraction_val = fractions[cancer_key]
 
     if include_fraction:
-        multiplier = proportion * fraction_val
+        population, array = multiply_population_by_multiplier(population_raster_path, proportion * fraction_val)
     else:
-        multiplier = proportion
-
-    population, array = multiply_population_by_fraction(population_raster_path, multiplier)
+        population, array = multiply_population_by_multiplier(population_raster_path, proportion)
 
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
