@@ -67,11 +67,12 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_type, resolution, overwrite_cancer_type_map=False, include_fraction=False):
+    def __init__(self, country_code, cancer_type, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False):
         super().__init__()
         self.country_code = country_code
         self.cancer_type = cancer_type
         self.resolution = resolution
+        self.population_raster_path = population_raster_path
         self.overwrite_cancer_type_map = overwrite_cancer_type_map
         self.include_fraction = include_fraction
 
@@ -85,6 +86,7 @@ class MapGenerationThread(QThread):
                 country_code=self.country_code,
                 cancer_type=self.cancer_type,
                 resolution=self.resolution,
+                population_raster_path=self.population_raster_path,
                 return_image=True,
                 overwrite_cancer_type_map=self.overwrite_cancer_type_map,
                 include_fraction=self.include_fraction,  # Pass the flag here
@@ -383,9 +385,19 @@ class WorldPopDownloader(QMainWindow):
         resolution = float(self.resolution_combo.currentText())
         include_fraction = self.include_fraction_checkbox.isChecked()
 
-        output_dir = "b_cancer_incidence/cancer_type_maps"
-        if not output_dir:
-            return
+        
+        #if not output_dir:
+            #return
+        # Determine output subfolder and filename prefix based on whether fraction is included
+        if include_fraction:
+            output_subfolder = "b_cancer_incidence/treated_maps"
+            filename_prefix = "treated"
+        else:
+            output_subfolder = "b_cancer_incidence/incidence_maps"
+            filename_prefix = "incidence"
+
+        # Make sure the output directory exists
+        os.makedirs(output_subfolder, exist_ok=True)
 
         if not (country and cancer_type and resolution):
             QMessageBox.critical(self, "Error", "Missing inputs.")
@@ -395,9 +407,12 @@ class WorldPopDownloader(QMainWindow):
             from pycountry import countries
             country_obj = countries.lookup(country)
             country_code = country_obj.alpha_3
+            population_raster_path = os.path.join("a_population_density/resampled", f"{country_code.lower()}_{resolution}km.tif")
+            
             safe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
             # Check if file exists already
-            target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_cancer_type_density.png")
+            #target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_cancer_type_density.png")
+            target_file = os.path.join(output_subfolder,f"{filename_prefix}_{country_code.lower()}_{safe_cancer.lower()}_{resolution}km.png")
             print("INITIATE CANCER TYPE MAP GENERATE")
 
             if os.path.exists(target_file):
@@ -425,8 +440,9 @@ class WorldPopDownloader(QMainWindow):
             self.update_status(f"Generating *cancer incidence* map for {cancer_type} in {country_code}...")
         self.generate_map_btn.setEnabled(False)  # Disable button during generation
         
+
         # Create and start the thread
-        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, overwrite_cancer_type_map, include_fraction=include_fraction)
+        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, population_raster_path=population_raster_path, overwrite_cancer_type_map=overwrite_cancer_type_map, include_fraction=include_fraction)
         self.map_thread.finished.connect(self.cancer_type_map_completed)
         self.map_thread.error.connect(self.on_map_generation_error)
         self.map_thread.start()
