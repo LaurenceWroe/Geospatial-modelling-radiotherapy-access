@@ -11,8 +11,9 @@ from typing import Optional, Dict, Tuple
 import numpy as np
 import pandas as pd
 import rasterio
+from matplotlib.colors import LogNorm, ListedColormap, BoundaryNorm
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
+import matplotlib.cm as cm
 import io
 
 
@@ -229,25 +230,82 @@ def generate_cancer_type_map(
 
     plot_data_masked = np.where(plot_data > 0, plot_data, np.nan)
     
+    #fig, ax = plt.subplots(figsize=(10, 8))
+    #im = ax.imshow(
+       # plot_data_masked,
+        #extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
+        #origin="upper",
+        #cmap="viridis",
+        #norm=LogNorm(vmin=vmin, vmax=vmax)
+    #)
+    
+    #cbar = plt.colorbar(im, ax=ax)
+    #cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
+   # ax.set_title(title)
+    #ax.set_xlabel("Longitude")
+    #ax.set_ylabel("Latitude")
+    #plt.tight_layout()
+    
+    # Save to file
+    #plt.savefig(output_png, dpi=300)
+    
+    # Return image bytes if requested
+    #image_bytes = None
+    #if return_image:
+        #buf = io.BytesIO()
+        #plt.savefig(buf, format='png', dpi=300)
+        #buf.seek(0)
+        #image_bytes = buf.getvalue()
+    
+    #plt.close()
+
+
+
+    # Set up plot
     fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Mask out non-country areas (where population is 0)
+    in_country_mask = population > 0
+    valid_mask = (plot_data > 0) & in_country_mask
+
+    # Prepare masked array for plotting
+    plot_data_masked = np.full_like(plot_data, np.nan, dtype=np.float32)
+    plot_data_masked[valid_mask] = plot_data[valid_mask]
+
+    # Define custom colormap
+    cmap = cm.get_cmap('viridis', 256)
+    new_colors = cmap(np.linspace(0, 1, 256))
+    dark_blue = np.array([0, 0, 139 / 255, 1.0])  # RGBA for dark blue
+    new_colors[0] = dark_blue  # Replace the lowest color
+    custom_cmap = ListedColormap(new_colors)
+
+    # Adjust vmin/vmax to make 1 the lower bound of log scale
+    vmin = max(1e-6, 1)
+    vmax = global_vmax if global_vmax is not None else np.nanmax(plot_data_masked)
+
+    # Set pixels <1 to 1 just for log normalization, they will still show as dark blue in colormap
+    norm_data = plot_data_masked.copy()
+    norm_data[(norm_data < 1) & (~np.isnan(norm_data))] = 1
+
+    # Plot the data
     im = ax.imshow(
-        plot_data_masked,
+        norm_data,
         extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
         origin="upper",
-        cmap="viridis",
+        cmap=custom_cmap,
         norm=LogNorm(vmin=vmin, vmax=vmax)
     )
-    
+
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Cancer-type population density proxy (people/km² × proportion)")
     ax.set_title(title)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
     plt.tight_layout()
-    
+
     # Save to file
     plt.savefig(output_png, dpi=300)
-    
+
     # Return image bytes if requested
     image_bytes = None
     if return_image:
@@ -255,7 +313,7 @@ def generate_cancer_type_map(
         plt.savefig(buf, format='png', dpi=300)
         buf.seek(0)
         image_bytes = buf.getvalue()
-    
+
     plt.close()
     
     return image_bytes, output_tif, output_png
