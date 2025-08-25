@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
     QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, QSplitter
 )
+from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QScrollArea, QTextEdit
 import io
@@ -63,35 +64,34 @@ class DownloadThread(QThread):
 
 
 class MapGenerationThread(QThread):
-    finished = pyqtSignal(bytes, str, str)  # image_data, tif_path, png_path
+    finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_type, resolution, overwrite_cancer_type_map=False):
+    def __init__(self, country_code, cancer_type, resolution, overwrite_cancer_type_map=False, include_fraction=False):
         super().__init__()
         self.country_code = country_code
         self.cancer_type = cancer_type
         self.resolution = resolution
         self.overwrite_cancer_type_map = overwrite_cancer_type_map
+        self.include_fraction = include_fraction
 
     def run(self):
         try:
-            # Set matplotlib to use Agg backend in the thread, otherwise GUI crashes
             import matplotlib
             matplotlib.use('Agg')
             from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
-            
+
             image_data, tif_path, png_path = generate_cancer_type_map(
                 country_code=self.country_code,
                 cancer_type=self.cancer_type,
                 resolution=self.resolution,
                 return_image=True,
-                overwrite_cancer_type_map=self.overwrite_cancer_type_map
+                overwrite_cancer_type_map=self.overwrite_cancer_type_map,
+                include_fraction=self.include_fraction,  # Pass the flag here
             )
             self.finished.emit(image_data, tif_path, png_path)
         except Exception as e:
             self.error.emit(str(e))
-
-
 
 
 
@@ -169,12 +169,15 @@ class WorldPopDownloader(QMainWindow):
         cancer_types = self.load_cancer_types()
         self.cancer_combo.addItems(cancer_types)
 
+        self.include_fraction_checkbox = QCheckBox("Include radiotherapy fraction") 
+        self.include_fraction_checkbox.setChecked(False) 
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  # initially disabled
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
         
         map_layout.addWidget(self.cancer_label)
         map_layout.addWidget(self.cancer_combo)
+        map_layout.addWidget(self.include_fraction_checkbox) 
         map_layout.addWidget(self.generate_map_btn)
         map_group.setLayout(map_layout)
 
@@ -378,6 +381,7 @@ class WorldPopDownloader(QMainWindow):
         country = self.country_combo.currentText()
         cancer_type = self.cancer_combo.currentText()
         resolution = float(self.resolution_combo.currentText())
+        include_fraction = self.include_fraction_checkbox.isChecked()
 
         output_dir = "b_cancer_incidence/cancer_type_maps"
         if not output_dir:
@@ -414,14 +418,19 @@ class WorldPopDownloader(QMainWindow):
             return
 
 
-        self.update_status(f"Generating map for {cancer_type} in {country_code}...")
+        #self.update_status(f"Generating map for {cancer_type} in {country_code}...")
+        if include_fraction:
+            self.update_status(f"Generating *treatable burden* map for {cancer_type} in {country_code}...")
+        else:
+            self.update_status(f"Generating *cancer incidence* map for {cancer_type} in {country_code}...")
         self.generate_map_btn.setEnabled(False)  # Disable button during generation
         
         # Create and start the thread
-        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, overwrite_cancer_type_map)
+        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, overwrite_cancer_type_map, include_fraction=include_fraction)
         self.map_thread.finished.connect(self.cancer_type_map_completed)
         self.map_thread.error.connect(self.on_map_generation_error)
         self.map_thread.start()
+
 
 
     def update_status(self, message):

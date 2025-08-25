@@ -126,6 +126,7 @@ def generate_cancer_type_map(
     global_vmax: Optional[float] = None,
     return_image: bool = True,
     overwrite_cancer_type_map: bool = False,
+    include_fraction: bool = False,
 ) -> Tuple[Optional[bytes], str, str]:
     """
     Main function to generate cancer type map.
@@ -161,6 +162,13 @@ def generate_cancer_type_map(
             raise ValueError(f"Cancer type '{cancer_type}' not found. Available types: {sorted(fractions.keys())}")
     
     proportion, fraction_val = fractions[cancer_key]
+
+    if include_fraction:
+        multiplier = proportion * fraction_val
+    else:
+        multiplier = proportion
+
+    population, array = multiply_population_by_fraction(population_raster_path, multiplier)
 
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
