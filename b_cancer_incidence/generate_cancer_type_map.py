@@ -232,8 +232,11 @@ def generate_cancer_type_map(
     save_raster_like(population_raster_path, array, output_tif)
     
     # Generate and save PNG
-    title = f"{country_code.upper()} — {cancer_type} (population × proportion × fraction of cases treated by radiotherapy)"
-    
+   #title = f"{country_code.upper()} — {cancer_type} (population × proportion × fraction of cases treated by radiotherapy)"
+    if include_fraction:
+        title = f"{country_code.upper()} — {cancer_type} (Treated cases: population × proportion × fraction treated)"
+    else:
+        title = f"{country_code.upper()} — {cancer_type} (Incidence: population × proportion of cases)"
     # Plot the map
     with rasterio.open(population_raster_path) as src:
         bounds = src.bounds
