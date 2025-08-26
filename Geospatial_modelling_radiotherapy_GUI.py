@@ -67,10 +67,10 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_type, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False):
+    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False):
         super().__init__()
         self.country_code = country_code
-        self.cancer_type = cancer_type
+        self.cancer_types = cancer_types
         self.resolution = resolution
         self.population_raster_path = population_raster_path
         self.overwrite_cancer_type_map = overwrite_cancer_type_map
@@ -78,23 +78,18 @@ class MapGenerationThread(QThread):
 
     def run(self):
         try:
-            import matplotlib
-            matplotlib.use('Agg')
-            from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
-
             image_data, tif_path, png_path = generate_cancer_type_map(
                 country_code=self.country_code,
-                cancer_type=self.cancer_type,
+                cancer_types=self.cancer_types,
                 resolution=self.resolution,
                 population_raster_path=self.population_raster_path,
                 return_image=True,
                 overwrite_cancer_type_map=self.overwrite_cancer_type_map,
-                include_fraction=self.include_fraction,  # Pass the flag here
+                include_fraction=self.include_fraction,
             )
             self.finished.emit(image_data, tif_path, png_path)
         except Exception as e:
             self.error.emit(str(e))
-
 
 
 class WorldPopDownloader(QMainWindow):
@@ -167,9 +162,20 @@ class WorldPopDownloader(QMainWindow):
         map_layout = QVBoxLayout()
 
         self.cancer_label = QLabel("Select a cancer type:")
-        self.cancer_combo = QComboBox()
+        #self.cancer_combo = QComboBox()
         cancer_types = self.load_cancer_types()
-        self.cancer_combo.addItems(cancer_types)
+        #self.cancer_combo.addItems(cancer_types)
+        from PyQt5.QtWidgets import QListWidget, QListWidgetItem
+
+        self.cancer_list = QListWidget()
+        self.cancer_list.setSelectionMode(QListWidget.MultiSelection)
+
+        for ctype in cancer_types:
+            item = QListWidgetItem(ctype)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.cancer_list.addItem(item)
+
 
         self.include_fraction_checkbox = QCheckBox("Include radiotherapy fraction") 
         self.include_fraction_checkbox.setChecked(False) 
@@ -178,7 +184,7 @@ class WorldPopDownloader(QMainWindow):
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
         
         map_layout.addWidget(self.cancer_label)
-        map_layout.addWidget(self.cancer_combo)
+        map_layout.addWidget(self.cancer_list)
         map_layout.addWidget(self.include_fraction_checkbox) 
         map_layout.addWidget(self.generate_map_btn)
         map_group.setLayout(map_layout)
@@ -379,76 +385,129 @@ class WorldPopDownloader(QMainWindow):
 
 
 
-    def initiate_cancer_type_map_generate(self): # Called when generate map button is clicked
+    def initiate_cancer_type_map_generate(self):
         country = self.country_combo.currentText()
-        cancer_type = self.cancer_combo.currentText()
+        selected_cancer_types = []
+        for i in range(self.cancer_list.count()):
+            item = self.cancer_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected_cancer_types.append(item.text())
+
+        if not selected_cancer_types:
+            QMessageBox.critical(self, "Error", "Please select at least one cancer type.")
+            return
+
         resolution = float(self.resolution_combo.currentText())
         include_fraction = self.include_fraction_checkbox.isChecked()
+
+        # Construct target file name
+        safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
+        filename_prefix = "treated" if include_fraction else "incidence"
+        output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+        os.makedirs(output_subfolder, exist_ok=True)
+
+        try:
+            country_code = countries.lookup(country).alpha_3.lower()
+            population_raster_path = f"a_population_density/resampled/{country_code}_{resolution}km.tif"
+            target_file = f"{output_subfolder}/{country_code}_{safe_label}_{resolution}km_{filename_prefix}_density.png"
+        
+            if os.path.exists(target_file):
+                reply = QMessageBox.question(self, "Overwrite?", f"{target_file} exists. Overwrite?", QMessageBox.Yes | QMessageBox.No)
+                overwrite = reply == QMessageBox.Yes
+            else:
+                overwrite = False
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+
+        # Update status
+        self.update_status(f"Generating map for {', '.join(selected_cancer_types)}...")
+        self.generate_map_btn.setEnabled(False)
+
+        # Start thread
+        self.map_thread = MapGenerationThread(
+            country_code,
+            selected_cancer_types,
+            resolution,
+            population_raster_path,
+            overwrite,
+            include_fraction
+        )
+        self.map_thread.finished.connect(self.cancer_type_map_completed)
+        self.map_thread.error.connect(self.on_map_generation_error)
+        self.map_thread.start()
 
         
         #if not output_dir:
             #return
         # Determine output subfolder and filename prefix based on whether fraction is included
-        if include_fraction:
-            output_subfolder = "b_cancer_incidence/cancer_type_maps/treated_maps"
-            filename_prefix = "treated"
-        else:
-            output_subfolder = "b_cancer_incidence/cancer_type_maps/incidence_maps"
-            filename_prefix = "incidence"
+        #if include_fraction:
+            #output_subfolder = "b_cancer_incidence/cancer_type_maps/treated_maps"
+            #filename_prefix = "treated"
+       # else:
+            #output_subfolder = "b_cancer_incidence/cancer_type_maps/incidence_maps"
+            #filename_prefix = "incidence"
 
         # Make sure the output directory exists
-        os.makedirs(output_subfolder, exist_ok=True)
+        #os.makedirs(output_subfolder, exist_ok=True)
 
-        if not (country and cancer_type and resolution):
-            QMessageBox.critical(self, "Error", "Missing inputs.")
-            return
+        #if not (country and cancer_type and resolution):
+            #QMessageBox.critical(self, "Error", "Missing inputs.")
+            #return
 
-        try:
-            from pycountry import countries
-            country_obj = countries.lookup(country)
-            country_code = country_obj.alpha_3
-            population_raster_path = os.path.join("a_population_density/resampled", f"{country_code.lower()}_{resolution}km.tif")
+        #try:
+            #from pycountry import countries
+            #country_obj = countries.lookup(country)
+            #country_code = country_obj.alpha_3
+            #population_raster_path = os.path.join("a_population_density/resampled", f"{country_code.lower()}_{resolution}km.tif")
             
-            safe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
+            #afe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
             # Check if file exists already
             #target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_cancer_type_density.png")
             #target_file = os.path.join(output_subfolder, f"{filename_prefix}_{country_code.lower()}_{safe_cancer.lower()}_{resolution}km.png")
-            target_file = os.path.join(
-            output_subfolder,
-            f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_{filename_prefix}_density.png")
+            #target_file = os.path.join(
+            #output_subfolder,
+            ##f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_{filename_prefix}_density.png")
             
-            print("INITIATE CANCER TYPE MAP GENERATE")
+            #print("INITIATE CANCER TYPE MAP GENERATE")
 
-            if os.path.exists(target_file):
-                reply = QMessageBox.question(
-                    self,
-                    "File Exists",
-                    f"File already exists at:\n{target_file}\n\nOverwrite?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.No:
-                    overwrite_cancer_type_map = False # User chose not to overwrite
-                else:    
-                    overwrite_cancer_type_map = True # User chose to overwrite
-            else:
-                overwrite_cancer_type_map = False # File doesn't exist, so no need to overwrite
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
-            return
+            #if os.path.exists(target_file):
+                #reply = QMessageBox.question(
+                   # self,
+                    #"File Exists",
+                    #f"File already exists at:\n{target_file}\n\nOverwrite?",
+                    #QMessageBox.Yes | QMessageBox.No
+               # )
+                #if reply == QMessageBox.No:
+                   # overwrite_cancer_type_map = False # User chose not to overwrite
+                #else:    
+                   # overwrite_cancer_type_map = True # User chose to overwrite
+            #else:
+                #overwrite_cancer_type_map = False # File doesn't exist, so no need to overwrite
+        #except Exception as e:
+            #QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
+            #return
 
 
         #self.update_status(f"Generating map for {cancer_type} in {country_code}...")
-        if include_fraction:
-            self.update_status(f"Generating *treatable burden* map for {cancer_type} in {country_code}...")
-        else:
-            self.update_status(f"Generating *cancer incidence* map for {cancer_type} in {country_code}...")
+       # if include_fraction:
+            #self.update_status(f"Generating *treatable burden* map for {cancer_type} in {country_code}...")
+        #else:
+            #elf.update_status(f"Generating *cancer incidence* map for {cancer_type} in {country_code}...")
         
-        self.generate_map_btn.setEnabled(False)  # Disable button during generation
+        #self.generate_map_btn.setEnabled(False)  # Disable button during generation
         
 
         # Create and start the thread
-        self.map_thread = MapGenerationThread(country_code, cancer_type, resolution, population_raster_path, 
-        overwrite_cancer_type_map, include_fraction)
+        self.map_thread = MapGenerationThread(
+            country_code,
+            selected_cancer_types,
+            resolution,
+            population_raster_path,
+            overwrite,
+            include_fraction
+        )
         self.map_thread.finished.connect(self.cancer_type_map_completed)
         self.map_thread.error.connect(self.on_map_generation_error)
         self.map_thread.start()

@@ -7,7 +7,7 @@ THIS IS THE NEW FUNCTION THAT WORKS WITH THE GUI BETTER AND IS NOT DEPENDENT ON 
 
 import os
 from pathlib import Path
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List 
 import numpy as np
 import pandas as pd
 import rasterio
@@ -129,7 +129,8 @@ def multiply_population_by_multiplier(
 
 def generate_cancer_type_map(
     country_code: str,
-    cancer_type: str,
+    cancer_type: Optional[str] = None,
+    cancer_types: Optional[List[str]]= None,
     resolution: float = 1.0,
     excel_path: str = DEFAULT_EXCEL_PATH,
     population_raster_path: Optional[str] = None,
@@ -165,22 +166,47 @@ def generate_cancer_type_map(
     fractions = load_cancer_fractions(excel_path)
     
     # Validate cancer type
-    cancer_key = cancer_type.strip().lower()
-    if cancer_key not in fractions:
+    #cancer_key = cancer_type.strip().lower()
+    #if cancer_key not in fractions:
         # Try substring match
-        matches = [k for k in fractions.keys() if cancer_key in k]
-        if len(matches) == 1:
-            cancer_key = matches[0]
-        else:
-            raise ValueError(f"Cancer type '{cancer_type}' not found. Available types: {sorted(fractions.keys())}")
+        #matches = [k for k in fractions.keys() if cancer_key in k]
+        #if len(matches) == 1:
+            #cancer_key = matches[0]
+        #else:
+            #raise ValueError(f"Cancer type '{cancer_type}' not found. Available types: {sorted(fractions.keys())}")
     
-    proportion, fraction_val = fractions[cancer_key]
+    #proportion, fraction_val = fractions[cancer_key]
 
-    if include_fraction:
-        population, array = multiply_population_by_multiplier(population_raster_path, proportion * fraction_val)
-    else:
-        population, array = multiply_population_by_multiplier(population_raster_path, proportion)
+    #if include_fraction:
+        #population, array = multiply_population_by_multiplier(population_raster_path, proportion * fraction_val)
+    #else:
+        #population, array = multiply_population_by_multiplier(population_raster_path, proportion)
+    array = None
+    population = None
+    combined_label = []
 
+    for idx, ct in enumerate(cancer_types):
+        ct_key = ct.strip().lower()
+        if ct_key not in fractions:
+            # Try substring match
+            matches = [k for k in fractions.keys() if ct_key in k]
+            if len(matches) == 1:
+                ct_key = matches[0]
+            else:
+                raise ValueError(f"Cancer type '{ct}' not found.")
+
+        prop, frac = fractions[ct_key]
+        combined_label.append(ct_key.replace(" ", "_"))
+
+        pop, temp_array = multiply_population_by_multiplier(
+            population_raster_path, prop * frac if include_fraction else prop
+        )
+
+        if array is None:
+            array = temp_array
+            population = pop
+        else:
+            array += temp_array
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
     
@@ -198,8 +224,10 @@ def generate_cancer_type_map(
         population_raster_path = str(pop_default)
     
     if basename is None:
-        safe_cancer = cancer_key.replace(" ", "_")
-        base_name = f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km"
+        #safe_cancer = cancer_key.replace(" ", "_")
+        #base_name = f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km"
+        safe_label = "_".join(combined_label)
+        base_name = f"{country_code.lower()}_{safe_label}_{resolution}km"
     else:
         base_name = basename
     
