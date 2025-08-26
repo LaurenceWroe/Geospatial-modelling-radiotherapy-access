@@ -78,6 +78,7 @@ class MapGenerationThread(QThread):
 
     def run(self):
         try:
+            print(f"[THREAD] Starting map generation for {self.country_code}...")
             image_data, tif_path, png_path = generate_cancer_type_map(
                 country_code=self.country_code,
                 cancer_types=self.cancer_types,
@@ -87,14 +88,18 @@ class MapGenerationThread(QThread):
                 overwrite_cancer_type_map=self.overwrite_cancer_type_map,
                 include_fraction=self.include_fraction,
             )
+            print(f"[THREAD] Finished map generation.")
             self.finished.emit(image_data, tif_path, png_path)
         except Exception as e:
+            print(f"[THREAD] Error during map generation: {e}")
             self.error.emit(str(e))
 
 
 class WorldPopDownloader(QMainWindow):
     def __init__(self):
         super().__init__()
+
+        self.map_thread = None #ensures self.map_thread is always defined
         self.setup_ui()
 
     def load_cancer_types(self, excel_path="b_cancer_incidence/cancer_type_radiotherapy.xlsx"):
@@ -424,81 +429,9 @@ class WorldPopDownloader(QMainWindow):
         # Update status
         self.update_status(f"Generating map for {', '.join(selected_cancer_types)}...")
         self.generate_map_btn.setEnabled(False)
-
-        # Start thread
-        self.map_thread = MapGenerationThread(
-            country_code,
-            selected_cancer_types,
-            resolution,
-            population_raster_path,
-            overwrite,
-            include_fraction
-        )
-        self.map_thread.finished.connect(self.cancer_type_map_completed)
-        self.map_thread.error.connect(self.on_map_generation_error)
-        self.map_thread.start()
-
-        
-        #if not output_dir:
-            #return
-        # Determine output subfolder and filename prefix based on whether fraction is included
-        #if include_fraction:
-            #output_subfolder = "b_cancer_incidence/cancer_type_maps/treated_maps"
-            #filename_prefix = "treated"
-       # else:
-            #output_subfolder = "b_cancer_incidence/cancer_type_maps/incidence_maps"
-            #filename_prefix = "incidence"
-
-        # Make sure the output directory exists
-        #os.makedirs(output_subfolder, exist_ok=True)
-
-        #if not (country and cancer_type and resolution):
-            #QMessageBox.critical(self, "Error", "Missing inputs.")
-            #return
-
-        #try:
-            #from pycountry import countries
-            #country_obj = countries.lookup(country)
-            #country_code = country_obj.alpha_3
-            #population_raster_path = os.path.join("a_population_density/resampled", f"{country_code.lower()}_{resolution}km.tif")
-            
-            #afe_cancer = cancer_type.replace(" ", "_") # replace spaces with underscores for naming
-            # Check if file exists already
-            #target_file = os.path.join(output_dir, f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_cancer_type_density.png")
-            #target_file = os.path.join(output_subfolder, f"{filename_prefix}_{country_code.lower()}_{safe_cancer.lower()}_{resolution}km.png")
-            #target_file = os.path.join(
-            #output_subfolder,
-            ##f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km_{filename_prefix}_density.png")
-            
-            #print("INITIATE CANCER TYPE MAP GENERATE")
-
-            #if os.path.exists(target_file):
-                #reply = QMessageBox.question(
-                   # self,
-                    #"File Exists",
-                    #f"File already exists at:\n{target_file}\n\nOverwrite?",
-                    #QMessageBox.Yes | QMessageBox.No
-               # )
-                #if reply == QMessageBox.No:
-                   # overwrite_cancer_type_map = False # User chose not to overwrite
-                #else:    
-                   # overwrite_cancer_type_map = True # User chose to overwrite
-            #else:
-                #overwrite_cancer_type_map = False # File doesn't exist, so no need to overwrite
-        #except Exception as e:
-            #QMessageBox.critical(self, "Error", f"Couldn't check file: {str(e)}")
-            #return
-
-
-        #self.update_status(f"Generating map for {cancer_type} in {country_code}...")
-       # if include_fraction:
-            #self.update_status(f"Generating *treatable burden* map for {cancer_type} in {country_code}...")
-        #else:
-            #elf.update_status(f"Generating *cancer incidence* map for {cancer_type} in {country_code}...")
-        
-        #self.generate_map_btn.setEnabled(False)  # Disable button during generation
-        
-
+        if self.map_thread is not None and self.map_thread.isRunning():
+            self.map_thread.quit()
+            self.map_thread.wait()
         # Create and start the thread
         self.map_thread = MapGenerationThread(
             country_code,
@@ -553,7 +486,18 @@ class WorldPopDownloader(QMainWindow):
 
 
 if __name__ == "__main__":
+    #ensuring proper shutdown
+    import signal
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     app = QApplication(sys.argv)
     window = WorldPopDownloader()
     window.show()
+    ret = app.exec_() 
+
+    #Wait for background to finish (if still running) 
+    if window.map_thread and window.map_thread.isRunning():
+        window.map_thread.quit()
+        window.map_thread.wait()
+
     sys.exit(app.exec_())
