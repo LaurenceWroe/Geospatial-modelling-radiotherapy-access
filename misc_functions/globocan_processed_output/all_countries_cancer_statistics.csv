@@ -1,0 +1,171 @@
+Country_Number,Country_Name,Cancer,New_Cases_Number,New_Cases_Rank,New_Cases_Percent,New_Cases_Cum_Risk,Deaths_Number,Deaths_Rank,Deaths_Percent,Deaths_Cum_Risk,Prevalence_Number,Prevalence_Prop_Per_100k,Source_File
+4,Afghanistan,All cancers,24 275,,,11.2,16 923,,,8.7,48 227,,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,All cancers excl. NMSC,23 750,,,10.9,16 712,,,8.6,47 013,,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Bladder,459,16.0,1.9,0.28,269,16.0,1.6,0.18,1 017,2.5,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Brain CNS,1 134,7.0,4.7,0.37,1 009,4.0,6.0,0.37,2 970,7.3,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Breast,3 545,1.0,14.6,3.1,1 960,1.0,11.6,2.0,7 869,39.6,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Cervix uteri,1 218,4.0,5.0,1.1,888,5.0,5.2,0.89,2 740,13.8,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Colorectum,1 163,6.0,4.8,0.65,739,9.0,4.4,0.41,2 347,5.8,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Corpus uteri,505,15.0,2.1,0.65,179,18.0,1.1,0.26,1 238,6.2,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Gallbladder,148,22.0,0.61,0.1,111,20.0,0.66,0.07,224,0.55,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Hodgkin lymphoma,258,19.0,1.1,0.07,116,19.0,0.69,0.04,654,1.6,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Hypopharynx,141,24.0,0.58,0.07,74,25.0,0.44,0.04,167,0.41,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Kaposi sarcoma,26,30.0,0.11,0.01,16,30.0,0.1,0.01,38,0.09,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Kidney,571,12.0,2.4,0.26,354,13.0,2.1,0.19,1 257,3.1,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Larynx,244,20.0,1.0,0.14,187,17.0,1.1,0.12,554,1.4,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Leukaemia,1 178,5.0,4.9,0.28,812,8.0,4.8,0.22,2 683,6.6,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,"Lip, oral cavity",1 011,8.0,4.2,0.53,717,10.0,4.2,0.39,2 124,5.2,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Liver,900,10.0,3.7,0.54,873,7.0,5.2,0.54,1 347,3.3,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Lung,1 393,3.0,5.7,0.9,1 318,3.0,7.8,0.82,2 214,5.4,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Melanoma,103,27.0,0.42,0.05,57,27.0,0.34,0.03,240,0.59,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Mesothelioma,16,32.0,0.07,0.01,15,31.0,0.09,0.01,40,0.1,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Multiple myeloma,123,26.0,0.51,0.07,102,21.0,0.6,0.06,253,0.62,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,NHL,618,11.0,2.5,0.23,452,11.0,2.7,0.19,1 447,3.6,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Nasopharynx,127,25.0,0.52,0.04,96,22.0,0.57,0.03,315,0.77,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Oesophagus,925,9.0,3.8,0.56,885,6.0,5.2,0.54,1 449,3.6,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Oropharynx,143,23.0,0.59,0.08,85,23.0,0.5,0.05,287,0.7,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Ovary,512,14.0,2.1,0.45,383,12.0,2.3,0.41,1 081,5.4,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Pancreas,369,17.0,1.5,0.22,354,13.0,2.1,0.21,493,1.2,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Prostate,521,13.0,2.1,0.81,328,15.0,1.9,0.48,862,4.1,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Salivary glands,62,28.0,0.26,0.03,39,28.0,0.23,0.02,147,0.36,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Stomach,2 077,2.0,8.6,1.3,1 880,2.0,11.1,1.2,3 311,8.1,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Testis,178,21.0,0.73,0.07,58,26.0,0.34,0.03,463,2.2,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Thyroid,275,18.0,1.1,0.11,75,24.0,0.44,0.05,651,1.6,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Vagina,20,31.0,0.08,0.02,14,32.0,0.08,0.02,38,0.19,4-afghanistan-fact-sheet.pdf
+4,Afghanistan,Vulva,38,29.0,0.16,0.04,23,29.0,0.14,0.02,80,0.4,4-afghanistan-fact-sheet.pdf
+8,Albania,All cancers,8 019,,,16.0,4 955,,,10.4,19 672,,8-albania-fact-sheet.pdf
+8,Albania,All cancers excl. NMSC,7 702,,,15.5,4 900,,,10.3,18 639,,8-albania-fact-sheet.pdf
+8,Albania,Bladder,486,5.0,6.1,0.89,196,8.0,4.0,0.34,1 471,51.3,8-albania-fact-sheet.pdf
+8,Albania,Brain CNS,279,9.0,3.5,0.71,244,6.0,4.9,0.58,1 075,37.5,8-albania-fact-sheet.pdf
+8,Albania,Breast,1 022,2.0,12.7,5.2,407,3.0,8.2,1.7,3 456,245.5,8-albania-fact-sheet.pdf
+8,Albania,Cervix uteri,171,14.0,2.1,0.88,97,13.0,2.0,0.48,564,40.1,8-albania-fact-sheet.pdf
+8,Albania,Colorectum,522,4.0,6.5,1.2,292,4.0,5.9,0.56,1 554,54.2,8-albania-fact-sheet.pdf
+8,Albania,Corpus uteri,226,10.0,2.8,1.1,62,16.0,1.3,0.26,833,59.2,8-albania-fact-sheet.pdf
+8,Albania,Gallbladder,43,24.0,0.54,0.1,33,21.0,0.67,0.08,61,2.1,8-albania-fact-sheet.pdf
+8,Albania,Hodgkin lymphoma,67,21.0,0.84,0.19,19,24.0,0.38,0.04,246,8.6,8-albania-fact-sheet.pdf
+8,Albania,Hypopharynx,18,30.0,0.22,0.04,9,28.0,0.18,0.03,29,1.0,8-albania-fact-sheet.pdf
+8,Albania,Kidney,179,13.0,2.2,0.37,80,14.0,1.6,0.18,504,17.6,8-albania-fact-sheet.pdf
+8,Albania,Larynx,168,15.0,2.1,0.4,104,12.0,2.1,0.24,534,18.6,8-albania-fact-sheet.pdf
+8,Albania,Leukaemia,289,8.0,3.6,0.71,197,7.0,4.0,0.42,889,31.0,8-albania-fact-sheet.pdf
+8,Albania,"Lip, oral cavity",97,17.0,1.2,0.17,44,19.0,0.89,0.09,270,9.4,8-albania-fact-sheet.pdf
+8,Albania,Liver,181,12.0,2.3,0.38,176,9.0,3.6,0.38,215,7.5,8-albania-fact-sheet.pdf
+8,Albania,Lung,1 438,1.0,17.9,2.9,1 264,1.0,25.5,3.1,1 753,61.2,8-albania-fact-sheet.pdf
+8,Albania,Melanoma,91,18.0,1.1,0.23,34,20.0,0.69,0.07,327,11.4,8-albania-fact-sheet.pdf
+8,Albania,Mesothelioma,27,27.0,0.34,0.06,24,23.0,0.48,0.05,36,1.3,8-albania-fact-sheet.pdf
+8,Albania,Multiple myeloma,74,20.0,0.92,0.2,53,17.0,1.1,0.12,224,7.8,8-albania-fact-sheet.pdf
+8,Albania,NHL,99,16.0,1.2,0.25,49,18.0,0.99,0.11,330,11.5,8-albania-fact-sheet.pdf
+8,Albania,Nasopharynx,42,25.0,0.52,0.1,30,22.0,0.61,0.07,126,4.4,8-albania-fact-sheet.pdf
+8,Albania,Oesophagus,77,19.0,0.96,0.13,72,15.0,1.5,0.18,99,3.5,8-albania-fact-sheet.pdf
+8,Albania,Oropharynx,23,28.0,0.29,0.05,15,25.0,0.3,0.04,57,2.0,8-albania-fact-sheet.pdf
+8,Albania,Ovary,194,11.0,2.4,1.0,129,11.0,2.6,0.57,587,41.7,8-albania-fact-sheet.pdf
+8,Albania,Pancreas,302,7.0,3.8,0.63,290,5.0,5.9,0.63,270,9.4,8-albania-fact-sheet.pdf
+8,Albania,Penis,12,32.0,0.15,0.05,7,31.0,0.14,0.03,36,2.5,8-albania-fact-sheet.pdf
+8,Albania,Prostate,419,6.0,5.2,0.98,174,10.0,3.5,0.57,892,61.2,8-albania-fact-sheet.pdf
+8,Albania,Salivary glands,19,29.0,0.24,0.03,11,27.0,0.22,0.02,55,1.9,8-albania-fact-sheet.pdf
+8,Albania,Stomach,716,3.0,8.9,1.4,560,2.0,11.3,1.2,981,34.2,8-albania-fact-sheet.pdf
+8,Albania,Testis,57,22.0,0.71,0.27,6,32.0,0.12,0.03,218,15.0,8-albania-fact-sheet.pdf
+8,Albania,Thyroid,45,23.0,0.56,0.11,8,29.0,0.16,0.02,152,5.3,8-albania-fact-sheet.pdf
+8,Albania,Vagina,17,31.0,0.21,0.06,8,29.0,0.16,0.03,37,2.6,8-albania-fact-sheet.pdf
+8,Albania,Vulva,30,26.0,0.37,0.12,15,25.0,0.3,0.06,90,6.4,8-albania-fact-sheet.pdf
+12,Algeria,All cancers,64 713,,,14.6,35 778,,,8.2,177 718,,12-algeria-fact-sheet.pdf
+12,Algeria,All cancers excl. NMSC,63 306,,,14.3,35 347,,,8.2,173 172,,12-algeria-fact-sheet.pdf
+12,Algeria,Bladder,3 240,5.0,5.0,0.9,1 818,5.0,5.1,0.43,9 863,21.8,12-algeria-fact-sheet.pdf
+12,Algeria,Brain CNS,2 038,9.0,3.1,0.44,1 575,6.0,4.4,0.38,7 675,16.9,12-algeria-fact-sheet.pdf
+12,Algeria,Breast,14 601,1.0,22.6,6.3,4 893,1.0,13.7,2.2,47 259,210.6,12-algeria-fact-sheet.pdf
+12,Algeria,Cervix uteri,1 799,10.0,2.8,0.94,1 013,11.0,2.8,0.57,5 442,24.3,12-algeria-fact-sheet.pdf
+12,Algeria,Colorectum,7 747,2.0,12.0,2.0,4 380,3.0,12.2,1.0,22 192,48.9,12-algeria-fact-sheet.pdf
+12,Algeria,Corpus uteri,593,21.0,0.92,0.33,124,23.0,0.35,0.07,2 097,9.4,12-algeria-fact-sheet.pdf
+12,Algeria,Gallbladder,1 193,13.0,1.8,0.32,785,14.0,2.2,0.19,1 733,3.8,12-algeria-fact-sheet.pdf
+12,Algeria,Hodgkin lymphoma,999,16.0,1.5,0.18,278,20.0,0.78,0.06,3 649,8.1,12-algeria-fact-sheet.pdf
+12,Algeria,Hypopharynx,77,29.0,0.12,0.02,41,28.0,0.12,0.01,135,0.3,12-algeria-fact-sheet.pdf
+12,Algeria,Kaposi sarcoma,62,31.0,0.1,0.01,28,31.0,0.08,0.0,124,0.27,12-algeria-fact-sheet.pdf
+12,Algeria,Kidney,729,20.0,1.1,0.18,371,18.0,1.0,0.09,2 263,5.0,12-algeria-fact-sheet.pdf
+12,Algeria,Larynx,961,17.0,1.5,0.28,627,17.0,1.8,0.17,2 970,6.6,12-algeria-fact-sheet.pdf
+12,Algeria,Leukaemia,1 731,11.0,2.7,0.34,1 167,9.0,3.3,0.24,5 323,11.7,12-algeria-fact-sheet.pdf
+12,Algeria,"Lip, oral cavity",343,22.0,0.53,0.09,146,22.0,0.41,0.04,997,2.2,12-algeria-fact-sheet.pdf
+12,Algeria,Liver,755,19.0,1.2,0.19,663,15.0,1.9,0.17,1 010,2.2,12-algeria-fact-sheet.pdf
+12,Algeria,Lung,5 040,3.0,7.8,1.4,4 599,2.0,12.9,1.3,6 725,14.8,12-algeria-fact-sheet.pdf
+12,Algeria,Melanoma,306,23.0,0.47,0.07,113,24.0,0.32,0.02,1 018,2.2,12-algeria-fact-sheet.pdf
+12,Algeria,Mesothelioma,69,30.0,0.11,0.02,65,25.0,0.18,0.02,96,0.21,12-algeria-fact-sheet.pdf
+12,Algeria,Multiple myeloma,770,18.0,1.2,0.21,655,16.0,1.8,0.18,2 154,4.8,12-algeria-fact-sheet.pdf
+12,Algeria,NHL,2 226,8.0,3.4,0.51,1 187,8.0,3.3,0.27,7 118,15.7,12-algeria-fact-sheet.pdf
+12,Algeria,Nasopharynx,1 608,12.0,2.5,0.37,971,12.0,2.7,0.26,5 125,11.3,12-algeria-fact-sheet.pdf
+12,Algeria,Oesophagus,285,24.0,0.44,0.06,266,21.0,0.74,0.06,413,0.91,12-algeria-fact-sheet.pdf
+12,Algeria,Oropharynx,90,28.0,0.14,0.02,53,27.0,0.15,0.01,228,0.5,12-algeria-fact-sheet.pdf
+12,Algeria,Ovary,1 147,15.0,1.8,0.57,795,13.0,2.2,0.44,3 444,15.4,12-algeria-fact-sheet.pdf
+12,Algeria,Pancreas,1 168,14.0,1.8,0.3,1 136,10.0,3.2,0.3,1 193,2.6,12-algeria-fact-sheet.pdf
+12,Algeria,Prostate,3 514,4.0,5.4,1.9,1 333,7.0,3.7,0.19,8 124,35.5,12-algeria-fact-sheet.pdf
+12,Algeria,Salivary glands,152,26.0,0.24,0.03,59,26.0,0.17,0.01,481,1.1,12-algeria-fact-sheet.pdf
+12,Algeria,Stomach,2 785,6.0,4.3,0.72,2 250,4.0,6.3,0.57,4 330,9.6,12-algeria-fact-sheet.pdf
+12,Algeria,Testis,163,25.0,0.25,0.06,29,30.0,0.08,0.01,611,2.7,12-algeria-fact-sheet.pdf
+12,Algeria,Thyroid,2 519,7.0,3.9,0.55,358,19.0,1.0,0.07,8 599,19.0,12-algeria-fact-sheet.pdf
+12,Algeria,Vagina,49,32.0,0.08,0.02,24,32.0,0.07,0.01,123,0.55,12-algeria-fact-sheet.pdf
+12,Algeria,Vulva,97,27.0,0.15,0.05,36,29.0,0.1,0.02,277,1.2,12-algeria-fact-sheet.pdf
+24,Angola,All cancers,24 607,,,14.0,15 541,,,9.7,55 639,,24-angola-fact-sheet.pdf
+24,Angola,All cancers excl. NMSC,24 085,,,13.8,15 446,,,9.6,54 151,,24-angola-fact-sheet.pdf
+24,Angola,Bladder,491,14.0,2.0,0.3,229,16.0,1.5,0.14,1 259,3.6,24-angola-fact-sheet.pdf
+24,Angola,Brain CNS,1 074,5.0,4.4,0.36,863,6.0,5.6,0.33,3 258,9.3,24-angola-fact-sheet.pdf
+24,Angola,Breast,2 898,1.0,11.8,3.3,1 333,3.0,8.6,1.6,7 323,41.4,24-angola-fact-sheet.pdf
+24,Angola,Cervix uteri,2 823,2.0,11.5,3.3,1 715,1.0,11.0,2.3,7 033,39.8,24-angola-fact-sheet.pdf
+24,Angola,Colorectum,805,7.0,3.3,0.5,512,8.0,3.3,0.33,1 889,5.4,24-angola-fact-sheet.pdf
+24,Angola,Corpus uteri,358,16.0,1.5,0.54,105,21.0,0.68,0.18,974,5.5,24-angola-fact-sheet.pdf
+24,Angola,Gallbladder,26,31.0,0.11,0.02,22,30.0,0.14,0.02,44,0.13,24-angola-fact-sheet.pdf
+24,Angola,Hodgkin lymphoma,143,23.0,0.58,0.04,66,23.0,0.43,0.02,401,1.1,24-angola-fact-sheet.pdf
+24,Angola,Hypopharynx,5,32.0,0.02,0.01,5,32.0,0.03,0.01,6,0.02,24-angola-fact-sheet.pdf
+24,Angola,Kaposi sarcoma,674,10.0,2.7,0.25,357,11.0,2.3,0.13,906,2.6,24-angola-fact-sheet.pdf
+24,Angola,Kidney,566,12.0,2.3,0.11,331,12.0,2.1,0.09,1 533,4.4,24-angola-fact-sheet.pdf
+24,Angola,Larynx,321,18.0,1.3,0.3,200,18.0,1.3,0.21,816,2.3,24-angola-fact-sheet.pdf
+24,Angola,Leukaemia,523,13.0,2.1,0.21,384,10.0,2.5,0.19,1 340,3.8,24-angola-fact-sheet.pdf
+24,Angola,"Lip, oral cavity",577,11.0,2.3,0.41,316,13.0,2.0,0.25,1 392,4.0,24-angola-fact-sheet.pdf
+24,Angola,Liver,1 137,4.0,4.6,0.74,1 087,4.0,7.0,0.73,1 885,5.4,24-angola-fact-sheet.pdf
+24,Angola,Lung,338,17.0,1.4,0.34,309,14.0,2.0,0.32,525,1.5,24-angola-fact-sheet.pdf
+24,Angola,Melanoma,191,21.0,0.78,0.15,61,24.0,0.39,0.06,514,1.5,24-angola-fact-sheet.pdf
+24,Angola,Multiple myeloma,133,24.0,0.54,0.1,113,20.0,0.73,0.08,307,0.88,24-angola-fact-sheet.pdf
+24,Angola,NHL,792,8.0,3.2,0.23,466,9.0,3.0,0.15,2 176,6.2,24-angola-fact-sheet.pdf
+24,Angola,Nasopharynx,81,29.0,0.33,0.03,43,27.0,0.28,0.02,262,0.75,24-angola-fact-sheet.pdf
+24,Angola,Oesophagus,944,6.0,3.8,0.86,886,5.0,5.7,0.84,1 446,4.1,24-angola-fact-sheet.pdf
+24,Angola,Oropharynx,245,20.0,1.0,0.18,129,19.0,0.83,0.11,600,1.7,24-angola-fact-sheet.pdf
+24,Angola,Ovary,415,15.0,1.7,0.25,220,17.0,1.4,0.17,1 068,6.0,24-angola-fact-sheet.pdf
+24,Angola,Pancreas,283,19.0,1.2,0.19,269,15.0,1.7,0.18,424,1.2,24-angola-fact-sheet.pdf
+24,Angola,Penis,62,30.0,0.25,0.16,31,29.0,0.2,0.08,141,0.81,24-angola-fact-sheet.pdf
+24,Angola,Prostate,2 618,3.0,10.6,5.7,1 415,2.0,9.1,3.0,4 975,28.7,24-angola-fact-sheet.pdf
+24,Angola,Salivary glands,147,22.0,0.6,0.09,101,22.0,0.65,0.06,395,1.1,24-angola-fact-sheet.pdf
+24,Angola,Stomach,676,9.0,2.7,0.55,589,7.0,3.8,0.46,1 139,3.3,24-angola-fact-sheet.pdf
+24,Angola,Testis,120,25.0,0.49,0.06,18,31.0,0.12,0.02,348,2.0,24-angola-fact-sheet.pdf
+24,Angola,Thyroid,110,26.0,0.45,0.1,48,26.0,0.31,0.06,283,0.81,24-angola-fact-sheet.pdf
+24,Angola,Vagina,82,28.0,0.33,0.05,41,28.0,0.26,0.03,203,1.2,24-angola-fact-sheet.pdf
+24,Angola,Vulva,89,27.0,0.36,0.14,52,25.0,0.34,0.12,248,1.4,24-angola-fact-sheet.pdf
+31,Azerbaijan,All cancers,18 503,,,15.9,11 314,,,10.2,46 618,,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,All cancers excl. NMSC,18 176,,,15.6,11 226,,,10.1,45 493,,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Bladder,658,8.0,3.6,0.66,314,11.0,2.8,0.31,2 115,20.5,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Brain CNS,669,6.0,3.6,0.57,544,7.0,4.8,0.49,2 572,25.0,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Breast,2 195,2.0,11.9,3.5,794,5.0,7.0,1.3,7 162,139.1,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Cervix uteri,547,10.0,3.0,0.87,325,9.0,2.9,0.55,1 765,34.3,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Colorectum,1 741,4.0,9.4,1.7,934,3.0,8.3,0.87,5 155,50.1,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Corpus uteri,340,17.0,1.8,0.6,104,17.0,0.92,0.19,1 232,23.9,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Gallbladder,67,25.0,0.36,0.07,51,22.0,0.45,0.06,103,1.0,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Hodgkin lymphoma,217,19.0,1.2,0.16,78,20.0,0.69,0.06,790,7.7,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Hypopharynx,37,29.0,0.2,0.03,15,28.0,0.13,0.01,81,0.79,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Kaposi sarcoma,56,26.0,0.3,0.05,12,29.0,0.11,0.01,162,1.6,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Kidney,330,18.0,1.8,0.29,181,16.0,1.6,0.16,1 011,9.8,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Larynx,394,13.0,2.1,0.37,224,14.0,2.0,0.22,1 312,12.7,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Leukaemia,535,11.0,2.9,0.42,358,8.0,3.2,0.3,1 786,17.3,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,"Lip, oral cavity",209,20.0,1.1,0.19,92,19.0,0.81,0.08,586,5.7,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Liver,665,7.0,3.6,0.64,589,6.0,5.2,0.58,914,8.9,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Lung,2 350,1.0,12.7,2.3,1 954,1.0,17.3,1.9,3 133,30.4,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Melanoma,110,23.0,0.59,0.09,34,24.0,0.3,0.03,381,3.7,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Mesothelioma,27,30.0,0.15,0.03,24,26.0,0.21,0.03,42,0.41,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Multiple myeloma,146,21.0,0.79,0.13,104,17.0,0.92,0.1,442,4.3,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,NHL,424,12.0,2.3,0.35,223,15.0,2.0,0.19,1 427,13.9,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Nasopharynx,56,26.0,0.3,0.05,30,25.0,0.27,0.03,180,1.8,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Oesophagus,967,5.0,5.2,0.94,846,4.0,7.5,0.81,1 390,13.5,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Oropharynx,38,28.0,0.21,0.04,24,26.0,0.21,0.03,117,1.1,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Ovary,390,14.0,2.1,0.63,256,13.0,2.3,0.44,1 219,23.7,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Pancreas,363,15.0,2.0,0.37,322,10.0,2.8,0.33,414,4.0,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Prostate,565,9.0,3.1,1.5,269,12.0,2.4,0.58,1 430,27.8,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Salivary glands,115,22.0,0.62,0.1,45,23.0,0.4,0.03,362,3.5,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Stomach,2 016,3.0,10.9,2.0,1 561,2.0,13.8,1.5,3 093,30.0,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Testis,70,24.0,0.38,0.09,11,30.0,0.1,0.02,263,5.1,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Thyroid,359,16.0,1.9,0.31,52,21.0,0.46,0.05,1 224,11.9,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Vagina,2,32.0,0.01,0.0,1,32.0,0.01,0.0,6,0.12,31-azerbaijan-fact-sheet.pdf
+31,Azerbaijan,Vulva,18,31.0,0.1,0.03,10,31.0,0.09,0.02,60,1.2,31-azerbaijan-fact-sheet.pdf

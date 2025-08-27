@@ -1,0 +1,20 @@
+CANCER PDF PROCESSING SUMMARY
+==================================================
+
+Total files processed: 5
+Successful: 5
+Failed: 0
+
+COMBINED DATASET STATISTICS:
+- Total rows: 170
+- Countries: 5
+- Country numbers range: 4-31
+- Unique cancer types across all countries: 35
+- Columns: Country_Number, Country_Name, Cancer, New_Cases_Number, New_Cases_Rank, New_Cases_Percent, New_Cases_Cum_Risk, Deaths_Number, Deaths_Rank, Deaths_Percent, Deaths_Cum_Risk, Prevalence_Number, Prevalence_Prop_Per_100k, Source_File
+
+COUNTRIES SUCCESSFULLY PROCESSED (sorted by number):
+- #  4: Afghanistan (34 cancer types)
+- #  8: Albania (34 cancer types)
+- # 12: Algeria (34 cancer types)
+- # 24: Angola (34 cancer types)
+- # 31: Azerbaijan (34 cancer types)
