@@ -51,6 +51,9 @@ To do (14/08/2025)
   - User selecting colormap
   - Adding linacs by clicking in a spot, recalculate with new linacs
 
+To Do (27/08/2025) 
+- 
+
 
 
 
