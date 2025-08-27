@@ -167,10 +167,13 @@ class WorldPopDownloader(QMainWindow):
         map_layout = QVBoxLayout()
 
         self.cancer_label = QLabel("Select a cancer type:")
-        #self.cancer_combo = QComboBox()
         cancer_types = self.load_cancer_types()
-        #self.cancer_combo.addItems(cancer_types)
         from PyQt5.QtWidgets import QListWidget, QListWidgetItem
+
+        # "Select All" Checkbox
+        self.select_all_checkbox = QCheckBox("Select All Cancer Types") 
+        self.select_all_checkbox.stateChanged.connect(self.toggle_select_all_cancers)
+
 
         self.cancer_list = QListWidget()
         self.cancer_list.setSelectionMode(QListWidget.MultiSelection)
@@ -193,9 +196,9 @@ class WorldPopDownloader(QMainWindow):
         
         map_layout.addWidget(self.cancer_label)
         map_layout.addWidget(self.cancer_list)
+        map_layout.addWidget(self.select_all_checkbox) 
         map_layout.addWidget(self.map_type_label)
         map_layout.addWidget(self.map_type_combo)
-        #map_layout.addWidget(self.include_fraction_checkbox) 
         map_layout.addWidget(self.generate_map_btn)
         map_group.setLayout(map_layout)
 
@@ -251,6 +254,11 @@ class WorldPopDownloader(QMainWindow):
         self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
         self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
 
+    def toggle_select_all_cancers(self, state):
+        check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked
+        for i in range(self.cancer_list.count()):
+            item = self.cancer_list.item(i)
+            item.setCheckState(check_state)
 
     def check_resample_availability(self):
         country = self.country_combo.currentText()
