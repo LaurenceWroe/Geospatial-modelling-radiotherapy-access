@@ -476,16 +476,36 @@ class WorldPopDownloader(QMainWindow):
         else:
             filename_prefix = "incidence"
 
-        output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+        if filename_prefix == "optimally_treated":
+            output_subfolder = "b_cancer_incidence/optimally_treated"
+        else:
+            output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+
         os.makedirs(output_subfolder, exist_ok=True)
 
         try:
             country_code = countries.lookup(country).alpha_3.lower()
             population_raster_path = f"a_population_density/resampled/{country_code}_{resolution}km.tif"
+
+            # Set correct output folder based on map type
+            if filename_prefix == "optimally_treated":
+                output_subfolder = "b_cancer_incidence/optimally_treated"
+            else:
+                output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+
+            os.makedirs(output_subfolder, exist_ok=True)
+
+            # NOW construct the correct target file path
             target_file = f"{output_subfolder}/{country_code}_{safe_label}_{resolution}km_{filename_prefix}_density.png"
-        
+
+            # THEN check for overwrite
             if os.path.exists(target_file):
-                reply = QMessageBox.question(self, "Overwrite?", f"{target_file} exists. Overwrite?", QMessageBox.Yes | QMessageBox.No)
+                reply = QMessageBox.question(
+                    self,
+                    "Overwrite?",
+                    f"{target_file} exists. Overwrite?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
                 overwrite = reply == QMessageBox.Yes
             else:
                 overwrite = False
