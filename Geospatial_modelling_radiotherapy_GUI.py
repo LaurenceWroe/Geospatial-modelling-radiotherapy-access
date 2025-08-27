@@ -67,7 +67,7 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False):
+    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False, include_optimal_fraction=False):
         super().__init__()
         self.country_code = country_code
         self.cancer_types = cancer_types
@@ -75,6 +75,7 @@ class MapGenerationThread(QThread):
         self.population_raster_path = population_raster_path
         self.overwrite_cancer_type_map = overwrite_cancer_type_map
         self.include_fraction = include_fraction
+        self.include_optimal_fraction = include_optimal_fraction
 
     def run(self):
         try:
@@ -87,6 +88,7 @@ class MapGenerationThread(QThread):
                 return_image=True,
                 overwrite_cancer_type_map=self.overwrite_cancer_type_map,
                 include_fraction=self.include_fraction,
+                include_optimal_fraction = self.include_optimal_fraction
             )
             print(f"[THREAD] Finished map generation.")
             self.finished.emit(image_data, tif_path, png_path)
@@ -230,7 +232,7 @@ class WorldPopDownloader(QMainWindow):
         #self.include_fraction_checkbox.setChecked(False) 
         self.map_type_label = QLabel("Select map to generate:")
         self.map_type_combo = QComboBox() 
-        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy"])
+        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy"])
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  # initially disabled
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
@@ -465,7 +467,15 @@ class WorldPopDownloader(QMainWindow):
         safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
         #filename_prefix = "treated" if include_fraction else "incidence"
         include_fraction = map_type_text == "Treated by Radiotherapy"
-        filename_prefix = "treated" if include_fraction else "incidence"
+        include_optimal_fraction = map_type_text == "Optimally Treated by Radiotherapy"
+        #filename_prefix = "treated" if include_fraction else "incidence"
+        if include_optimal_fraction:
+            filename_prefix = "optimally_treated"
+        elif include_fraction:
+            filename_prefix = "treated"
+        else:
+            filename_prefix = "incidence"
+
         output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
         os.makedirs(output_subfolder, exist_ok=True)
 
@@ -497,7 +507,8 @@ class WorldPopDownloader(QMainWindow):
             resolution,
             population_raster_path,
             overwrite,
-            include_fraction
+            include_fraction,
+            include_optimal_fraction
         )
         self.map_thread.finished.connect(self.cancer_type_map_completed)
         self.map_thread.error.connect(self.on_map_generation_error)

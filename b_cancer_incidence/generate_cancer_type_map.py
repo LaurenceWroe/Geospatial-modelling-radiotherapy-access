@@ -26,10 +26,10 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float]]:
+def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float, float]]:
     """
     Load cancer type proportions from the Excel file.
-    Returns a mapping: lowercased cancer type -> (proportion, fraction)
+    Returns a mapping: lowercased cancer type -> (proportion, fraction, optimal_fraxtion)
     """
     df = pd.read_excel(excel_path, sheet_name=0)
     df = _normalize_columns(df)
@@ -39,6 +39,7 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float]]:
         "type": None,
         "prop": None,
         "frac": None,
+        "optimal_frac": None
     }
     for c in df.columns:
         lc = c.strip().lower()
@@ -48,8 +49,10 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float]]:
             col_map["prop"] = c
         if col_map["frac"] is None and (lc == "fraction" or "fraction" in lc):
             col_map["frac"] = c
+        if col_map["optimal_frac"] is None and (lc == "optimal fraction" or "optimal" in lc): 
+            col_map["optimal_frac"] = c
 
-    if col_map["type"] is None or col_map["prop"] is None or col_map["frac"] is None:
+    if col_map["type"] is None or col_map["prop"] is None or col_map["frac"] is None or col_map["optimal_frac"] is None:
         raise ValueError(
             f"Could not find required columns in {excel_path}. Found columns: {list(df.columns)}"
         )
@@ -63,9 +66,10 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float]]:
         try:
             prop = float(row[col_map["prop"]])
             frac = float(row[col_map["frac"]])
+            opt_frac = float(row[col_map["optimal_frac"]]) 
         except Exception:
             continue
-        mapping[ct.lower()] = (prop, frac)
+        mapping[ct.lower()] = (prop, frac, opt_frac)
 
     if not mapping:
         raise ValueError(f"No valid cancer-type proportions found in {excel_path}")
@@ -116,7 +120,7 @@ def save_raster_like(
 def multiply_population_by_multiplier(
     population_raster_path: str,
     multiplier: float,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load population raster and return population * multiplier array."""
     with rasterio.open(population_raster_path) as src:
         population = src.read(1)
@@ -141,7 +145,8 @@ def generate_cancer_type_map(
     return_image: bool = True,
     overwrite_cancer_type_map: bool = False,
     include_fraction: bool = False,
-) -> Tuple[Optional[bytes], str, str]:
+    include_optimal_fraction: bool = False,
+) -> Tuple[Optional[bytes], str, str, str]:
     """
     Main function to generate cancer type map.
     
@@ -195,12 +200,17 @@ def generate_cancer_type_map(
             else:
                 raise ValueError(f"Cancer type '{ct}' not found.")
 
-        prop, frac = fractions[ct_key]
+        prop, frac, opt_frac = fractions[ct_key]
         combined_label.append(ct_key.replace(" ", "_"))
 
-        pop, temp_array = multiply_population_by_multiplier(
-            population_raster_path, prop * frac if include_fraction else prop
-        )
+        if include_optimal_fraction: 
+            multiplier = prop * opt_frac 
+        elif include_fraction: 
+            multiplier = prop * frac 
+        else: 
+            multiplier = prop 
+
+        pop, temp_array = multiply_population_by_multiplier(population_raster_path, multiplier)
 
         if array is None:
             array = temp_array
@@ -210,28 +220,42 @@ def generate_cancer_type_map(
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
     
+    # Set default output directory if not provided
     if output_dir is None:
         output_dir = base_dir / "b_cancer_incidence" / "cancer_type_maps"
-        output_dir /= "treated_maps" if include_fraction else "incidence_maps"
+        if include_optimal_fraction:
+            output_dir /= "optimally_treated"
+        elif include_fraction:
+            output_dir /= "treated_maps"
+        else:
+            output_dir /= "incidence_maps"
     else:
         output_dir = Path(output_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # Set default population raster path if not provided
     if population_raster_path is None:
         resolution_str = f"{resolution:.1f}"
         pop_default = base_dir / "a_population_density" / "resampled" / f"{country_code.lower()}_{resolution_str}km.tif"
         population_raster_path = str(pop_default)
-    
+
+    # Construct the base name for output files
     if basename is None:
-        #safe_cancer = cancer_key.replace(" ", "_")
-        #base_name = f"{country_code.lower()}_{safe_cancer.lower()}_{resolution}km"
         safe_label = "_".join(combined_label)
         base_name = f"{country_code.lower()}_{safe_label}_{resolution}km"
     else:
         base_name = basename
-    
-    suffix = "treated" if include_fraction else "incidence"
+
+    # Choose suffix based on selected option
+    if include_optimal_fraction:
+        suffix = "optimally_treated"
+    elif include_fraction:
+        suffix = "treated"
+    else:
+        suffix = "incidence"
+
+    # Full output paths
     output_tif = str(output_dir / f"{base_name}_{suffix}_density.tif")
     output_png = str(output_dir / f"{base_name}_{suffix}_density.png")
 
@@ -239,14 +263,13 @@ def generate_cancer_type_map(
     print(f"Overwrite allowed? {'Yes' if overwrite_cancer_type_map else 'No'}")
 
     # Check if file exists and we shouldn't overwrite
-    if not overwrite_cancer_type_map and os.path.exists(output_png): # if overwrite is False and file exists, we don't to overwrite simply to plot
-        # Load the existing image and return it
+    if not overwrite_cancer_type_map and os.path.exists(output_png):
         image_bytes = None
-        print('WE ARE IN THE DON"T OVERWRITE SECTION')
+        print("WE ARE IN THE DON'T OVERWRITE SECTION")
         if return_image and os.path.exists(output_png):
             with open(output_png, 'rb') as f:
                 image_bytes = f.read()
-        return image_bytes, output_tif, output_png  # Return 3 values
+        return image_bytes, output_tif, output_png 
     
 
     # Set matplotlib backend to Agg to avoid GUI conflicts (otherwise GUI will crash)
@@ -261,10 +284,13 @@ def generate_cancer_type_map(
     
     # Generate and save PNG
    #title = f"{country_code.upper()} — {cancer_type} (population × proportion × fraction of cases treated by radiotherapy)"
-    if include_fraction:
-        title = f"{country_code.upper()} — {cancer_type} (Treated cases: population × proportion × fraction treated)"
+    if include_optimal_fraction:
+        title = f"{country_code.upper()} — {' + '.join(cancer_types)} (Optimal treated: pop × prop × optimal fraction)"
+    elif include_fraction:
+        title = f"{country_code.upper()} — {' + '.join(cancer_types)} (Treated: pop × prop × fraction)"
     else:
-        title = f"{country_code.upper()} — {cancer_type} (Incidence: population × proportion of cases)"
+        title = f"{country_code.upper()} — {' + '.join(cancer_types)} (Incidence: pop × prop)"
+
     # Plot the map
     with rasterio.open(population_raster_path) as src:
         bounds = src.bounds
