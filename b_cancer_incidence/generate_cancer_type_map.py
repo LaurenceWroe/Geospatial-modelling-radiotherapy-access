@@ -81,12 +81,12 @@ def multiply_population_by_fraction(
     """Load population raster and return population * proportion * fraction array."""
     with rasterio.open(population_raster_path) as src:
         population = src.read(1)
-
+    cancer_case_prop = 0.043 #number of people wth cancer in UK is approx 3 mil, and UK pop. approx 70 mil. 
     # Clean population values (remove nodata / negatives)
     population = np.where(population > 0, population, 0)
 
     # Multiply by proportion and fraction
-    result = population.astype(np.float64) * float(proportion) * float(fraction)
+    result = population.astype(np.float64) * cancer_case_prop * float(proportion) * float(fraction)
 
     return population, result
 
@@ -120,9 +120,9 @@ def multiply_population_by_multiplier(
     """Load population raster and return population * multiplier array."""
     with rasterio.open(population_raster_path) as src:
         population = src.read(1)
-
+    cancer_case_prop = 0.043
     population = np.where(population > 0, population, 0)
-    result = population.astype(np.float64) * float(multiplier)
+    result = population.astype(np.float64) * float(multiplier) * cancer_case_prop
 
     return population, result
 
