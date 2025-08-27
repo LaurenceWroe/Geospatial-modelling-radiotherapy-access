@@ -98,9 +98,50 @@ class MapGenerationThread(QThread):
 class WorldPopDownloader(QMainWindow):
     def __init__(self):
         super().__init__()
-
+        # Adding an instance variable 
+        self.recent_countries = []
+        self.max_recent = 5  # or however many you want to show
         self.map_thread = None #ensures self.map_thread is always defined
         self.setup_ui()
+    
+    #Adding a method that rebuilds the country dropdown 
+    def update_country_dropdown(self, selected_country=None):
+        # Preserve current selection
+        if selected_country is None:
+            selected_country = self.country_combo.currentText()
+
+        all_countries = sorted([country.name for country in countries])
+
+        # Move selected country to recent list
+        if selected_country and selected_country not in self.recent_countries:
+            self.recent_countries.insert(0, selected_country)
+            if len(self.recent_countries) > self.max_recent:
+                self.recent_countries.pop()
+
+        self.country_combo.blockSignals(True)  # prevent triggering signals while updating
+        self.country_combo.clear()
+
+        # Add recent countries
+        if self.recent_countries:
+            self.country_combo.addItem("Recent Selections")
+            self.country_combo.model().item(self.country_combo.count() - 1).setEnabled(False)
+            for country in self.recent_countries:
+                self.country_combo.addItem(country)
+            self.country_combo.insertSeparator(self.country_combo.count())
+
+        # Add all countries
+        self.country_combo.addItem("All Countries")
+        self.country_combo.model().item(self.country_combo.count() - 1).setEnabled(False)
+        for country in all_countries:
+            if country not in self.recent_countries:
+                self.country_combo.addItem(country)
+
+        # Reselect the previously selected country
+        index = self.country_combo.findText(selected_country)
+        if index != -1:
+            self.country_combo.setCurrentIndex(index)
+
+        self.country_combo.blockSignals(False)
 
     def load_cancer_types(self, excel_path="b_cancer_incidence/cancer_type_radiotherapy.xlsx"):
         try:
@@ -133,7 +174,7 @@ class WorldPopDownloader(QMainWindow):
         
         self.country_label = QLabel("Select a country:")
         self.country_combo = QComboBox()
-        self.country_combo.addItems(sorted([country.name for country in countries]))
+        self.update_country_dropdown() #Fill the dropdown with recent + all 
         
         self.download_btn = QPushButton("Download")
         self.progress = QProgressBar()
@@ -250,6 +291,7 @@ class WorldPopDownloader(QMainWindow):
         self.resample_btn.clicked.connect(self.initiate_resample)
         self.generate_map_btn.clicked.connect(self.initiate_cancer_type_map_generate)
 
+        self.country_combo.currentTextChanged.connect(lambda country: self.update_country_dropdown(country))
         self.country_combo.currentTextChanged.connect(self.check_resample_availability) # Whenever the country changes, check if there exists a downloaded raw file for resampling
         self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
         self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
