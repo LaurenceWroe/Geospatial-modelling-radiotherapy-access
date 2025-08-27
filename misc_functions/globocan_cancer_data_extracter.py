@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import requests
 import pandas as pd
+import numpy as np
 
 
 # --- selenium just to discover the PDF links reliably (page is JS-rendered) ---
@@ -103,83 +104,7 @@ def download_one(url, dest_dir=PDF_DIR, sleep_sec=0.2):
     time.sleep(sleep_sec)    # be polite
     return fn
 
-def _clean_columns(cols):
-    # Flatten multi-row headers Tabula may produce
-    return [re.sub(r"\s+", " ", str(c)).strip() for c in cols]
-
-def _standardize_table(df):
-    df = df.copy()
-    df.columns = _clean_columns(df.columns)
-    # Heuristic: keep only the big site-by-metrics table (has 'Cancer' in first col)
-    if 'Cancer' not in df.columns[0]:
-        # Sometimes the first row is headers; promote row 0 to header if it contains 'Cancer'
-        if 'Cancer' in str(df.iloc[0, 0]):
-            df.columns = _clean_columns(df.iloc[0].tolist())
-            df = df.iloc[1:].reset_index(drop=True)
-    # Rename common messy headers
-    rename_map = {}
-    for c in list(df.columns):
-        low = c.lower()
-        if low.startswith("cancer"):
-            rename_map[c] = "Cancer"
-        elif "new cases" in low and "cum" in low:
-            rename_map[c] = "Incidence_CumRisk"
-        elif "new cases" in low and "rank" in low:
-            rename_map[c] = "Incidence_Rank"
-        elif "new cases" in low and ("percent" in low or "(%)" in low):
-            rename_map[c] = "Incidence_Percent"
-        elif "new cases" in low or "incidence" in low:
-            rename_map[c] = "Incidence_Number"
-        elif "deaths" in low and "cum" in low:
-            rename_map[c] = "Mortality_CumRisk"
-        elif "deaths" in low and "rank" in low:
-            rename_map[c] = "Mortality_Rank"
-        elif "deaths" in low and ("percent" in low or "(%)" in low):
-            rename_map[c] = "Mortality_Percent"
-        elif "deaths" in low:
-            rename_map[c] = "Mortality_Number"
-        elif "prevalence" in low and ("per 100" in low or "prop" in low):
-            rename_map[c] = "Prevalence_per100k"
-        elif "prevalence" in low and "number" in low:
-            rename_map[c] = "Prevalence_Number"
-    df = df.rename(columns=rename_map)
-    # Keep only expected columns if present
-    wanted = ["Cancer","Incidence_Number","Incidence_Rank","Incidence_Percent","Incidence_CumRisk",
-              "Mortality_Number","Mortality_Rank","Mortality_Percent","Mortality_CumRisk",
-              "Prevalence_Number","Prevalence_per100k"]
-    keep = [c for c in wanted if c in df.columns]
-    # Drop rows that are empty site labels
-    df = df[keep].copy()
-    df = df[df["Cancer"].notna()]
-    # Basic numeric cleanup
-    num_cols = [c for c in df.columns if c != "Cancer"]
-    for c in num_cols:
-        df[c] = (df[c].astype(str)
-                      .str.replace(r"[^\d\.\-]", "", regex=True)
-                      .replace({"": None}))
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df.reset_index(drop=True)
-
-def parse_fact_sheet_table(pdf_path):
-    """
-    Parse the 'Incidence, Mortality and Prevalence by cancer site' table on page 2.
-    Returns a tidy DataFrame or raises on failure.
-    """
-    # First try tabula (often returns multiple tables; choose the largest)
-    dfs = tabula.read_pdf(str(pdf_path), pages=2, lattice=False, stream=True, guess=True)
-    if dfs:
-        candidate = max(dfs, key=lambda d: d.shape[0]*d.shape[1])
-        out = _standardize_table(candidate)
-        if len(out) >= 10 and "Cancer" in out.columns:
-            return out
-
-    # Fallback: pdfplumber – parse page 2 and try to capture the large table
-    with pdfplumber.open(str(pdf_path)) as pdf:
-        page = pdf.pages[1]  # 0-indexed; page 2 is index 1
-        table = page.extract_table() or page.extract_tables()[0]
-        df = pd.DataFrame(table[1:], columns=table[0])
-        out = _standardize_table(df)
-        return out
+# ---------- Helpers ----------
 
 def filename_to_meta(path):
     """
@@ -196,6 +121,252 @@ def filename_to_meta(path):
     country = country.replace(" Usa", " USA").replace(" Uk", " UK")
     return {"pop_code": pop_code, "country": country}
 
+
+def _clean_columns(cols):
+    return [re.sub(r"\s+", " ", str(c)).strip() if c is not None else "" for c in cols]
+
+def _looks_like_two_row_header(df: pd.DataFrame) -> bool:
+    if df.shape[0] < 2:
+        return False
+    row0 = " ".join(_clean_columns(df.iloc[0].tolist())).lower()
+    row1 = " ".join(_clean_columns(df.iloc[1].tolist())).lower()
+    triggers = ["new cases", "deaths", "5 year", "5-year", "prevalence", "cum.risk", "(%)"]
+    return any(t in row0 for t in triggers) and any(t in row1 for t in triggers + ["cancer"])
+
+def _combine_two_row_header(df: pd.DataFrame) -> pd.DataFrame:
+    major = pd.Series(_clean_columns(df.iloc[0].tolist()))
+    minor = pd.Series(_clean_columns(df.iloc[1].tolist()))
+    # Forward-fill major headers and force the first to "Cancer"
+    major = major.replace({"": np.nan}).ffill().fillna("")
+    if not major.iloc[0] or "cancer" in minor.iloc[0].lower():
+        major.iloc[0] = "Cancer"
+    # Build combined header
+    combined = []
+    for M, m in zip(major, minor):
+        if not M: 
+            combined.append(m or "")
+        elif not m or m.lower() == M.lower():
+            combined.append(M)
+        else:
+            combined.append(f"{M} {m}")
+    df = df.iloc[2:].reset_index(drop=True)
+    df.columns = _clean_columns(combined)
+    return df
+
+def _pick_cancer_column(df: pd.DataFrame) -> str | None:
+    # Heuristic: "Cancer" column is mostly text (few numeric-only cells), often includes items like "Breast", "Prostate", "All cancers"
+    best_col, best_texty = None, -1
+    for c in df.columns:
+        series = df[c].astype(str)
+        # ratio of cells that contain letters (A–Z)
+        texty = (series.str.contains(r"[A-Za-z]", na=False)).mean()
+        if texty > best_texty:
+            best_texty, best_col = texty, c
+    return best_col
+
+def _rename_metrics(columns: list[str]) -> list[str]:
+    out = []
+    for c in columns:
+        low = c.lower()
+
+        # Normalize some tokens
+        low = low.replace("5 year", "5-year").replace("per 100 000", "per 100000")
+        low = re.sub(r"\s+", " ", low)
+
+        # Map
+        if low == "cancer" or "cancer" == low.strip():
+            out.append("Cancer"); continue
+
+        def has(*tokens): return all(t in low for t in tokens)
+        def any_of(*tokens): return any(t in low for t in tokens)
+
+        if has("new cases") and any_of("number", "no."):
+            out.append("Incidence_Number")
+        elif has("new cases") and "rank" in low:
+            out.append("Incidence_Rank")
+        elif has("new cases") and ("(%)" in low or "percent" in low or "percentage" in low or "percent." in low):
+            out.append("Incidence_Percent")
+        elif has("new cases") and any_of("cum.risk", "cum risk", "cum-risk", "cumulative risk"):
+            out.append("Incidence_CumRisk")
+
+        elif "deaths" in low and any_of("number", "no."):
+            out.append("Mortality_Number")
+        elif "deaths" in low and "rank" in low:
+            out.append("Mortality_Rank")
+        elif "deaths" in low and ("(%)" in low or "percent" in low or "percentage" in low):
+            out.append("Mortality_Percent")
+        elif "deaths" in low and any_of("cum.risk", "cum risk", "cum-risk", "cumulative risk"):
+            out.append("Mortality_CumRisk")
+
+        elif any_of("5-year prevalence", "5-year-prevalence", "5 year prevalence", "5-year prevalence", "prevalence"):
+            if any_of("prop", "per 100000"):
+                out.append("Prevalence_per100k")
+            elif any_of("number", "no."):
+                out.append("Prevalence_Number")
+            else:
+                out.append(c)  # leave as-is
+
+        else:
+            out.append(c)
+    return _clean_columns(out)
+
+def _final_numeric_cleanup(df: pd.DataFrame) -> pd.DataFrame:
+    if "Cancer" in df.columns:
+        df["Cancer"] = df["Cancer"].astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
+    num_cols = [c for c in df.columns if c != "Cancer"]
+    for c in num_cols:
+        df[c] = (
+            df[c].astype(str)
+                  .str.replace(r"[^\d\.\-]", "", regex=True)  # keep digits, dot, minus
+                  .replace({"": np.nan, "-": np.nan, "–": np.nan})
+        )
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+def _standardize_table(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    # Some Tabula returns include header rows as data; detect and combine
+    # Also flatten MultiIndex columns if present
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = _clean_columns([" ".join([str(x) for x in tpl if str(x) != "None"]) for tpl in df.columns])
+    else:
+        df.columns = _clean_columns(df.columns)
+
+    # If first rows look like header rows, rebuild header
+    if _looks_like_two_row_header(df):
+        df = _combine_two_row_header(df)
+
+    # If we still don't have a "Cancer" column, try to promote first row or pick a text-heavy column
+    if "Cancer" not in [c.strip().title() for c in df.columns]:
+        # Try: if row 0 contains "Cancer" under some blank header, promote row 0 to header
+        if df.shape[0] > 0 and any("cancer" in str(x).lower() for x in df.iloc[0].tolist()):
+            df.columns = _clean_columns(df.iloc[0].tolist())
+            df = df.iloc[1:].reset_index(drop=True)
+        # Rename synonyms
+        rename_syn = {c: "Cancer" for c in df.columns if re.search(r"^cancer(\s*site)?$", c.strip(), flags=re.I)}
+        df = df.rename(columns=rename_syn)
+        # If still missing, pick the text-heavy column and call it "Cancer"
+        if "Cancer" not in df.columns:
+            cand = _pick_cancer_column(df)
+            if cand:
+                df = df.rename(columns={cand: "Cancer"})
+
+    # Rename metric columns via robust regex rules
+    df.columns = _rename_metrics(list(df.columns))
+
+    # Keep and order only the expected columns if present
+    wanted = [
+        "Cancer",
+        "Incidence_Number","Incidence_Rank","Incidence_Percent","Incidence_CumRisk",
+        "Mortality_Number","Mortality_Rank","Mortality_Percent","Mortality_CumRisk",
+        "Prevalence_Number","Prevalence_per100k"
+    ]
+    present = [c for c in wanted if c in df.columns]
+    if "Cancer" not in present:
+        raise ValueError("Could not identify the 'Cancer' column after header reconstruction.")
+    df = df[present].copy()
+
+    # Drop rows where Cancer is blank/NaN
+    df = df[df["Cancer"].astype(str).str.strip().ne("")].reset_index(drop=True)
+
+    # Numeric cleanup
+    df = _final_numeric_cleanup(df)
+
+    # Optional: drop obvious footer/noise rows if they slipped in
+    # (You can keep 'All cancers' rows if you want them.)
+    # df = df[~df["Cancer"].str.contains(r"^Incidence, Mortality", na=False)]
+
+    return df.reset_index(drop=True)
+
+# ---------- Extraction core ----------
+
+def parse_fact_sheet_table(pdf_path):
+    """
+    Parse the 'Incidence, Mortality and Prevalence by cancer site' table on page 2.
+    Returns a tidy DataFrame or raises on failure.
+    """
+    # ----- 1) Tabula lattice (with guess) -----
+    try:
+        dfs = tabula.read_pdf(
+            str(pdf_path),
+            pages="2",
+            lattice=True,
+            stream=False,
+            guess=True,                 # changed: let Tabula guess cell boundaries
+            multiple_tables=True,
+            pandas_options={"dtype": str}
+        ) or []
+        # don't over-filter; keep small candidates too
+        dfs = [d for d in dfs if isinstance(d, pd.DataFrame) and d.shape[1] >= 4]
+        dfs.sort(key=lambda d: (d.shape[0] * d.shape[1]), reverse=True)
+        for cand in dfs:
+            try:
+                out = _standardize_table(cand)
+                if len(out) >= 10 and any(c != "Cancer" for c in out.columns):
+                    return out
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # ----- 2) Tabula stream (whitespace-delimited tables) -----
+    try:
+        dfs = tabula.read_pdf(
+            str(pdf_path),
+            pages="2",
+            lattice=False,
+            stream=True,
+            guess=True,
+            multiple_tables=True,
+            pandas_options={"dtype": str}
+        ) or []
+        dfs = [d for d in dfs if isinstance(d, pd.DataFrame) and d.shape[1] >= 4]
+        dfs.sort(key=lambda d: (d.shape[0] * d.shape[1]), reverse=True)
+        for cand in dfs:
+            try:
+                out = _standardize_table(cand)
+                if len(out) >= 10 and any(c != "Cancer" for c in out.columns):
+                    return out
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 2) Fallback: pdfplumber with lines strategy (robust to some PDFs where Tabula splits merged cells)
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        page = pdf.pages[1]  # page 2 (0-indexed)
+        table_settings = {
+            "vertical_strategy": "lines",
+            "horizontal_strategy": "lines",
+            "snap_tolerance": 3,
+            "join_tolerance": 2,
+            "edge_min_length": 3,
+            "min_words_vertical": 1,
+            "min_words_horizontal": 1,
+            "intersection_tolerance": 3,
+            # use the *text_* options supported by new pdfplumber:
+            "text_x_tolerance": 2,
+            "text_y_tolerance": 2,
+            "text_keep_blank_chars": True,
+            }
+        tables = page.extract_tables(table_settings=table_settings) or []
+        # choose biggest table
+        tables.sort(key=lambda t: (len(t) * len(t[0]) if t and t[0] else 0), reverse=True)
+        for t in tables:
+            if not t or not t[0]:
+                continue
+            df = pd.DataFrame(t[1:], columns=_clean_columns(t[0]))
+            try:
+                out = _standardize_table(df)
+                if len(out) >= 10 and any(c != "Cancer" for c in out.columns):
+                    return out
+            except Exception:
+                continue
+
+    raise RuntimeError("Failed to parse the page-2 site-by-metrics table from this PDF.")
+
+
 def main():
     """print("Discovering fact-sheet PDFs…")
     links = list_population_factsheet_pdfs()
@@ -207,28 +378,62 @@ def main():
         pdf_paths = [f.result() for f in concurrent.futures.as_completed(futures)]
     pdf_paths.sort()"""
     PDF_DIR = Path("globocan_factsheets/pdf")
-    pdf_paths = sorted(PDF_DIR.glob("*.pdf"))    # ← use your already-downloaded files
+    OUT_DIR = Path("globocan_factsheets")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    pdf_paths = sorted(PDF_DIR.glob("*.pdf"))
+    if not pdf_paths:
+        raise SystemExit(f"No PDFs found in {PDF_DIR.resolve()}")
 
     print("Parsing page-2 tables… (this may take a few minutes)")
-    rows = []
+    results = []
+    failures = []
+
     for p in pdf_paths:
         meta = filename_to_meta(p)
         try:
             df = parse_fact_sheet_table(p)
+            # annotate with metadata
             df.insert(0, "pop_code", meta["pop_code"])
             df.insert(1, "country", meta["country"])
-            rows.append(df)
+            df.insert(2, "source_pdf", p.name)
+            results.append(df)
+            print(f"OK: {p.name} → {len(df)} rows")
         except Exception as e:
-            print("FAILED:", p, e)
+            err = f"{type(e).__name__}: {e}"
+            failures.append({"pdf": p.name, "error": err})
+            print(f"FAILED: {p.name} -> {err}")
 
-    if not rows:
-        raise SystemExit("No tables parsed. Check Java/Tabula install and try again.")
+    if not results:
+        raise SystemExit("No tables parsed. Check Java/Tabula (Java) and pdfplumber and try again.")
 
-    big = pd.concat(rows, ignore_index=True)
-    OUT_DIR.mkdir(exist_ok=True, parents=True)
-    big.to_csv(OUT_DIR / "globocan2022_fact_sheets_page2.csv", index=False)
-    big.to_parquet(OUT_DIR / "globocan2022_fact_sheets_page2.parquet", index=False)
-    print(f"Done → {OUT_DIR/'globocan2022_fact_sheets_page2.csv'}")
+    big = pd.concat(results, ignore_index=True, sort=False)
+
+    # Normalize column order: metadata first, then the expected metrics if present
+    wanted = [
+        "Cancer",
+        "Incidence_Number", "Incidence_Rank", "Incidence_Percent", "Incidence_CumRisk",
+        "Mortality_Number", "Mortality_Rank", "Mortality_Percent", "Mortality_CumRisk",
+        "Prevalence_Number", "Prevalence_per100k",
+    ]
+    ordered = ["pop_code", "country", "source_pdf"] + [c for c in wanted if c in big.columns]
+    # keep any extra columns (if present) at the end
+    ordered += [c for c in big.columns if c not in ordered]
+    big = big[ordered]
+
+    # Save outputs
+    csv_path = OUT_DIR / "globocan2022_fact_sheets_page2.csv"
+    pq_path  = OUT_DIR / "globocan2022_fact_sheets_page2.parquet"
+    big.to_csv(csv_path, index=False)
+    big.to_parquet(pq_path, index=False)
+
+    # Save a failure log if any
+    if failures:
+        pd.DataFrame(failures).to_csv(OUT_DIR / "parse_failures.csv", index=False)
+
+    print(f"Done → {csv_path} "
+          f"({len(big)} rows from {len(results)} PDFs; {len(failures)} failures)")
+    
 
 if __name__ == "__main__":
     main()
