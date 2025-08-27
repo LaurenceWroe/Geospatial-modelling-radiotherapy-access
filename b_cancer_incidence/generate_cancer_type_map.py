@@ -114,8 +114,89 @@ def save_raster_like(
 
     with rasterio.open(output_path, "w", **meta) as dst:
         # write array, converting NaNs to nodata
+        array = np.array(array)  # Force conversion
+        if not np.issubdtype(array.dtype, np.number):
+            try:
+                array = array.astype(np.float32)
+            except Exception as e:
+                raise TypeError(f"Array could not be converted to float32: dtype={array.dtype}, error: {e}")
         data = np.where(np.isfinite(array), array, nodata_value).astype(np.float32)
         dst.write(data, 1)
+
+#can also produce populatiom density map: 
+def generate_population_density_map_only(
+    country_code: str,
+    population_raster_path: str,
+    output_dir: Path,
+    resolution: float = 1.0,
+    return_image: bool = True,
+    overwrite_existing: bool = False,
+) -> Tuple[Optional[bytes], str, str]:
+    """
+    Generate and save a raw population density map (GeoTIFF + PNG).
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import io
+
+    with rasterio.open(population_raster_path) as src:
+        if src.count < 1:
+            raise RuntimeError(f"Raster has no bands: {population_raster_path}")
+        population = src.read(1)
+        bounds = src.bounds
+
+    population = np.where(population > 0, population, np.nan)
+
+    # Output filenames
+    basename = f"{country_code.lower()}_population_density_{resolution}km"
+    output_tif = str(output_dir / f"{basename}.tif")
+    output_png = str(output_dir / f"{basename}.png")
+
+    # Save raster
+    if not os.path.exists(output_tif) or overwrite_existing:
+        if population.ndim != 2:
+            raise ValueError(f"Population array is not 2D. Shape: {population.shape}")
+        save_raster_like(population_raster_path, population, output_tif)
+
+    # Set up plot
+    fig, ax = plt.subplots(figsize=(10, 8))
+    norm_data = population.copy()
+    norm_data[(norm_data < 1) & (~np.isnan(norm_data))] = 0.5
+
+    cmap = cm.get_cmap('viridis', 256)
+    new_colors = cmap(np.linspace(0, 1, 256))
+    new_colors[0] = np.array([0, 0, 139 / 255, 1.0])
+    custom_cmap = ListedColormap(new_colors)
+
+    im = ax.imshow(
+        norm_data,
+        extent=(bounds.left, bounds.right, bounds.bottom, bounds.top),
+        origin="upper",
+        cmap=custom_cmap,
+        norm=LogNorm(vmin=1, vmax=np.nanmax(norm_data))
+    )
+
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Population density (people/km²)")
+    ax.set_title(f"{country_code.upper()} — Population Density")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    plt.tight_layout()
+
+    if not os.path.exists(output_png) or overwrite_existing:
+        plt.savefig(output_png, dpi=300)
+
+    image_bytes = None
+    if return_image:
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=300)
+        buf.seek(0)
+        image_bytes = buf.getvalue()
+
+    plt.close()
+
+    return image_bytes, output_tif, output_png
 
 def multiply_population_by_multiplier(
     population_raster_path: str,
@@ -124,10 +205,13 @@ def multiply_population_by_multiplier(
     """Load population raster and return population * multiplier array."""
     with rasterio.open(population_raster_path) as src:
         population = src.read(1)
+        if not np.issubdtype(population.dtype, np.number):
+            population = population.astype(np.float32)
     cancer_case_prop = 0.043
     population = np.where(population > 0, population, 0)
     result = population.astype(np.float64) * float(multiplier) * cancer_case_prop
-
+    if not np.issubdtype(result.dtype, np.number):
+        raise ValueError(f"Resulting array contains non-numeric data. dtype={result.dtype}")
     return population, result
 
 
@@ -217,6 +301,9 @@ def generate_cancer_type_map(
             population = pop
         else:
             array += temp_array
+        
+        if array is None or array.ndim != 2:
+            raise ValueError(f"Invalid array generated: shape {getattr(array, 'shape', 'None')}")
     # Resolve default paths
     base_dir = Path(__file__).resolve().parents[1]
     
@@ -254,6 +341,19 @@ def generate_cancer_type_map(
         suffix = "treated"
     else:
         suffix = "incidence"
+    
+    # Generate population density map (4th map)
+    population_output_dir = base_dir / "a_population_density" / "population_density_maps"
+    population_output_dir.mkdir(parents=True, exist_ok=True)
+
+    generate_population_density_map_only(
+        country_code=country_code,
+        population_raster_path=population_raster_path,
+        output_dir=population_output_dir,
+        resolution=resolution,
+        return_image=False,
+        overwrite_existing=overwrite_cancer_type_map
+    )
 
     # Full output paths
     output_tif = str(output_dir / f"{base_name}_{suffix}_density.tif")

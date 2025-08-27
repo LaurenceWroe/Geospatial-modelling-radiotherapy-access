@@ -232,11 +232,12 @@ class WorldPopDownloader(QMainWindow):
         #self.include_fraction_checkbox.setChecked(False) 
         self.map_type_label = QLabel("Select map to generate:")
         self.map_type_combo = QComboBox() 
-        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy"])
+        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density"])
         self.generate_map_btn = QPushButton("Generate Map")
-        self.generate_map_btn.setEnabled(False)  # initially disabled
+        self.generate_map_btn.setEnabled(False)  
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
         
+
         map_layout.addWidget(self.cancer_label)
         map_layout.addWidget(self.cancer_list)
         map_layout.addWidget(self.select_all_checkbox) 
@@ -297,6 +298,7 @@ class WorldPopDownloader(QMainWindow):
         self.country_combo.currentTextChanged.connect(self.check_resample_availability) # Whenever the country changes, check if there exists a downloaded raw file for resampling
         self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
         self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
+        self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
 
     def toggle_select_all_cancers(self, state):
         check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked
@@ -320,16 +322,18 @@ class WorldPopDownloader(QMainWindow):
     def check_cancer_map_availability(self): # Check whether resampled file exists for map generation, if so enable the cancer map generate button
         country = self.country_combo.currentText()
         resolution = float(self.resolution_combo.currentText())
-        if not country:
-            return
-        if not resolution:
+        map_type = self.map_type_combo.currentText()
+        if not country or not resolution:
+            self.generate_map_btn.setEnabled(False)
             return
             
         try:
             country_obj = countries.lookup(country)
             country_code = country_obj.alpha_3.lower()
             input_file = os.path.join("a_population_density/resampled", f"{country_code}_{resolution}km.tif")
+            exists = os.path.exists(input_file)
             self.generate_map_btn.setEnabled(os.path.exists(input_file))
+            self.generate_map_btn.setEnabled(exists)
         except:
             self.generate_map_btn.setEnabled(False)
 
@@ -449,15 +453,20 @@ class WorldPopDownloader(QMainWindow):
 
     def initiate_cancer_type_map_generate(self):
         country = self.country_combo.currentText()
-        selected_cancer_types = []
-        for i in range(self.cancer_list.count()):
-            item = self.cancer_list.item(i)
-            if item.checkState() == Qt.Checked:
-                selected_cancer_types.append(item.text())
+        map_type_text = self.map_type_combo.currentText()
 
-        if not selected_cancer_types:
-            QMessageBox.critical(self, "Error", "Please select at least one cancer type.")
-            return
+        if map_type_text == "Population Density":
+            selected_cancer_types = []  # no cancer types
+        else:
+            selected_cancer_types = []
+            for i in range(self.cancer_list.count()):
+                item = self.cancer_list.item(i)
+                if item.checkState() == Qt.Checked:
+                    selected_cancer_types.append(item.text())
+
+            if not selected_cancer_types:
+                QMessageBox.critical(self, "Error", "Please select at least one cancer type.")
+                return
 
         resolution = float(self.resolution_combo.currentText())
         #include_fraction = self.include_fraction_checkbox.isChecked()
@@ -465,11 +474,13 @@ class WorldPopDownloader(QMainWindow):
 
         # Construct target file name
         safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
-        #filename_prefix = "treated" if include_fraction else "incidence"
+
         include_fraction = map_type_text == "Treated by Radiotherapy"
         include_optimal_fraction = map_type_text == "Optimally Treated by Radiotherapy"
-        #filename_prefix = "treated" if include_fraction else "incidence"
-        if include_optimal_fraction:
+
+        if map_type_text == "Population Density":
+            filename_prefix = "population"
+        elif include_optimal_fraction:
             filename_prefix = "optimally_treated"
         elif include_fraction:
             filename_prefix = "treated"
@@ -478,6 +489,8 @@ class WorldPopDownloader(QMainWindow):
 
         if filename_prefix == "optimally_treated":
             output_subfolder = "b_cancer_incidence/optimally_treated"
+        elif filename_prefix == "population":
+            output_subfolder = "b_cancer_incidence/population_density_maps"
         else:
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
 
@@ -521,18 +534,35 @@ class WorldPopDownloader(QMainWindow):
             self.map_thread.quit()
             self.map_thread.wait()
         # Create and start the thread
-        self.map_thread = MapGenerationThread(
-            country_code,
-            selected_cancer_types,
-            resolution,
-            population_raster_path,
-            overwrite,
-            include_fraction,
-            include_optimal_fraction
-        )
-        self.map_thread.finished.connect(self.cancer_type_map_completed)
-        self.map_thread.error.connect(self.on_map_generation_error)
-        self.map_thread.start()
+        if filename_prefix == "population":
+            # Call population density map directly
+            from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only  # Or wherever it's defined
+            try:
+                image_data, tif_path, png_path = generate_population_density_map_only(
+                    country_code=country_code,
+                    population_raster_path=population_raster_path,
+                    output_dir=output_subfolder,
+                    resolution=resolution,
+                    return_image=True,
+                    overwrite_existing=overwrite
+                )
+                self.cancer_type_map_completed(image_data, tif_path, png_path)
+            except Exception as e:
+                self.on_map_generation_error(str(e))
+        else:
+            # Call thread for cancer maps
+            self.map_thread = MapGenerationThread(
+                country_code,
+                selected_cancer_types,
+                resolution,
+                population_raster_path,
+                overwrite,
+                include_fraction,
+                include_optimal_fraction
+            )
+            self.map_thread.finished.connect(self.cancer_type_map_completed)
+            self.map_thread.error.connect(self.on_map_generation_error)
+            self.map_thread.start()
 
 
 

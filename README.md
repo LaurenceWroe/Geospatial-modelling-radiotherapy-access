@@ -57,7 +57,7 @@ To do (14/08/2025)
 To Do (27/08/2025) 
 - Data flow chart update (Sophia) DONE AND PUT IN SLIDES FOR CHANGES AND ADDITIONS
 - generalising code to run for all countries using GLOBOCAN data (Archie) 
-- Optimal RT treatment maps using Australian paper data (Sophia) 
+- Optimal RT treatment maps using Australian paper data (Sophia) DONE 
 - How TravelTime code could be used in flow chart of what the tools does (Sophia) DONE
 - Probability maps (Archie) 
 - GUI fix: close resampling loading output after it has loaded
