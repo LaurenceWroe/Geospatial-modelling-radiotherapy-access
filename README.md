@@ -52,7 +52,7 @@ To do (14/08/2025)
   - Adding linacs by clicking in a spot, recalculate with new linacs
 
 To Do (27/08/2025) 
-- Data flow chart update (Sophia) 
+- Data flow chart update (Sophia) DONE AND ADDED TO SLIDES FOR CHANGES AND ADDITIONS
 - generalising code to run for all countries using GLOBOCAN data (Archie) 
 - Optimal RT treatment maps using Australian paper data (Sophia) 
 - How TravelTime code could be used in flow chart of what the tools does (Sophia) 
@@ -60,6 +60,7 @@ To Do (27/08/2025)
 - GUI fix: close resampling loading output after it has loaded
 - Once probability maps are good to go, add option to GUI which allows a checkbox of all maps made --> look at run_country_analysis.py file 
 - Add relevant maps and comments to presentation slides (Archie and Sophia) 
+- we need GUI to produce just population density maps!  
 
 
 
