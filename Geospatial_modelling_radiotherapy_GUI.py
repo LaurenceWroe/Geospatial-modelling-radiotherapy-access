@@ -182,15 +182,20 @@ class WorldPopDownloader(QMainWindow):
             self.cancer_list.addItem(item)
 
 
-        self.include_fraction_checkbox = QCheckBox("Include radiotherapy fraction") 
-        self.include_fraction_checkbox.setChecked(False) 
+        #self.include_fraction_checkbox = QCheckBox("Include radiotherapy fraction") 
+        #self.include_fraction_checkbox.setChecked(False) 
+        self.map_type_label = QLabel("Select map to generate:")
+        self.map_type_combo = QComboBox() 
+        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy"])
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  # initially disabled
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
         
         map_layout.addWidget(self.cancer_label)
         map_layout.addWidget(self.cancer_list)
-        map_layout.addWidget(self.include_fraction_checkbox) 
+        map_layout.addWidget(self.map_type_label)
+        map_layout.addWidget(self.map_type_combo)
+        #map_layout.addWidget(self.include_fraction_checkbox) 
         map_layout.addWidget(self.generate_map_btn)
         map_group.setLayout(map_layout)
 
@@ -403,10 +408,13 @@ class WorldPopDownloader(QMainWindow):
             return
 
         resolution = float(self.resolution_combo.currentText())
-        include_fraction = self.include_fraction_checkbox.isChecked()
+        #include_fraction = self.include_fraction_checkbox.isChecked()
+        map_type_text = self.map_type_combo.currentText()
 
         # Construct target file name
         safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
+        #filename_prefix = "treated" if include_fraction else "incidence"
+        include_fraction = map_type_text == "Treated by Radiotherapy"
         filename_prefix = "treated" if include_fraction else "incidence"
         output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
         os.makedirs(output_subfolder, exist_ok=True)
