@@ -459,10 +459,19 @@ class WorldPopDownloader(QMainWindow):
         self.resample_thread.start()
         
         self.resample_btn.setEnabled(False)
-        QMessageBox.information(self, "Processing", "Resampling in progress...")
+        self.processing_msgbox = QMessageBox(self)
+        self.processing_msgbox.setWindowTitle("Processing")
+        self.processing_msgbox.setText("Resampling in progress...")
+        self.processing_msgbox.setStandardButtons(QMessageBox.Cancel) 
+        self.processing_msgbox.setModal(False) # no buttons, so user can’t close it manually
+        self.processing_msgbox.show()
 
     def resample_complete(self, result):
         self.resample_btn.setEnabled(True)
+
+        if hasattr(self, 'processing_msgbox'):
+            self.processing_msgbox.close()
+            del self.processing_msgbox
         
         if result['success']:
             msg = (

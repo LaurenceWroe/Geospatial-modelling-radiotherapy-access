@@ -55,15 +55,15 @@ To do (14/08/2025)
 
 
 To Do (27/08/2025) 
-- Data flow chart update (Sophia) DONE AND PUT IN SLIDES FOR CHANGES AND ADDITIONS
+- Data flow chart update (Sophia) DONE (AND PUT IN SLIDES FOR CHANGES AND ADDITIONS) 
 - generalising code to run for all countries using GLOBOCAN data (Archie) 
-- Optimal RT treatment maps using Australian paper data (Sophia) DONE 
+- Optimal RT treatment maps using Australian paper data (Sophia) DONE (although could do with using better database) 
 - How TravelTime code could be used in flow chart of what the tools does (Sophia) DONE
 - Probability maps (Archie) 
 - GUI fix: close resampling loading output after it has loaded
 - Once probability maps are good to go, add option to GUI which allows a checkbox of all maps made --> look at run_country_analysis.py file 
 - Add relevant maps and comments to presentation slides (Archie and Sophia) 
-- we need GUI to produce just population density maps!  
+- we need GUI to produce just population density maps!  DONE (saves maps to a_population_density) 
 
 
 
