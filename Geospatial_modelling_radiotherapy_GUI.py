@@ -17,6 +17,8 @@ from pycountry import countries
 from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
+from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only
+
 
 
 # All threads below for resampling, downloading and mapping:
@@ -62,6 +64,31 @@ class DownloadThread(QThread):
         except Exception as e:
             self.finished.emit(False, str(e))
 
+class PopulationMapThread(QThread):
+    finished = pyqtSignal(bytes, str, str)
+    error = pyqtSignal(str)
+
+    def __init__(self, country_code, resolution, population_raster_path, output_dir, overwrite_existing):
+        super().__init__()
+        self.country_code = country_code
+        self.resolution = resolution
+        self.population_raster_path = population_raster_path
+        self.output_dir = output_dir
+        self.overwrite_existing = overwrite_existing
+
+    def run(self):
+        try:
+            image_data, tif_path, png_path = generate_population_density_map_only(
+                country_code=self.country_code,
+                population_raster_path=self.population_raster_path,
+                output_dir=self.output_dir,
+                resolution=self.resolution,
+                return_image=True,
+                overwrite_existing=self.overwrite_existing
+            )
+            self.finished.emit(image_data, tif_path, png_path)
+        except Exception as e:
+            self.error.emit(str(e))
 
 class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
@@ -480,33 +507,26 @@ class WorldPopDownloader(QMainWindow):
 
         if map_type_text == "Population Density":
             filename_prefix = "population"
+            output_subfolder = "a_population_density/population_density_maps"
+        
         elif include_optimal_fraction:
             filename_prefix = "optimally_treated"
+            output_subfolder = "b_cancer_incidence/cancer_type_maps/optimally_treated"
+        
         elif include_fraction:
             filename_prefix = "treated"
+            output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+        
         else:
             filename_prefix = "incidence"
-
-        if filename_prefix == "optimally_treated":
-            output_subfolder = "b_cancer_incidence/optimally_treated"
-        elif filename_prefix == "population":
-            output_subfolder = "b_cancer_incidence/population_density_maps"
-        else:
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+
 
         os.makedirs(output_subfolder, exist_ok=True)
 
         try:
             country_code = countries.lookup(country).alpha_3.lower()
             population_raster_path = f"a_population_density/resampled/{country_code}_{resolution}km.tif"
-
-            # Set correct output folder based on map type
-            if filename_prefix == "optimally_treated":
-                output_subfolder = "b_cancer_incidence/optimally_treated"
-            else:
-                output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
-
-            os.makedirs(output_subfolder, exist_ok=True)
 
             # NOW construct the correct target file path
             target_file = f"{output_subfolder}/{country_code}_{safe_label}_{resolution}km_{filename_prefix}_density.png"
@@ -535,20 +555,16 @@ class WorldPopDownloader(QMainWindow):
             self.map_thread.wait()
         # Create and start the thread
         if filename_prefix == "population":
-            # Call population density map directly
-            from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only  # Or wherever it's defined
-            try:
-                image_data, tif_path, png_path = generate_population_density_map_only(
-                    country_code=country_code,
-                    population_raster_path=population_raster_path,
-                    output_dir=output_subfolder,
-                    resolution=resolution,
-                    return_image=True,
-                    overwrite_existing=overwrite
-                )
-                self.cancer_type_map_completed(image_data, tif_path, png_path)
-            except Exception as e:
-                self.on_map_generation_error(str(e))
+            self.map_thread = PopulationMapThread(
+                country_code=country_code,
+                resolution=resolution,
+                population_raster_path=population_raster_path,
+                output_dir=output_subfolder,
+                overwrite_existing=overwrite
+            )
+            self.map_thread.finished.connect(self.cancer_type_map_completed)
+            self.map_thread.error.connect(self.on_map_generation_error)
+            self.map_thread.start()
         else:
             # Call thread for cancer maps
             self.map_thread = MapGenerationThread(
@@ -619,4 +635,4 @@ if __name__ == "__main__":
         window.map_thread.quit()
         window.map_thread.wait()
 
-    sys.exit(app.exec_())
+    sys.exit(ret)

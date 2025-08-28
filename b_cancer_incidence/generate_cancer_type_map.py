@@ -150,8 +150,8 @@ def generate_population_density_map_only(
 
     # Output filenames
     basename = f"{country_code.lower()}_population_density_{resolution}km"
-    output_tif = str(output_dir / f"{basename}.tif")
-    output_png = str(output_dir / f"{basename}.png")
+    output_tif = os.path.join(output_dir, f"{basename}.tif")
+    output_png = os.path.join(output_dir, f"{basename}.png")
 
     # Save raster
     if not os.path.exists(output_tif) or overwrite_existing:
@@ -254,22 +254,6 @@ def generate_cancer_type_map(
     # Load cancer fractions
     fractions = load_cancer_fractions(excel_path)
     
-    # Validate cancer type
-    #cancer_key = cancer_type.strip().lower()
-    #if cancer_key not in fractions:
-        # Try substring match
-        #matches = [k for k in fractions.keys() if cancer_key in k]
-        #if len(matches) == 1:
-            #cancer_key = matches[0]
-        #else:
-            #raise ValueError(f"Cancer type '{cancer_type}' not found. Available types: {sorted(fractions.keys())}")
-    
-    #proportion, fraction_val = fractions[cancer_key]
-
-    #if include_fraction:
-        #population, array = multiply_population_by_multiplier(population_raster_path, proportion * fraction_val)
-    #else:
-        #population, array = multiply_population_by_multiplier(population_raster_path, proportion)
     array = None
     population = None
     combined_label = []
@@ -351,13 +335,13 @@ def generate_cancer_type_map(
         population_raster_path=population_raster_path,
         output_dir=population_output_dir,
         resolution=resolution,
-        return_image=False,
+        return_image=True,
         overwrite_existing=overwrite_cancer_type_map
     )
 
     # Full output paths
-    output_tif = str(output_dir / f"{base_name}_{suffix}_density.tif")
-    output_png = str(output_dir / f"{base_name}_{suffix}_density.png")
+    output_tif = os.path.join(output_dir, f"{base_name}_{suffix}_density.tif")
+    output_png = os.path.join(output_dir, f"{base_name}_{suffix}_density.png")
 
     print(f"Saving to: {output_png}")
     print(f"Overwrite allowed? {'Yes' if overwrite_cancer_type_map else 'No'}")
@@ -383,7 +367,7 @@ def generate_cancer_type_map(
     save_raster_like(population_raster_path, array, output_tif)
     
     # Generate and save PNG
-   #title = f"{country_code.upper()} — {cancer_type} (population × proportion × fraction of cases treated by radiotherapy)"
+
     if include_optimal_fraction:
         title = f"{country_code.upper()} — {' + '.join(cancer_types)} (Optimal treated: pop × prop × optimal fraction)"
     elif include_fraction:
@@ -395,17 +379,6 @@ def generate_cancer_type_map(
     with rasterio.open(population_raster_path) as src:
         bounds = src.bounds
     
-    #plot_data = array.copy()
-    #positive_mask = plot_data > 0
-
-    #if np.any(positive_mask):
-        #local_vmin = np.min(plot_data[positive_mask])
-        #local_vmax = np.max(plot_data[positive_mask])
-        #vmin = global_vmin if global_vmin is not None else max(local_vmin, 1e-6)
-        #vmax = global_vmax if global_vmax is not None else max(local_vmax, vmin * 10)
-    #else:
-        #vmin = global_vmin if global_vmin is not None else 1e-6
-        #vmax = global_vmax if global_vmax is not None else 1
     plot_data = array.copy()
     in_country_mask = population > 0
     valid_mask = (plot_data > 0) & in_country_mask
