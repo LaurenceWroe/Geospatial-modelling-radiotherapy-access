@@ -293,7 +293,7 @@ def generate_cancer_type_map(
     
     # Set default output directory if not provided
     if output_dir is None:
-        output_dir = base_dir / "b_cancer_incidence" / "cancer_type_maps"
+        output_dir = base_dir / "b_cancer_incidence" / "cancer_type_maps" 
         if include_optimal_fraction:
             output_dir /= "optimally_treated"
         elif include_fraction:
