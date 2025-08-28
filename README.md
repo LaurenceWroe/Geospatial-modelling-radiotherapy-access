@@ -64,6 +64,7 @@ To Do (27/08/2025)
 - Once probability maps are good to go, add option to GUI which allows a checkbox of all maps made --> look at run_country_analysis.py file 
 - Add relevant maps and comments to presentation slides (Archie and Sophia) 
 - we need GUI to produce just population density maps!  DONE (saves maps to a_population_density) 
+- cancer_type_maps are not saving in seperate files fro different countries --> will fix this now! (sophia) 
 
 
 
