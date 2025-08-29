@@ -22,7 +22,7 @@ from b_cancer_incidence.generate_cancer_type_map import generate_population_dens
 
 
 
-# All Qthreads below for resampling, downloading and mapping:
+# ==== All Qthreads below for resampling, downloading and mapping ====
 
 class ResampleThread(QThread):
     """
@@ -283,7 +283,7 @@ class MapGenerationThread(QThread):
             self.error.emit(str(e))
 
 
-# Main window
+# ==== Main GUI Window Class ====
 
 class GeoSpacRadAccess(QMainWindow):
     def __init__(self):
@@ -294,7 +294,7 @@ class GeoSpacRadAccess(QMainWindow):
         self.map_thread = None # ensures self.map_thread is always defined
         self.setup_ui()
     
-    # Initial UI setup
+    # ---- Initial UI setup ----
 
     def setup_ui(self):
         """
@@ -514,7 +514,7 @@ class GeoSpacRadAccess(QMainWindow):
         self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
 
 
-    # ==== HELPER METHODS for setup_ui(): re-ordered by appearance ===
+    # ---- HELPER METHODS for setup_ui(): re-ordered by appearance ----
 
     def update_country_dropdown(self, selected_country=None):
         """
@@ -1083,7 +1083,7 @@ class GeoSpacRadAccess(QMainWindow):
 
     # End of main helper methods for setup_ui():
 
-    # ==== Small Sub-Helpers ====
+    # ---- Small Sub-Helpers ----
 
     def update_progress_bar(self, value):
         """
@@ -1297,6 +1297,7 @@ class GeoSpacRadAccess(QMainWindow):
 
     # End of small sub-helpers
 
+# ==== Run Below ====
 
 if __name__ == "__main__":
     #ensuring proper shutdown

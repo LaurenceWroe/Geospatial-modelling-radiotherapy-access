@@ -1,7 +1,3 @@
-# This function inputs a country name and resolution and resamples the WorldPop population TIF file for that country.
-# It saves the resampled data into actual_data/resampled
-# It is called by the GUI_show_population_v2.py file
-
 import os
 import rioxarray
 import shutil
@@ -13,22 +9,61 @@ from pathlib import Path
 
 def resample_population(country_name, resolution_km, input_dir="a_population_density/raw_from_worldpop", output_dir="a_population_density/resampled", overwrite_resample=False):
     """
-    Resamples population data to specified resolution using rioxarray
-    
-    Args:
-        country_name: Name of the country (e.g., "United Kingdom")
-        resolution_km: Target resolution in kilometers
-        input_dir: Directory containing raw WorldPop files
-        output_dir: Directory to save resampled files
-        
+    Resample a country's WorldPop raster to a target resolution (km) using rioxarray,
+    preserving population counts via SUM aggregation, and write the result to disk.
+
+    Parameters:
+        country_name (str): Human-readable country (e.g., "United Kingdom").
+        resolution_km (float | int): Target pixel size in kilometers (> 0).
+        input_dir (str | Path): Directory containing the raw input TIFF named
+            `{iso3_lower}_raw.tif` (e.g., "gbr_raw.tif").
+        output_dir (str | Path): Directory where the resampled TIFF will be written,
+            named `{iso3_lower}_{resolution_km}km.tif`.
+        overwrite_resample (bool): If False and the output already exists, the function
+            returns early with `success=True` and a message, without recomputing.
+
+    Behavior & data handling:
+        - Resolves `country_name` to ISO-3 code via `pycountry.countries.lookup`.
+        - Converts kilometers to degrees with an approximate factor: 1° ≈ 111 km
+          (no latitude-dependent correction).
+        - INPUT expectations:
+              Input raster path: `{input_dir}/{iso3_lower}_raw.tif`.
+              WorldPop nodata is set to -9999 (explicitly enforced).
+        - Cleans values before and after resampling:
+              Replaces nodata with 0 and clips negatives to 0 to avoid count leakage.
+        - Resampling:
+              Reprojects to the same CRS with `resolution=<km/111>` degrees.
+              Uses `Resampling.sum` to conserve counts across coarser pixels.
+        - Special case: `resolution_km == 1.0`, simply copies the input file (no resample).
+        - Outputs:
+              Writes the resampled GeoTIFF to `{output_dir}/{iso3_lower}_{resolution_km}km.tif`.
+              Computes and returns total population before and after resampling.
+        - Creates `output_dir` if it does not exist.
+        - On non-1 km runs, prints basic stats (min/max/NaN/negative counts) to stdout.
+
     Returns:
         dict: {
-            'success': bool,
-            'message': str,
-            'output_path': str,
-            'original_population': float,
-            'resampled_population': float
+            'success': bool,                 # True on success (or if output already existed)
+            'message': str,                  # Human-readable status/explanation
+            'output_path': str | None,       # Path to written/existing output TIFF
+            'original_population': float | None,   # Sum of cleaned input raster
+            'resampled_population': float | None   # Sum of cleaned resampled raster
         }
+        Notes:
+            - If the output exists and `overwrite_resample` is False, returns
+              success=True with `original_population` and `resampled_population` as None.
+            - If the input file is missing or an exception occurs, returns success=False
+              with `output_path=None` and population fields as None.
+
+    Side effects:
+        - Reads/writes TIFF files on disk; may create directories.
+        - Prints simple diagnostics to stdout for non-1 km runs.
+
+    Example:
+        # Resample UK to 2 km and write to a_population_density/resampled/gbr_2km.tif
+        result = resample_population("United Kingdom", 2.0)
+        if result['success']:
+            print("Output:", result['output_path'])
     """
     try:
         # Validate inputs
@@ -49,7 +84,13 @@ def resample_population(country_name, resolution_km, input_dir="a_population_den
         
         # Check if file exists and we shouldn't overwrite
         if not overwrite_resample and os.path.exists(output_file):
-            return True, f"File already exists at:\n{output_file}"
+            return {
+                'success': True,
+                'message': f"File already exists at:\n{output_file}",
+                'output_path': output_file,
+                'original_population': None,
+                'resampled_population': None
+            }
 
 
         # Check if input file exists
@@ -123,6 +164,9 @@ def resample_population(country_name, resolution_km, input_dir="a_population_den
             
             # Save output
             resampled.rio.to_raster(output_file)
+
+            delta = (resampled_pop - original_pop) / (original_pop + 1e-12) * 100
+            print(f"Total pop before: {original_pop:.2f}, after: {resampled_pop:.2f} (Δ {delta:.5f}%)")
             
             return {
                 'success': True,
@@ -140,7 +184,3 @@ def resample_population(country_name, resolution_km, input_dir="a_population_den
             'original_population': None,
             'resampled_population': None
         }
-    
-# example usage
-# result = resample_population("United Kingdom", 0.5)
-# print(result)
