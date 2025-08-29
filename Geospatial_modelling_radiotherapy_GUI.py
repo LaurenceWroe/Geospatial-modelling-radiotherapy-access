@@ -9,7 +9,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QScrollArea, QTextEdit
+from PyQt5.QtWidgets import QScrollArea, QTextEdit, QListWidget, QListWidgetItem
+
 import io
 from PIL import Image
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
@@ -21,7 +22,7 @@ from b_cancer_incidence.generate_cancer_type_map import generate_population_dens
 
 
 
-# All threads below for resampling, downloading and mapping:
+# All Qthreads below for resampling, downloading and mapping:
 
 class ResampleThread(QThread): 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
@@ -37,7 +38,6 @@ class ResampleThread(QThread):
     def run(self):
         result = resample_population(self.country_name, self.resolution, self.input_dir, self.output_dir, self.overwrite_resample)
         self.finished.emit(result)
-
 
 class DownloadThread(QThread):
     progress_updated = pyqtSignal(int)
@@ -124,15 +124,172 @@ class MapGenerationThread(QThread):
             self.error.emit(str(e))
 
 
-class WorldPopDownloader(QMainWindow):
+# Main window
+
+class GeoSpacRadAccess(QMainWindow):
     def __init__(self):
         super().__init__()
         # Adding an instance variable 
         self.recent_countries = []
         self.max_recent = 5  # or however many you want to show
-        self.map_thread = None #ensures self.map_thread is always defined
+        self.map_thread = None # ensures self.map_thread is always defined
         self.setup_ui()
     
+    # Initial UI setup
+
+    def setup_ui(self):
+        self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
+        self.setFixedSize(1200, 800)
+
+        # Main splitter (used at the end)
+        splitter = QSplitter(Qt.Horizontal)
+
+        # ==== UI left panel  ====
+
+        left_panel = QWidget()
+        left_layout = QVBoxLayout()
+
+
+        # ---- Download Group ----
+        download_group = QGroupBox("Download Raw Data")
+        download_layout = QVBoxLayout()
+        
+        self.country_label = QLabel("Select a country:")
+        self.country_combo = QComboBox()
+        self.update_country_dropdown() #Fill the dropdown with recent + all, see helper below
+        
+        self.download_btn = QPushButton("Download")
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        
+        download_layout.addWidget(self.country_label)
+        download_layout.addWidget(self.country_combo)
+        download_layout.addWidget(self.download_btn)
+        download_layout.addWidget(self.progress)
+        download_group.setLayout(download_layout)
+
+
+        # ---- Resample Group ----
+        resample_group = QGroupBox("Resample Data")
+        resample_layout = QVBoxLayout()
+        
+        self.resolution_label = QLabel("Select resolution (km):")
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItems(["0.5", "1", "2", "5", "10", "50"])
+        
+        self.resample_btn = QPushButton("Resample")
+        self.resample_btn.setEnabled(False) # initially disabled
+        self.check_resample_availability() # check if resampling is available, if so enable the button
+        
+        resample_layout.addWidget(self.resolution_label)
+        resample_layout.addWidget(self.resolution_combo)
+        resample_layout.addWidget(self.resample_btn)
+        resample_group.setLayout(resample_layout)
+
+
+        # ---- Cancer Type & Map Generation Group ----
+        map_group = QGroupBox("Generate Cancer Type Map")
+        map_layout = QVBoxLayout()
+
+        # Cancer type list
+        self.cancer_label = QLabel("Select a cancer type:")
+        cancer_types = self.load_cancer_types()
+
+        self.cancer_list = QListWidget()
+        self.cancer_list.setSelectionMode(QListWidget.MultiSelection)
+
+        for ctype in cancer_types:
+            item = QListWidgetItem(ctype)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.cancer_list.addItem(item)
+
+        # "Select All Cancers" Checkbox
+        self.select_all_checkbox = QCheckBox("Select All Cancer Types") 
+        self.select_all_checkbox.stateChanged.connect(self.toggle_select_all_cancers)
+
+        # Why is this commented (Archie)
+        #self.include_fraction_checkbox = QCheckBox("Include radiotherapy fraction") 
+        #self.include_fraction_checkbox.setChecked(False) 
+
+        # Map type box
+        self.map_type_label = QLabel("Select map to generate:")
+        self.map_type_combo = QComboBox() 
+        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density"])
+        self.generate_map_btn = QPushButton("Generate Map")
+        self.generate_map_btn.setEnabled(False)  
+        self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
+
+        map_layout.addWidget(self.cancer_label)
+        map_layout.addWidget(self.cancer_list)
+        map_layout.addWidget(self.select_all_checkbox) 
+        map_layout.addWidget(self.map_type_label)
+        map_layout.addWidget(self.map_type_combo)
+        map_layout.addWidget(self.generate_map_btn)
+        map_group.setLayout(map_layout)
+
+
+        # ---- Arranging ----
+        # Add groups to left layout
+        left_layout.addWidget(download_group)
+        left_layout.addWidget(resample_group)
+        left_layout.addWidget(map_group)
+
+        # Setting size of left panel
+        left_panel.setLayout(left_layout)
+        left_panel.setMaximumWidth(450)
+        left_panel.setMinimumWidth(350)
+
+
+        # ==== Right panel for image display ====
+
+        right_panel  = QWidget()
+        right_layout = QVBoxLayout()
+        
+        self.image_label = QLabel("Generated map will appear here")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(600, 500)
+        self.image_label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
+        
+        self.status_text = QTextEdit()
+        self.status_text.setMaximumHeight(80)
+        self.status_text.setReadOnly(True)
+        
+        right_layout.addWidget(QLabel("Generated Map:"))
+        right_layout.addWidget(self.image_label)
+
+        right_layout.addWidget(QLabel("Status:"))
+        right_layout.addWidget(self.status_text)
+
+        right_panel.setLayout(right_layout)
+        
+
+        # ==== Constructing ====
+        
+        # Splitter add panels
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([400, 800])
+
+        container = QWidget()
+        container_layout = QHBoxLayout()
+        container_layout.addWidget(splitter)
+        container.setLayout(container_layout)
+        self.setCentralWidget(container)
+
+
+        # === Register Signals ====
+
+        self.download_btn.clicked.connect(self.initiate_download)
+        self.resample_btn.clicked.connect(self.initiate_resample)
+        self.generate_map_btn.clicked.connect(self.initiate_cancer_type_map_generate)
+
+        self.country_combo.currentTextChanged.connect(lambda country: self.update_country_dropdown(country))
+        self.country_combo.currentTextChanged.connect(self.check_resample_availability) # Whenever the country changes, check if there exists a downloaded raw file for resampling
+        self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
+        self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
+        self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
+
     #Adding a method that rebuilds the country dropdown 
     def update_country_dropdown(self, selected_country=None):
         # Preserve current selection
@@ -184,148 +341,6 @@ class WorldPopDownloader(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load cancer types: {e}")
             return []
-
-    def setup_ui(self):
-        self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
-        self.setFixedSize(1200, 800)
-
-
-        # Main splitter
-        splitter = QSplitter(Qt.Horizontal)
-    
-        # Left panel for controls
-        left_panel = QWidget()
-        left_layout = QVBoxLayout()
-
-        # Download Group
-        download_group = QGroupBox("Download Raw Data")
-        download_layout = QVBoxLayout()
-        
-        self.country_label = QLabel("Select a country:")
-        self.country_combo = QComboBox()
-        self.update_country_dropdown() #Fill the dropdown with recent + all 
-        
-        self.download_btn = QPushButton("Download")
-        self.progress = QProgressBar()
-        self.progress.setVisible(False)
-        
-        download_layout.addWidget(self.country_label)
-        download_layout.addWidget(self.country_combo)
-        download_layout.addWidget(self.download_btn)
-        download_layout.addWidget(self.progress)
-        download_group.setLayout(download_layout)
-
-        # Resample Group
-        resample_group = QGroupBox("Resample Data")
-        resample_layout = QVBoxLayout()
-        
-        self.resolution_label = QLabel("Select resolution (km):")
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["0.5", "1", "2", "5", "10", "50"])
-        
-        self.resample_btn = QPushButton("Resample")
-        self.resample_btn.setEnabled(False) # initially disabled
-        self.check_resample_availability() # check if resampling is available, if so enable the button
-        
-        resample_layout.addWidget(self.resolution_label)
-        resample_layout.addWidget(self.resolution_combo)
-        resample_layout.addWidget(self.resample_btn)
-        resample_group.setLayout(resample_layout)
-
-        # Cancer Type & Map Generation Group
-        map_group = QGroupBox("Generate Cancer Type Map")
-        map_layout = QVBoxLayout()
-
-        self.cancer_label = QLabel("Select a cancer type:")
-        cancer_types = self.load_cancer_types()
-        from PyQt5.QtWidgets import QListWidget, QListWidgetItem
-
-        # "Select All" Checkbox
-        self.select_all_checkbox = QCheckBox("Select All Cancer Types") 
-        self.select_all_checkbox.stateChanged.connect(self.toggle_select_all_cancers)
-
-
-        self.cancer_list = QListWidget()
-        self.cancer_list.setSelectionMode(QListWidget.MultiSelection)
-
-        for ctype in cancer_types:
-            item = QListWidgetItem(ctype)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            self.cancer_list.addItem(item)
-
-
-        #self.include_fraction_checkbox = QCheckBox("Include radiotherapy fraction") 
-        #self.include_fraction_checkbox.setChecked(False) 
-        self.map_type_label = QLabel("Select map to generate:")
-        self.map_type_combo = QComboBox() 
-        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density"])
-        self.generate_map_btn = QPushButton("Generate Map")
-        self.generate_map_btn.setEnabled(False)  
-        self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
-        
-
-        map_layout.addWidget(self.cancer_label)
-        map_layout.addWidget(self.cancer_list)
-        map_layout.addWidget(self.select_all_checkbox) 
-        map_layout.addWidget(self.map_type_label)
-        map_layout.addWidget(self.map_type_combo)
-        map_layout.addWidget(self.generate_map_btn)
-        map_group.setLayout(map_layout)
-
-
-        # Add groups to left layout
-        left_layout.addWidget(download_group)
-        left_layout.addWidget(resample_group)
-        left_layout.addWidget(map_group)
-        left_panel.setLayout(left_layout)
-        left_panel.setMaximumWidth(400)
-
-        # Setting size of left panel
-        left_panel.setLayout(left_layout)
-        left_panel.setMaximumWidth(450)
-        left_panel.setMinimumWidth(350)
-
-        # Right panel for image display
-        right_panel = QWidget()
-        right_layout = QVBoxLayout()
-        
-        self.image_label = QLabel("Generated map will appear here")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(600, 500)
-        self.image_label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
-        
-        self.status_text = QTextEdit()
-        self.status_text.setMaximumHeight(80)
-        self.status_text.setReadOnly(True)
-        
-        right_layout.addWidget(QLabel("Generated Map:"))
-        right_layout.addWidget(self.image_label)
-        right_layout.addWidget(QLabel("Status:"))
-        right_layout.addWidget(self.status_text)
-        right_panel.setLayout(right_layout)
-        
-        # Splitter add panels
-        splitter.addWidget(left_panel)
-        splitter.addWidget(right_panel)
-        splitter.setSizes([400, 800])
-
-        container = QWidget()
-        container_layout = QHBoxLayout()
-        container_layout.addWidget(splitter)
-        container.setLayout(container_layout)
-        self.setCentralWidget(container)
-
-        # Signals
-        self.download_btn.clicked.connect(self.initiate_download)
-        self.resample_btn.clicked.connect(self.initiate_resample)
-        self.generate_map_btn.clicked.connect(self.initiate_cancer_type_map_generate)
-
-        self.country_combo.currentTextChanged.connect(lambda country: self.update_country_dropdown(country))
-        self.country_combo.currentTextChanged.connect(self.check_resample_availability) # Whenever the country changes, check if there exists a downloaded raw file for resampling
-        self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
-        self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
-        self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
 
     def toggle_select_all_cancers(self, state):
         check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked
@@ -405,7 +420,6 @@ class WorldPopDownloader(QMainWindow):
         self.download_thread.finished.connect(self.download_complete)
         self.download_thread.start()
 
-
     def update_progress_bar(self, value):
         self.progress.setValue(value)
 
@@ -484,8 +498,6 @@ class WorldPopDownloader(QMainWindow):
             self.generate_map_btn.setEnabled(True)  # enable map generation
         else:
             QMessageBox.critical(self, "Error", result['message'])
-
-
 
     def initiate_cancer_type_map_generate(self):
         country = self.country_combo.currentText()
@@ -589,8 +601,6 @@ class WorldPopDownloader(QMainWindow):
             self.map_thread.error.connect(self.on_map_generation_error)
             self.map_thread.start()
 
-
-
     def update_status(self, message):
         """Update status text area"""
         self.status_text.append(message)
@@ -612,7 +622,6 @@ class WorldPopDownloader(QMainWindow):
             self.image_label.setText("No image to display")
             self.update_status("Failed to generate map image.")
 
-
     def cancer_type_map_completed(self, image_data, tif_path, png_path):
         self.generate_map_btn.setEnabled(True)
         if image_data:
@@ -620,7 +629,6 @@ class WorldPopDownloader(QMainWindow):
             self.update_status(f"Map generated successfully!\nTIFF: {tif_path}\nPNG: {png_path}")
         else:
             self.update_status("Map generated but no image data returned.")
-
 
     def on_map_generation_error(self, error_msg):
         self.generate_map_btn.setEnabled(True)
@@ -635,7 +643,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     app = QApplication(sys.argv)
-    window = WorldPopDownloader()
+    window = GeoSpacRadAccess()
     window.show()
     ret = app.exec_() 
 
