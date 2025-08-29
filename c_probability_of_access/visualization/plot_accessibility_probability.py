@@ -33,6 +33,13 @@ def calculate_accessibility_probability(
     --------
     np.ndarray : Combined probability of access for each grid cell
     """
+
+    #lambda is the decay parameter 
+    #beyong the distance cutoff the probability is considered zero 
+    #If multiple linacs are within range, the probabilities are combined using: 
+    # P(not treated by any) = ∏(1 - P_treatment_from_each)
+    #P(treated by at least one) = 1 - P(not treated by any)
+    
     if max_distance_km is None:
         max_distance_km = 5 * lambda_km
     

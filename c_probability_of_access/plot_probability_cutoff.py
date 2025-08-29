@@ -3,6 +3,13 @@
 Generate probability of access plot for any country with a specified lambda value and a distance cutoff (e.g., 150 km).
 """
 
+#Inputs: country code, population raster, locations of Linacs, lambda, distance cut off 
+#output: generates the plot showing probability access 
+
+
+
+
+
 import sys
 import argparse
 from pathlib import Path
@@ -22,6 +29,7 @@ if __name__ == "__main__":
     parser.add_argument("--dpi", type=int, default=300, help="DPI for output PNG (default: 300)")
     args = parser.parse_args()
 
+    #Defining output paths to save the files 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if args.output_name:
@@ -30,6 +38,8 @@ if __name__ == "__main__":
         output_path = output_dir / f"{args.country.lower()}_accessibility_probability_cutoff_{int(args.lambda_km)}km.png"
 
     print(f"Generating probability plot for {args.country} with λ={args.lambda_km} km and cutoff {args.cutoff_km} km...")
+
+    #Calling the plotting function
     plot_accessibility_probability(
         population_raster_path=args.population_raster,
         linac_excel_path=args.linac_excel,
