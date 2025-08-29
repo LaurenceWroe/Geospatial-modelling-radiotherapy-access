@@ -138,6 +138,66 @@ class GeoSpacRadAccess(QMainWindow):
     # Initial UI setup
 
     def setup_ui(self):
+        """
+        This builds and wires up the main window UI.
+
+        This method constructs the entire interface and connects signals to slots. It creates a
+        two-panel layout separated by a horizontal splitter:
+
+        Left panel (controls and user interaction):
+        1) Download Raw Data
+            - Country selector (QComboBox) populated via `update_country_dropdown()`
+            - Download button (QPushButton) via `initiate_download()`
+            - Progress bar for download (QProgressBar), hidden until used
+
+        2) Resample Data
+            - Resolution selector in km (QComboBox: 0.5–50km)
+            - Resample button (disabled by default) via `initiate_resample()`
+            and enabled/disabled by `check_resample_availability()`
+
+        3) Generate Cancer Type Map
+            - Multi-select cancer type list (QListWidget) populated from `load_cancer_types()`
+            with user-checkable items
+            - “Select All Cancer Types” checkbox via `toggle_select_all_cancers()`
+            - Map type selector (QComboBox: Incidence / Treated / Optimally Treated / Population)
+            - Generate Map button (disabled by default) via `initiate_cancer_type_map_generate()`
+            and enabled/disabled by `check_cancer_map_availability()`
+
+        Right panel (output):
+        - Image area (QLabel) where generated maps are displayed
+        - Read-only status log (QTextEdit)
+
+        Signals connected:                     VIA
+        - `download_btn.clicked`                ->  `initiate_download`
+        - `resample_btn.clicked`                ->  `initiate_resample`
+        - `generate_map_btn.clicked`            ->  `initiate_cancer_type_map_generate`
+        - `country_combo.currentTextChanged`    ->  `update_country_dropdown(country)`
+        - `country_combo.currentTextChanged`    ->  `check_resample_availability`
+        - `country_combo.currentTextChanged`    ->  `check_cancer_map_availability`
+        - `resolution_combo.currentTextChanged` ->  `check_cancer_map_availability`
+        - `map_type_combo.currentTextChanged`   ->  `check_cancer_map_availability`
+        - `select_all_checkbox.stateChanged`    ->  `toggle_select_all_cancers`
+
+        Side effects:
+        - Sets window title and fixed size.
+        - Creates and assigns numerous instance attributes (e.g., `country_combo`, `progress`,
+            `resample_btn`, `cancer_list`, `image_label`, `status_text`, etc.).
+        - Installs a central widget with a splitter containing left/right panels.
+        - Applies initial UI state: hides progress bar; disables resample/map buttons until
+            availability checks pass; sets reasonable min/max sizes.
+
+        Requirements/assumptions:
+        - This class is a QMainWindow (uses `setCentralWidget`).
+        - Needs helper methods `update_country_dropdown`, `check_resample_availability`,
+            `check_cancer_map_availability`, `load_cancer_types`, `toggle_select_all_cancers`,
+            `initiate_download`, `initiate_resample`, and `initiate_cancer_type_map_generate`
+        - Long-running tasks triggered by the buttons should be (and are so far) executed off the GUI thread
+            (e.g., via workers/separate threads) to keep the interface responsive.
+
+        Returns:
+        None
+        """
+
         self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
         self.setFixedSize(1200, 800)
 
@@ -280,17 +340,20 @@ class GeoSpacRadAccess(QMainWindow):
 
         # === Register Signals ====
 
+        # Buttons clicked signals
         self.download_btn.clicked.connect(self.initiate_download)
         self.resample_btn.clicked.connect(self.initiate_resample)
         self.generate_map_btn.clicked.connect(self.initiate_cancer_type_map_generate)
 
+        # Country selected signal
         self.country_combo.currentTextChanged.connect(lambda country: self.update_country_dropdown(country))
-        self.country_combo.currentTextChanged.connect(self.check_resample_availability) # Whenever the country changes, check if there exists a downloaded raw file for resampling
-        self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the country changes, check if there exists a resampled file for map generation
-        self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) # Whenever the resolution changes, check if there exists a resampled file for map generation
+        
+        # When country/resolultion/map-type changes, update and check for either raw data for resampling/resampled file for map
+        self.country_combo.currentTextChanged.connect(self.check_resample_availability) 
+        self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) 
+        self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) 
         self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
 
-    #Adding a method that rebuilds the country dropdown 
     def update_country_dropdown(self, selected_country=None):
         # Preserve current selection
         if selected_country is None:
