@@ -354,12 +354,51 @@ class GeoSpacRadAccess(QMainWindow):
         self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) 
         self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
 
+
+    # ==== HELPER METHODS for setup_ui(): re-ordered by appearance ===
+
     def update_country_dropdown(self, selected_country=None):
+        """
+        Refreshes the country QComboBox with “Recent Selections” and the full country list.
+
+        This helper repopulates `self.country_combo` by:
+            - Preserving the current selection (unless an explicit `selected_country` is supplied).  
+            - Maintaining a MRU-style list of recently chosen countries in `self.recent_countries`
+            (bounded by `self.max_recent`).  
+            - Rendering two non-selectable headers, “Recent Selections” (if any) and “All Countries”,
+            separated by a visual separator.  
+            - Listing all countries (alphabetical) from the module-level `countries` collection
+            (from `pycountry.countries`), excluding those already shown under “Recent Selections”.  
+            - Reselecting the previously active country if it still exists in the menu.
+
+        Signals on the combo box are temporarily blocked to avoid spurious `currentTextChanged`
+        emissions while the model is being rebuilt.
+
+        Args:
+            selected_country (str | None): Country name to keep selected after the refresh.
+                If None, the method uses the combo’s current text.
+
+        Side Effects:
+            - Mutates `self.recent_countries` (adds the current selection to the front, trims to
+            `self.max_recent` defined above).
+            - Clears and repopulates `self.country_combo`, sets header rows disabled, inserts a separator.
+            - May change the current index of `self.country_combo`.
+
+        Requirements/Assumptions:
+            - `self.country_combo` is a QComboBox.
+            - `self.recent_countries` is a list-like container of country names (strings).
+            - `self.max_recent` is an integer ≥ 0.
+            - A module-level iterable `countries` is available, yielding objects with a `.name` attribute
+            (i.e., `pycountry.countries`).
+
+        Returns:
+            None
+        """
         # Preserve current selection
         if selected_country is None:
             selected_country = self.country_combo.currentText()
 
-        all_countries = sorted([country.name for country in countries])
+        all_countries = sorted([country.name for country in countries]) # countries is imported from pycountry
 
         # Move selected country to recent list
         if selected_country and selected_country not in self.recent_countries:
@@ -392,26 +431,35 @@ class GeoSpacRadAccess(QMainWindow):
 
         self.country_combo.blockSignals(False)
 
-    def load_cancer_types(self, excel_path="b_cancer_incidence/cancer_type_radiotherapy.xlsx"):
-        try:
-            df = pd.read_excel(excel_path)
-            df.columns = [str(c).strip().lower() for c in df.columns]
-            if "cancer type" in df.columns:
-                types = sorted(df["cancer type"].dropna().unique())
-                return types
-            else:
-                return []
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load cancer types: {e}")
-            return []
-
-    def toggle_select_all_cancers(self, state):
-        check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked
-        for i in range(self.cancer_list.count()):
-            item = self.cancer_list.item(i)
-            item.setCheckState(check_state)
-
     def check_resample_availability(self):
+        """
+        Enables/disables the “Resample” button based on the presence of a raw WorldPop raster
+        for the currently selected country.
+
+        Behavior:
+        - Reads the current country name from `self.country_combo`.
+        - Uses `pycountry.countries.lookup(country)` to resolve the country object and its
+            3-letter ISO code (`alpha_3`), lower-cases it, and constructs the expected input
+            filepath: `a_population_density/raw_from_worldpop/{alpha3}_raw.tif`.
+        - Sets `self.resample_btn` enabled if that file exists; otherwise disables it.
+        - On any lookup or filesystem error, safely disables the button.
+
+        Notes:
+        - If no country is selected (empty string), the method returns without changing state.
+        - Assumes the project’s raw WorldPop rasters follow the naming convention
+            `{iso3_lower}_raw.tif` and live under `a_population_density/raw_from_worldpop/`.
+        - Should probably change the file selection to use Path so that it works on all 
+        operating systems? I think it'll probs work but maybe just to be safe.
+
+        Args:
+            None
+
+        Side Effects:
+            - Mutates the enabled state of `self.resample_btn`.
+
+        Returns:
+            None
+        """
         country = self.country_combo.currentText()
         if not country:
             return
@@ -424,7 +472,91 @@ class GeoSpacRadAccess(QMainWindow):
         except:
             self.resample_btn.setEnabled(False)
 
-    def check_cancer_map_availability(self): # Check whether resampled file exists for map generation, if so enable the cancer map generate button
+    def load_cancer_types(self, excel_path="b_cancer_incidence/cancer_type_radiotherapy.xlsx"):
+        """
+        Load and return a sorted list of unique cancer types from an Excel file.
+
+        This helper reads the Excel sheet at `excel_path` using pandas, normalizes
+        column names to lowercase (stripped), and looks for a column named
+        "cancer type" (case-insensitive via normalization). If found, it extracts
+        non-null values, de-duplicates them, sorts alphabetically, and returns the
+        resulting list. If the column is missing or any error occurs while reading
+        the file, an error dialog is shown and an empty list is returned.
+
+        Args:
+            excel_path (str): Path to the Excel file containing a "Cancer Type"
+                column (name treated case-insensitively). Defaults to
+                "b_cancer_incidence/cancer_type_radiotherapy.xlsx".
+
+        Returns:
+            list[str]: Sorted unique cancer type names, or an empty list on failure
+            or if the expected column is absent.
+
+        Side Effects:
+            - Displays a critical QMessageBox on exceptions.
+            - Performs file I/O synchronously; for large files consider offloading
+            to a worker to keep the UI responsive.
+
+        Requirements/Assumptions:
+            - `pandas` is available as `pd`.
+            - `self` is a QWidget (or subclass) so QMessageBox can parent to it.
+            - The Excel file contains a "Cancer Type" column (any case).
+        """
+        try:
+            df = pd.read_excel(excel_path)
+            df.columns = [str(c).strip().lower() for c in df.columns]
+            if "cancer type" in df.columns:
+                types = sorted(df["cancer type"].dropna().unique())
+                return types
+            else:
+                return []
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load cancer types: {e}")
+            return []
+
+    def check_cancer_map_availability(self): 
+        """
+        Enables/disables the “Generate Map” button depending on whether a resampled
+        population raster exists for the currently selected country and resolution.
+
+        Behavior:
+        - Reads selections from:
+            • `self.country_combo` (country name)
+            • `self.resolution_combo` (resolution in km; parsed to float)
+            • `self.map_type_combo` (map type; currently not used in the file check)       <-- CHECK ME
+        - Resolves the country’s ISO3 code via `pycountry.countries.lookup(country)`,
+            lower-cases it, and constructs the expected filepath:
+            `a_population_density/resampled/{iso3_lower}_{resolution}km.tif`.
+        - If the file exists, enables `self.generate_map_btn`; otherwise disables it.
+        - If no country/resolution is set or an error occurs (e.g., lookup fails),
+            the button is disabled.
+
+        Notes:
+        - The filename uses the string form of the parsed float for `resolution`
+            (e.g., "1" → "1.0km"); check saved rasters follow the same naming
+            convention to avoid mismatches.
+        - `map_type` is read for potential future logic but does not affect the
+            availability check at present.
+        - Unless I'm mistaken, doens't check whether cancer data actually exists, will add maybe?   <--- CHECK ME
+
+        Args:
+            None
+
+        Side Effects:
+            - Mutates the enabled state of `self.generate_map_btn`.
+
+        Requirements/Assumptions:
+            - `self.country_combo`, `self.resolution_combo`, `self.map_type_combo`
+            are valid Qt widgets with current selections (they are).
+            - `self.generate_map_btn` is a QPushButton (it is).
+            - Module-level `countries` (e.g., `pycountry.countries`) is available (it is).
+            - The resampled rasters are stored under
+            `a_population_density/resampled/` with names
+            `{iso3_lower}_{resolution}km.tif` (they are).
+
+        Returns:
+            None
+        """
         country = self.country_combo.currentText()
         resolution = float(self.resolution_combo.currentText())
         map_type = self.map_type_combo.currentText()
@@ -441,6 +573,39 @@ class GeoSpacRadAccess(QMainWindow):
             self.generate_map_btn.setEnabled(exists)
         except:
             self.generate_map_btn.setEnabled(False)
+
+    def toggle_select_all_cancers(self, state):
+        """
+        Check or uncheck every cancer-type item to mirror the “Select All Cancer Types” checkbox.
+
+        Behavior:
+        - If `state` is `Qt.Checked`, sets all items in `self.cancer_list` to `Qt.Checked`.
+        - Otherwise (including `Qt.Unchecked` and `Qt.PartiallyChecked`), sets all items to `Qt.Unchecked`.
+
+        Args:
+            state (int | Qt.CheckState): The state passed from the checkbox’s
+                `stateChanged` signal.
+
+        Side Effects:
+            - Mutates the check state of each `QListWidgetItem` in `self.cancer_list`.
+            - May emit per-item change signals (e.g., `itemChanged`) for each update.
+
+        Notes:
+            - I may need to edit this (SORRY SOPHIA) to work with the GLOBOCAN data, as this already includes       <-- CHECK ME
+            an all cancers option? Will need to edit the load cancer types also probs sorry!
+
+        Requirements/Assumptions:
+            - `self.cancer_list` is a `QListWidget` whose items are checkable
+            (`Qt.ItemIsUserCheckable` flag set).
+
+        Returns:
+            None
+        """
+        
+        check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked
+        for i in range(self.cancer_list.count()):
+            item = self.cancer_list.item(i)
+            item.setCheckState(check_state)
 
     def initiate_download(self): # Called when download button is clicked
         country = self.country_combo.currentText()
@@ -482,19 +647,6 @@ class GeoSpacRadAccess(QMainWindow):
         self.download_thread.progress_updated.connect(self.update_progress_bar)
         self.download_thread.finished.connect(self.download_complete)
         self.download_thread.start()
-
-    def update_progress_bar(self, value):
-        self.progress.setValue(value)
-
-    def download_complete(self, success, message):
-        self.progress.setVisible(False)
-        self.download_btn.setEnabled(True)
-        
-        if success:
-            QMessageBox.information(self, "Success", message)
-            self.check_resample_availability()
-        else:
-            QMessageBox.critical(self, "Error", message)
 
     def initiate_resample(self): # Called when resample button is clicked
         country = self.country_combo.currentText()
@@ -542,25 +694,6 @@ class GeoSpacRadAccess(QMainWindow):
         self.processing_msgbox.setStandardButtons(QMessageBox.Cancel) 
         self.processing_msgbox.setModal(False) # no buttons, so user can’t close it manually
         self.processing_msgbox.show()
-
-    def resample_complete(self, result):
-        self.resample_btn.setEnabled(True)
-
-        if hasattr(self, 'processing_msgbox'):
-            self.processing_msgbox.close()
-            del self.processing_msgbox
-        
-        if result['success']:
-            msg = (
-                f"Resampling successful!\n\n"
-                f"Original population: {result['original_population']:,.0f}\n"
-                f"Resampled population: {result['resampled_population']:,.0f}\n"
-                f"Saved to: {result['output_path']}"
-            )
-            QMessageBox.information(self, "Success", msg)
-            self.generate_map_btn.setEnabled(True)  # enable map generation
-        else:
-            QMessageBox.critical(self, "Error", result['message'])
 
     def initiate_cancer_type_map_generate(self):
         country = self.country_combo.currentText()
@@ -663,6 +796,42 @@ class GeoSpacRadAccess(QMainWindow):
             self.map_thread.finished.connect(self.cancer_type_map_completed)
             self.map_thread.error.connect(self.on_map_generation_error)
             self.map_thread.start()
+
+    # End of helper methods for setup_ui():
+
+    # ===
+
+    def update_progress_bar(self, value):
+        self.progress.setValue(value)
+
+    def download_complete(self, success, message):
+        self.progress.setVisible(False)
+        self.download_btn.setEnabled(True)
+        
+        if success:
+            QMessageBox.information(self, "Success", message)
+            self.check_resample_availability()
+        else:
+            QMessageBox.critical(self, "Error", message)
+
+    def resample_complete(self, result):
+        self.resample_btn.setEnabled(True)
+
+        if hasattr(self, 'processing_msgbox'):
+            self.processing_msgbox.close()
+            del self.processing_msgbox
+        
+        if result['success']:
+            msg = (
+                f"Resampling successful!\n\n"
+                f"Original population: {result['original_population']:,.0f}\n"
+                f"Resampled population: {result['resampled_population']:,.0f}\n"
+                f"Saved to: {result['output_path']}"
+            )
+            QMessageBox.information(self, "Success", msg)
+            self.generate_map_btn.setEnabled(True)  # enable map generation
+        else:
+            QMessageBox.critical(self, "Error", result['message'])
 
     def update_status(self, message):
         """Update status text area"""
