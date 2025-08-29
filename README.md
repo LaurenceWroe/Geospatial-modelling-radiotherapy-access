@@ -66,7 +66,7 @@ To Do (27/08/2025)
 - we need GUI to produce just population density maps!  DONE (saves maps to a_population_density) 
 
 To Do (29/08/2025) 
-- GUI code commenting and neatening up (Archie) 
+- GUI code commenting and neatening up (Archie) (DONE) 
 - Updating Data Flow chart to include GUI usage, GLOBOCAN data, where we would like the new data to come from (Sophia) 
 - Presentation slides 
 - Probability of access maps (Sophia) 
@@ -74,9 +74,9 @@ To Do (29/08/2025)
 - travel-time visualization, how to integrate traveltime code (Archie: Monday, Tuesday) 
 - Integrating GLOBOCAN data into generate_cancer_type_map.py (Archie) 
 - Make Linac capacity a user input in the GUI (need probability maps doen first though) (Sophia) 
-- If time, add a function that allows the user to plot a LINAC 
+- If time, add a function that allows the user to plot a LINAC (archie)
 
-
+- I (archie) want to edit the plots so that cancers are displayed as a list next to the plot as selecting a few makes it a super long title
 
 
 

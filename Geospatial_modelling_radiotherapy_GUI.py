@@ -24,7 +24,41 @@ from b_cancer_incidence.generate_cancer_type_map import generate_population_dens
 
 # All Qthreads below for resampling, downloading and mapping:
 
-class ResampleThread(QThread): 
+class ResampleThread(QThread):
+    """
+    QThread worker that resamples a country’s population raster at a target resolution
+    without blocking the GUI.
+
+    This thread is a thin wrapper around `resample_population(...)`. When `run()` is
+    executed, it calls that function with the constructor arguments and emits a single
+    `finished` signal carrying the returned result dictionary.
+
+    Signals:
+        finished (dict): Emitted exactly once when processing completes (whether
+            success or failure), with the payload being the dictionary returned by
+            `resample_population`. The exact keys/structure are defined by that
+            function (e.g., may include status, message, and output file path).      <-- CHECK ME
+
+    Args:
+        country_name (str): Human-readable country name passed to `resample_population`.
+        resolution (float | int | str): Target spatial resolution (km) used for resampling.
+        input_dir (str | pathlib.Path): Directory containing the raw WorldPop raster(s).
+        output_dir (str | pathlib.Path): Directory where the resampled raster will be written.
+        overwrite_resample (bool, optional): If True, allows overwriting an existing
+            resampled file. Defaults to False.
+
+    Notes:
+        - Do not interact with Qt widgets directly inside this thread; update the UI
+          in a slot connected to `finished` (executed on the main thread).
+        - If `resample_population` raises an exception, the thread will terminate and
+          no `finished` signal will be emitted. Wrap the call in a try/except block
+          if you need guaranteed signaling on error.
+
+    Example:
+        thread = ResampleThread(country_name, resolution, input_dir, output_dir, overwrite)
+        thread.finished.connect(self.on_resample_finished)
+        thread.start()
+    """ 
     finished = pyqtSignal(dict)  # Emits the full result dictionary
 
     def __init__(self, country_name, resolution, input_dir, output_dir, overwrite_resample=False):
@@ -40,6 +74,37 @@ class ResampleThread(QThread):
         self.finished.emit(result)
 
 class DownloadThread(QThread):
+    """
+    QThread worker that downloads a country’s WorldPop raster and reports progress.
+
+    This thread wraps `download_worldpop(...)` to keep the GUI responsive. It bridges the
+    downloader’s progress callback to a Qt signal and guarantees a terminal `finished`
+    signal whether the operation succeeds or fails.
+
+    Signals:
+        progress_updated (int): Emitted periodically with the current progress value
+            forwarded from `download_worldpop`’s callback. (Scale is defined by the
+            downloader)
+        finished (bool, str): Emitted once at completion or on error.
+            bool: success flag
+            str: message (e.g., output path or error text)
+
+    Args:
+        country_name (str): Human-readable country name to fetch.
+        output_dir (str | pathlib.Path): Directory where the raster will be saved.
+        overwrite_download (bool, optional): If True, existing files may be overwritten.
+            Defaults to False.
+
+    Threading & UI notes:
+        - Do not manipulate Qt widgets inside this thread. Instead, connect the signals
+          to slots on the main (GUI) thread, e.g.:
+              thread = DownloadThread(country, outdir, overwrite)
+              thread.progress_updated.connect(self.update_progress_bar)
+              thread.finished.connect(self.on_download_finished)
+              thread.start()
+        - A `try/except` in `run()` ensures `finished(False, error)` is emitted on exceptions.
+        - Treat this as a one-shot worker: create a new instance for each download.
+    """
     progress_updated = pyqtSignal(int)
     finished = pyqtSignal(bool, str)
 
@@ -65,6 +130,49 @@ class DownloadThread(QThread):
             self.finished.emit(False, str(e))
 
 class PopulationMapThread(QThread):
+    """
+    QThread worker that renders a population-density map image from a raster and saves outputs.
+
+    This thread wraps `generate_population_density_map_only(...)` so the (potentially
+    heavy) raster I/O and rendering happen off the GUI thread. On success it emits the
+    rendered image bytes (for immediate preview) and the paths to the written outputs.
+
+    Signals:
+        finished (bytes, str, str):
+            Emitted once on success with:
+                image_data: the in-memory image bytes (e.g., PNG) suitable for display      <-- CHECK ME
+              after decoding (e.g., via QPixmap/QImage).
+                tif_path: absolute/relative path of the (possibly re/exported) GeoTIFF.     <-- CHECK ME
+                png_path: absolute/relative path of the rendered PNG.
+        error (str):
+            Emitted once if an exception occurs. The string contains a human-readable
+            error message. In this case, `finished` is not emitted.
+
+    Args:
+        country_code (str): ISO-3 country code used by the generator (e.g., "gbr").
+        resolution (float | int | str): Target output resolution in km (passed through).
+        population_raster_path (str | pathlib.Path): Path to the population raster to
+            visualize (typically the resampled raster).
+        output_dir (str | pathlib.Path): Directory where outputs (GeoTIFF/PNG) are written.
+        overwrite_existing (bool): Whether to overwrite existing outputs.
+
+    Workflow:
+        - Calls `generate_population_density_map_only(..., return_image=True,
+          overwrite_existing=...)`.
+        - On success, unpacks `(image_data, tif_path, png_path)` and emits `finished`.
+        - On exception, emits `error(str(e))`.
+
+    Threading & UI notes:
+        - Do not update widgets inside this thread. Connect `finished`/`error` to slots
+          on the main thread to update the UI.
+        - Treat as a one-shot worker; create a new instance per request.
+
+    Example:
+        thread = PopulationMapThread(iso3, 1.0, raster_path, outdir, overwrite=True)
+        thread.finished.connect(self.on_population_map_ready)
+        thread.error.connect(self.on_population_map_error)
+        thread.start()
+    """
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
@@ -91,6 +199,57 @@ class PopulationMapThread(QThread):
             self.error.emit(str(e))
 
 class MapGenerationThread(QThread):
+    """
+    QThread worker that generates cancer-type maps from a population raster without blocking the GUI.
+
+    This thread wraps `generate_cancer_type_map(...)`. It forwards parameters such as the
+    selected cancer types, resolution, and output options to the generator, then emits:
+    - `finished(image_bytes, tif_path, png_path)` on success, or
+    - `error(message)` on failure.
+
+    Signals:
+        finished (bytes, str, str):
+            Emitted once on success with:
+                image bytes (for immediate preview via QImage/QPixmap),
+                path to the written GeoTIFF,
+                path to the rendered PNG.
+        error (str):
+            Emitted once on exception with a human-readable error message.
+
+    Args:
+        country_code (str): ISO-3 country code (typically lowercase, e.g., "gbr").
+        cancer_types (list[str]): One or more cancer type labels to include in the map.
+        resolution (float | int | str): Target map resolution in kilometers (passed through).
+        population_raster_path (str | pathlib.Path): Path to the (resampled) population raster.
+        overwrite_cancer_type_map (bool): Whether to overwrite existing outputs.
+        include_fraction (bool): Forwarded flag (e.g., include standard radiotherapy fraction layer).
+        include_optimal_fraction (bool): Forwarded flag (e.g., include optimal radiotherapy fraction layer).
+
+    Workflow:
+        - Calls `generate_cancer_type_map(..., return_image=True, ...)`.
+        - On success, unpacks `(image_data, tif_path, png_path)` and emits `finished(...)`.
+        - On exception, emits `error(str(e))`.
+        - Writes brief progress logs to stdout (prefixed with `[THREAD]`).
+
+    Threading & UI notes:
+        - Do not manipulate Qt widgets inside this thread; connect `finished`/`error`
+          to main-thread slots for UI updates.
+        - Treat as a one-shot worker; create a new instance per map request.
+
+    Example:
+        thread = MapGenerationThread(
+            country_code="gbr",
+            cancer_types=["Breast", "Lung"],
+            resolution=1.0,
+            population_raster_path="a_population_density/resampled/gbr_1.0km.tif",
+            overwrite_cancer_type_map=True,
+            include_fraction=True,
+            include_optimal_fraction=False,
+        )
+        thread.finished.connect(self.on_map_ready)
+        thread.error.connect(self.on_map_error)
+        thread.start()
+    """
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
@@ -607,7 +766,41 @@ class GeoSpacRadAccess(QMainWindow):
             item = self.cancer_list.item(i)
             item.setCheckState(check_state)
 
-    def initiate_download(self): # Called when download button is clicked
+    def initiate_download(self):
+        """
+        Validates the selected country, handles overwrite confirmation, and starts a
+        background download of the country’s raw WorldPop raster.
+
+        Steps:
+        1) Read the selected country from `self.country_combo`. If none is selected,
+            show a critical error dialog and return.
+        2) Resolve the ISO-3 code via `pycountry.countries.lookup(country)` and build the
+            expected target path:
+                a_population_density/raw_from_worldpop/{iso3_lower}_raw.tif
+        3) If the target file already exists, prompt the user to overwrite. If declined,
+            return; otherwise set `overwrite_download = True`.
+        4) Initialise UI state for a long-running task:
+            - Reset and show the progress bar.
+            - Disable the Download button to prevent concurrent launches.
+        5) Create and start `DownloadThread(country, output_dir, overwrite_download)`,
+            wiring signals:
+            - `progress_updated(int)` connect to `self.update_progress_bar`
+            - `finished(bool, str)`   connect to `self.download_complete`
+
+        Notes:
+        - Any lookup/IO error during the existence check is surfaced via a critical
+            message box and the method returns early.
+        - This method is intended to be connected to the Download button created in
+            `setup_ui()`; all UI updates occur on the main thread via connected slots.
+
+        Side Effects:
+        - Displays modal dialogs (errors, overwrite confirmation).
+        - Mutates the progress bar visibility/value and the Download button enabled state.
+        - Spawns a worker thread stored on `self.download_thread`.
+
+        Returns:
+        None
+        """
         country = self.country_combo.currentText()
         if not country:
             QMessageBox.critical(self, "Error", "Please select a country.")
@@ -648,11 +841,43 @@ class GeoSpacRadAccess(QMainWindow):
         self.download_thread.finished.connect(self.download_complete)
         self.download_thread.start()
 
-    def initiate_resample(self): # Called when resample button is clicked
+    def initiate_resample(self):
+        """
+        Validate inputs, handle overwrite confirmation, and launch a background
+        resampling job for the selected country at the chosen resolution.
+
+        Steps:
+        1) Read selections:
+            - Country from `self.country_combo`
+            - Resolution (km) from `self.resolution_combo` (parsed as float)
+        2) Resolve ISO-3 code via `pycountry.countries.lookup(country)` and build the
+            expected output filename:
+                a_population_density/resampled/{iso3_lower}_{resolution}km.tif
+            (e.g., resolution 1 to "1.0km"; check file naming matches this format.).                    <-- CHECK ME
+        3) If the target file already exists, prompt for overwrite. If declined, return.
+        4) Create and start `ResampleThread(country, resolution, input_dir, output_dir, overwrite)`.
+            - Connect `finished(dict)` to `self.resample_complete`
+        5) Disable the Resample button and show a non-modal “Processing” QMessageBox
+            with a Cancel button to indicate work is in progress.
+
+        Notes:
+        - Any exception during lookup/path checks is surfaced via a critical QMessageBox
+            and the method returns early.
+        - The Cancel button on the progress dialog is not wired to cancel the thread;
+            add a handler (e.g., call `requestInterruption()` and check in worker) if we
+            want true cancellation semantics.                                                          <-- CHECK ME
+
+        Side Effects:
+        - Displays modal dialogs (error/overwrite prompt) and a non-modal progress dialog.
+        - Disables `self.resample_btn` until completion.
+        - Spawns a `ResampleThread` and stores it on `self.resample_thread`.
+
+        Returns:
+        None
+        """
         country = self.country_combo.currentText()
         resolution = float(self.resolution_combo.currentText())
-        
-
+    
         output_dir = "a_population_density/resampled"
         if not output_dir:
             return
@@ -696,6 +921,66 @@ class GeoSpacRadAccess(QMainWindow):
         self.processing_msgbox.show()
 
     def initiate_cancer_type_map_generate(self):
+        """
+        Orchestrates generation of either a Population Density map or a Cancer-Type map
+        for the selected country at the chosen resolution, without blocking the GUI.
+
+        Workflow:
+        1) Read UI selections:
+            - Country (`self.country_combo`)
+            - Map type (`self.map_type_combo`): one of
+                  "Population Density"
+                  "Treated by Radiotherapy"
+                  "Optimally Treated by Radiotherapy"
+                  "Cancer Incidence"
+            - Resolution in km (`self.resolution_combo`, parsed to float)
+            - Cancer types (checked items in `self.cancer_list`), unless the map type
+            is "Population Density" (no cancer types required).
+            If a cancer map is requested and no types are selected, show a critical
+            message box and return.
+        2) Determine output intent and flags:
+            - `include_fraction`  ← True iff "Treated by Radiotherapy"
+            - `include_optimal_fraction` ← True iff "Optimally Treated by Radiotherapy"
+            - Choose `filename_prefix` and `output_subfolder` accordingly, then
+            `os.makedirs(output_subfolder, exist_ok=True)`.                                     <-- CHECK ME (will need to see if applies beyond CRUK Data)
+        3) Resolve the ISO-3 country code via `pycountry.countries.lookup(country)` and
+            build the input raster path:
+                a_population_density/resampled/{iso3_lower}_{resolution}km.tif
+            Construct a safe label from selected cancer types and the target PNG path:
+                {output_subfolder}/{iso3_lower}_{safe_label}_{resolution}km_{prefix}_density.png
+        4) If the target file already exists, prompt the user to overwrite; set an
+            `overwrite` flag accordingly. On exceptions, show an error dialog and return.
+        5) Update UI state and threading:
+            - Call `self.update_status(...)` to report progress.
+            - Disable `self.generate_map_btn`.
+            - If a prior `self.map_thread` is running, request it to stop (`quit()`/`wait()`).
+            - Start the appropriate worker:
+                  Population maps → `PopulationMapThread(...)`
+                  Cancer maps     → `MapGenerationThread(...)`                                 <-- CHECK ME (will need to add in probability maps + major cities overlay)
+            Connect:
+                  `finished(...)` → `self.cancer_type_map_completed`
+                  `error(str)`    → `self.on_map_generation_error`
+            - The worker emits image bytes plus output paths on success.
+
+        Side Effects:
+        - Displays modal dialogs for validation/overwrite and errors.
+        - Creates output directories if needed.
+        - Disables the Generate button during processing.
+        - Spawns a QThread and assigns it to `self.map_thread`.
+        - Writes status text via `self.update_status`.
+
+        Requirements/Assumptions:
+        - A resampled population raster exists at
+            `a_population_density/resampled/{iso3_lower}_{resolution}km.tif`.
+        - `PopulationMapThread` and `MapGenerationThread` classes are available and emit
+            the documented `finished` and `error` signals.
+        - Slots `self.cancer_type_map_completed(bytes, str, str)` and
+            `self.on_map_generation_error(str)` exist.
+        - `countries` refers to `pycountry.countries`.
+
+        Returns:
+        None
+        """
         country = self.country_combo.currentText()
         map_type_text = self.map_type_combo.currentText()
 
@@ -713,7 +998,6 @@ class GeoSpacRadAccess(QMainWindow):
                 return
 
         resolution = float(self.resolution_combo.currentText())
-        #include_fraction = self.include_fraction_checkbox.isChecked()
         map_type_text = self.map_type_combo.currentText()
 
         # Construct target file name
@@ -797,14 +1081,48 @@ class GeoSpacRadAccess(QMainWindow):
             self.map_thread.error.connect(self.on_map_generation_error)
             self.map_thread.start()
 
-    # End of helper methods for setup_ui():
+    # End of main helper methods for setup_ui():
 
-    # ===
+    # ==== Small Sub-Helpers ====
 
     def update_progress_bar(self, value):
+        """
+        Update the download progress indicator.
+
+        Intended as the slot connected to `DownloadThread.progress_updated(int)`.
+        Sets the value of `self.progress` (a QProgressBar). 
+
+        Args:
+            value (int): New progress value for the bar.
+
+        Returns:
+            None
+        """
         self.progress.setValue(value)
 
     def download_complete(self, success, message):
+        """
+        Finalises the download workflow: restore UI state, notify the user, and
+        refresh resample availability.
+
+        Intended as the slot connected to `DownloadThread.finished(bool, str)`.
+        Hides the progress bar, re-enables the Download button, and displays an
+        information dialog on success or an error dialog on failure. On success,
+        it also calls `check_resample_availability()` so the “Resample” button
+        becomes enabled if the new raster is present.
+
+        Args:
+            success (bool): True if the download completed successfully.
+            message (str): User-facing status text (e.g., output path or error).
+
+        Side Effects:
+            - Updates progress bar visibility and Download button enabled state.
+            - Shows a QMessageBox (information or critical).
+            - Enables the Resample button via `check_resample_availability()`.
+
+        Returns:
+            None
+        """
         self.progress.setVisible(False)
         self.download_btn.setEnabled(True)
         
@@ -815,6 +1133,37 @@ class GeoSpacRadAccess(QMainWindow):
             QMessageBox.critical(self, "Error", message)
 
     def resample_complete(self, result):
+        """
+        Handles completion of the background resampling job: restore UI, show outcome,
+        and enable subsequent map generation.
+
+        Intended as the slot connected to `ResampleThread.finished(dict)`. It:
+            Re-enables the Resample button.  
+            Closes and disposes of the non-modal “Processing” QMessageBox if it exists.  
+            On success (`result['success'] == True`):
+                - Builds a summary message including
+                `original_population`, `resampled_population`, and `output_path`.  
+                - Shows an information dialog to the user.  
+                - Enables the Generate Map button to allow the next step.  
+            On failure:
+                - Shows a critical error dialog with `result['message']`.
+
+        Args:
+            result (dict): Result payload emitted by `ResampleThread`. Expected keys:
+                - 'success' (bool): Overall outcome.
+                - 'original_population' (int | float): Aggregate population from the input raster.
+                - 'resampled_population' (int | float): Aggregate population from the resampled raster.
+                - 'output_path' (str): Path to the written resampled raster.
+                - 'message' (str): Human-readable error text (present/used on failure).
+
+        Side Effects:
+            - Mutates UI control states (buttons, message boxes).
+            - Displays QMessageBox dialogs (information or critical).
+            - Enables map generation on success.
+
+        Returns:
+            None
+        """
         self.resample_btn.setEnabled(True)
 
         if hasattr(self, 'processing_msgbox'):
@@ -834,11 +1183,41 @@ class GeoSpacRadAccess(QMainWindow):
             QMessageBox.critical(self, "Error", result['message'])
 
     def update_status(self, message):
-        """Update status text area"""
+        """
+        Append a line of status text to the UI’s log area.
+
+        Args:
+            message (str): The message to display. Should be short and human-readable.
+
+        Notes:
+            - Call this on the GUI thread. If emitting from a worker thread, connect a
+            signal to this slot so Qt marshals the call safely.
+            - For very frequent updates, consider throttling to avoid UI jank.
+        """
         self.status_text.append(message)
 
     def display_image(self, image_data):
-        """Display image data in the image label"""
+        """
+        Render an in-memory image into the preview area and report status.
+
+        Loads `image_data` (expected to be bytes/bytes-like, e.g., PNG or JPEG)
+        into a QPixmap, scales it to fit `self.image_label` while preserving aspect
+        ratio (using smooth interpolation), and displays it. If no data is provided,
+        clears the preview and shows a placeholder message. In both cases, appends
+        a short status line via `update_status(...)`.
+
+        Args:
+            image_data (bytes | bytearray | memoryview | None): Encoded image data to
+                display. If falsy, the preview is cleared instead.
+
+        Side Effects:
+            - Mutates `self.image_label` pixmap/contents.
+            - Appends a message to the status log via `self.update_status`.
+
+        Threading:
+            - Call from the GUI thread. If originating in a worker thread, emit a
+            signal and connect it to this slot so Qt marshals to the main thread.
+        """
         if image_data:
             pixmap = QPixmap()
             pixmap.loadFromData(image_data)
@@ -855,6 +1234,35 @@ class GeoSpacRadAccess(QMainWindow):
             self.update_status("Failed to generate map image.")
 
     def cancer_type_map_completed(self, image_data, tif_path, png_path):
+        """
+        Handle completion of map generation: re-enable UI, render preview, and log outputs.
+
+        Intended as the slot connected to:
+        - `PopulationMapThread.finished(bytes, str, str)`
+        - `MapGenerationThread.finished(bytes, str, str)`
+
+        Behavior:
+        - Re-enables the Generate Map button.
+        - If `image_data` is provided, displays the image via `display_image(image_data)`
+            and appends a status message including the TIFF and PNG output paths.
+        - If `image_data` is missing/empty, logs that no image data was returned.
+
+        Args:
+            image_data (bytes | None): Encoded image data suitable for QPixmap/QImage.
+            tif_path (str): Filesystem path to the generated GeoTIFF.
+            png_path (str): Filesystem path to the rendered PNG.
+
+        Side Effects:
+            - Mutates the enabled state of `self.generate_map_btn`.
+            - Updates the preview area via `display_image`.
+            - Appends messages to the status log via `update_status`.
+
+        Threading:
+            - Should be invoked on the GUI thread (Qt will marshal the signal-slot call).
+
+        Returns:
+            None
+        """
         self.generate_map_btn.setEnabled(True)
         if image_data:
             self.display_image(image_data)
@@ -863,10 +1271,31 @@ class GeoSpacRadAccess(QMainWindow):
             self.update_status("Map generated but no image data returned.")
 
     def on_map_generation_error(self, error_msg):
+        """
+        Responds to a map-generation failure: restore UI, notify the user, and log details.
+
+        Intended as the slot connected to:
+        - `PopulationMapThread.error(str)`
+        - `MapGenerationThread.error(str)`
+
+        Behavior:
+        - Re-enables the Generate Map button so the user can try again.
+        - Displays a critical QMessageBox with the error details.
+        - Appends a concise error line to the status log via `update_status`.
+
+        Args:
+            error_msg (str): Human-readable description of the error that occurred.
+
+        Side Effects:
+            - Mutates the enabled state of `self.generate_map_btn`.
+            - Shows a modal error dialog.
+            - Writes to the status text area.
+        """
         self.generate_map_btn.setEnabled(True)
         QMessageBox.critical(self, "Error", f"Map generation failed:\n{error_msg}")
         self.update_status(f"Error: {error_msg}")
 
+    # End of small sub-helpers
 
 
 if __name__ == "__main__":
