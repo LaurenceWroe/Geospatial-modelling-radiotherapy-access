@@ -67,7 +67,7 @@ To Do (27/08/2025)
 
 To Do (29/08/2025) 
 - GUI code commenting and neatening up (Archie) (DONE) 
-- Updating Data Flow chart to include GUI usage, GLOBOCAN data, where we would like the new data to come from (Sophia) 
+- Updating Data Flow chart to include GUI usage, GLOBOCAN data, where we would like the new data to come from (Sophia) (DONE)
 - Presentation slides 
 - Probability of access maps (Sophia) 
 - Look at UK Gov data source to collect data on stage at diagnosis (Sophia) 

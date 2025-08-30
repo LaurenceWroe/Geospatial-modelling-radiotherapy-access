@@ -17,7 +17,6 @@ import matplotlib.cm as cm
 import io
 
 
-# DEFAULT_EXCEL_PATH = "/Users/sophiamartin/Desktop/src/b_cancer_incidence/cancer_type_radiotherapy.xlsx"
 DEFAULT_EXCEL_PATH = "b_cancer_incidence/cancer_type_radiotherapy.xlsx"  # Relative path for the project structure
 
 #reading the excel file 
@@ -26,7 +25,7 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-
+#loading data from excel file and saving it in dictionary 
 def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float, float]]:
     """
     Load cancer type proportions from the Excel file.
@@ -80,23 +79,6 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float, floa
 
     return mapping
 
-#function that returns actually treatd byb RT
-#def multiply_population_by_fraction(#
-    #population_raster_path: str,
-    #proportion: float,
-    #fraction: float,
-#) -> np.ndarray:
-    #"""Load population raster and return population * proportion * fraction array."""
-    #with rasterio.open(population_raster_path) as src:
-       # population = src.read(1)
-    #cancer_case_prop = 0.043 #number of people wth cancer in UK is approx 3 mil, and UK pop. approx 70 mil. 
-    # Clean population values (remove nodata / negatives)
-    #population = np.where(population > 0, population, 0)
-
-    # Multiply by proportion and fraction
-    #result = population.astype(np.float64) * cancer_case_prop * float(proportion) * float(fraction)
-
-    #return population, result
 
 #function to save a NumPy array as a GeoTIFF raster 
 def save_raster_like(
