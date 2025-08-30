@@ -20,6 +20,7 @@ import io
 # DEFAULT_EXCEL_PATH = "/Users/sophiamartin/Desktop/src/b_cancer_incidence/cancer_type_radiotherapy.xlsx"
 DEFAULT_EXCEL_PATH = "b_cancer_incidence/cancer_type_radiotherapy.xlsx"  # Relative path for the project structure
 
+#reading the excel file 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -57,12 +58,15 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float, floa
             f"Could not find required columns in {excel_path}. Found columns: {list(df.columns)}"
         )
 
-    # Build mapping
+    # Build mapping that maps cancer types to properties (proportion of cases, fraction needing RT, optimal fraction needing RT) 
     mapping = {}
+    #loops through each row in df to access each row as a series object (row) 
     for _, row in df.iterrows():
+        #converts type into a string
         ct = str(row[col_map["type"]]).strip()
         if ct.lower() in ("nan", "", "none"):
             continue
+        #extracts values from the other columns for each type
         try:
             prop = float(row[col_map["prop"]])
             frac = float(row[col_map["frac"]])
@@ -76,25 +80,25 @@ def load_cancer_fractions(excel_path: str) -> Dict[str, Tuple[float, float, floa
 
     return mapping
 
-
-def multiply_population_by_fraction(
-    population_raster_path: str,
-    proportion: float,
-    fraction: float,
-) -> np.ndarray:
-    """Load population raster and return population * proportion * fraction array."""
-    with rasterio.open(population_raster_path) as src:
-        population = src.read(1)
-    cancer_case_prop = 0.043 #number of people wth cancer in UK is approx 3 mil, and UK pop. approx 70 mil. 
+#function that returns actually treatd byb RT
+#def multiply_population_by_fraction(#
+    #population_raster_path: str,
+    #proportion: float,
+    #fraction: float,
+#) -> np.ndarray:
+    #"""Load population raster and return population * proportion * fraction array."""
+    #with rasterio.open(population_raster_path) as src:
+       # population = src.read(1)
+    #cancer_case_prop = 0.043 #number of people wth cancer in UK is approx 3 mil, and UK pop. approx 70 mil. 
     # Clean population values (remove nodata / negatives)
-    population = np.where(population > 0, population, 0)
+    #population = np.where(population > 0, population, 0)
 
     # Multiply by proportion and fraction
-    result = population.astype(np.float64) * cancer_case_prop * float(proportion) * float(fraction)
+    #result = population.astype(np.float64) * cancer_case_prop * float(proportion) * float(fraction)
 
-    return population, result
+    #return population, result
 
-
+#function to save a NumPy array as a GeoTIFF raster 
 def save_raster_like(
     template_raster_path: str,
     array: np.ndarray,
@@ -102,6 +106,7 @@ def save_raster_like(
     nodata_value: float = -9999.0,
 ) -> None:
     """Save array as GeoTIFF using spatial metadata from template raster."""
+    #opens and provides the spatial metadata for the new raster
     with rasterio.open(template_raster_path) as src:
         meta = src.meta.copy()
         meta.update({
@@ -121,7 +126,7 @@ def save_raster_like(
             except Exception as e:
                 raise TypeError(f"Array could not be converted to float32: dtype={array.dtype}, error: {e}")
         data = np.where(np.isfinite(array), array, nodata_value).astype(np.float32)
-        dst.write(data, 1)
+        dst.write(data, 1) #writes data to first band of output raster file
 
 #can also produce populatiom density map: 
 def generate_population_density_map_only(
@@ -146,6 +151,7 @@ def generate_population_density_map_only(
         population = src.read(1)
         bounds = src.bounds
 
+    #dealing with data only where there is non-zero population density
     population = np.where(population > 0, population, np.nan)
 
     # Output filenames
@@ -198,6 +204,7 @@ def generate_population_density_map_only(
 
     return image_bytes, output_tif, output_png
 
+#function that outputs optimally treated and actually treated by RT
 def multiply_population_by_multiplier(
     population_raster_path: str,
     multiplier: float,
@@ -207,14 +214,14 @@ def multiply_population_by_multiplier(
         population = src.read(1)
         if not np.issubdtype(population.dtype, np.number):
             population = population.astype(np.float32)
-    cancer_case_prop = 0.043
+    cancer_case_prop = 0.043 #number of people wth cancer in UK is approx 3 mil, and UK pop. approx 70 mil. 
     population = np.where(population > 0, population, 0)
     result = population.astype(np.float64) * float(multiplier) * cancer_case_prop
     if not np.issubdtype(result.dtype, np.number):
         raise ValueError(f"Resulting array contains non-numeric data. dtype={result.dtype}")
     return population, result
 
-
+#function that generates map
 def generate_cancer_type_map(
     country_code: str,
     cancer_type: Optional[str] = None,
@@ -237,6 +244,7 @@ def generate_cancer_type_map(
     Args:
         country_code: ISO country code (e.g., NGA, GBR, USA)
         cancer_type: Cancer type name as listed in Excel
+        cancer_types: Able to select multiple types and accumulate data 
         resolution: Resolution in km
         excel_path: Path to Excel with cancer-type proportions
         population_raster_path: Path to population raster (optional)
@@ -245,6 +253,9 @@ def generate_cancer_type_map(
         global_vmin: Minimum value for log color scale
         global_vmax: Maximum value for color scale
         return_image: Whether to return image bytes for display
+        overwrite_cancer_type_map: allows user to overwrite
+        include_fraction: for actually treated by RT 
+        include_optimal_fraction: for ideally treated by RT
     
     Returns:
         Tuple of (image_bytes, output_tif_path, output_png_path)
@@ -330,6 +341,7 @@ def generate_cancer_type_map(
     population_output_dir = base_dir / "a_population_density" / "population_density_maps"
     population_output_dir.mkdir(parents=True, exist_ok=True)
 
+    # pop. density map function is called so GUI only calls generate_cancer_type_map() 
     generate_population_density_map_only(
         country_code=country_code,
         population_raster_path=population_raster_path,
@@ -394,6 +406,7 @@ def generate_cancer_type_map(
     norm_data[(norm_data < 1) & (~np.isnan(norm_data))] = 0.5  # <-- this is key
 
     # Set log color scale
+    # want a shared colour scale for all plots so they can be compared
     vmin = 1
     vmax = global_vmax if global_vmax is not None else np.nanmax(plot_data_masked)
 
