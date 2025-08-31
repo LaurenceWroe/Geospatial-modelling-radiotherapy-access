@@ -110,8 +110,13 @@ def calculate_accessibility_probability(
         combined_probability *= (1 - prob_treatment)
     
     # Calculate final combined probability of being treated by at least one LINAC
+    # modifying the final output so each pixel's probability is multiplied by its population 
+    # This refelcts "effective access", not just whether a place is close to a linac but whether people live there
     combined_probability = 1 - combined_probability
-    combined_probability = np.where(valid_mask, combined_probability, np.nan)
+    # weight probability by population 
+    population_weighted_probability = combined_probability * population
+
+    combined_probability = np.where(valid_mask, population_weighted_probability, np.nan)
     
     return combined_probability
 
