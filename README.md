@@ -78,6 +78,8 @@ To Do (29/08/2025)
 
 - I (archie) want to edit the plots so that cancers are displayed as a list next to the plot as selecting a few makes it a super long title
 
+- code for probability access plots i think takes too long to compute or soemthing is wrong with the code that geenrates the plots in the GUI but i (sophia) cant work it out 
+
 
 
 
