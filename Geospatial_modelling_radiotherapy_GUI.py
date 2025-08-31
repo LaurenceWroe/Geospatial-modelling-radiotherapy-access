@@ -19,8 +19,10 @@ from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
 from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only
-
-
+from c_probability_of_access.visualization.plot_accessibility_probability import calculate_accessibility_probability
+from c_probability_of_access.visualization.plot_accessibility_probability import plot_accessibility_probability
+#from c_probability_of_access.plot_probability_cutoff import plot_accessibility_probability
+#from c_probability_of_access.plot_probability import plot_accessibility_probability
 
 # All Qthreads below for resampling, downloading and mapping:
 
@@ -253,7 +255,7 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False, include_optimal_fraction=False):
+    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False, include_optimal_fraction=False, include_access_map = False):
         super().__init__()
         self.country_code = country_code
         self.cancer_types = cancer_types
@@ -262,6 +264,7 @@ class MapGenerationThread(QThread):
         self.overwrite_cancer_type_map = overwrite_cancer_type_map
         self.include_fraction = include_fraction
         self.include_optimal_fraction = include_optimal_fraction
+        self.include_access_map = include_access_map 
 
     def run(self):
         try:
@@ -277,6 +280,24 @@ class MapGenerationThread(QThread):
                 include_optimal_fraction = self.include_optimal_fraction
             )
             print(f"[THREAD] Finished map generation.")
+
+            if self.include_access_map: 
+                print(f"[THREAD] Starting accessibility map generation for {self.country_code} ...")
+
+                output_png_path = f"outputs/{self.country_code}_access_map.png"
+
+                # Step 1: Generate and save the map
+                plot_accessibility_probability(
+                    population_raster_path=self.population_raster_path,
+                    linac_excel_path=f"c_probability_of_access/linac/{self.country_code}_DIRAC.xlsx",  # Update this path if needed
+                    output_path=output_png_path,
+                    lambda_km=30.0
+                )
+
+                # Step 2: Read image back into bytes
+                with open(output_png_path, "rb") as f:
+                    image_bytes = f.read()
+
             self.finished.emit(image_data, tif_path, png_path)
         except Exception as e:
             print(f"[THREAD] Error during map generation: {e}")
@@ -434,7 +455,7 @@ class GeoSpacRadAccess(QMainWindow):
         # Map type box
         self.map_type_label = QLabel("Select map to generate:")
         self.map_type_combo = QComboBox() 
-        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density"])
+        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density", "Effective Access (Population-Weighted)"])
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
@@ -983,8 +1004,10 @@ class GeoSpacRadAccess(QMainWindow):
         """
         country = self.country_combo.currentText()
         map_type_text = self.map_type_combo.currentText()
+       
 
-        if map_type_text == "Population Density":
+
+        if map_type_text in "Population Density":
             selected_cancer_types = []  # no cancer types
         else:
             selected_cancer_types = []
