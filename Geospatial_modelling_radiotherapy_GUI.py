@@ -19,10 +19,10 @@ from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
 from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only
-from c_probability_of_access.visualization.plot_accessibility_probability import calculate_accessibility_probability
-from c_probability_of_access.visualization.plot_accessibility_probability import plot_accessibility_probability
-#from c_probability_of_access.plot_probability_cutoff import plot_accessibility_probability
-#from c_probability_of_access.plot_probability import plot_accessibility_probability
+from c_probability_of_access.visualization.generate_access_map import generate_accessibility_plot
+
+
+
 
 # All Qthreads below for resampling, downloading and mapping:
 
@@ -297,28 +297,36 @@ class AccessMapThread(QThread):
         self.population_raster_path = population_raster_path 
         self.output_dir = output_dir 
         self.overwrite_existing = overwrite_existing 
-    
-        def run(self):
-            try:
-                from c_probability_of_access.visualization.plot_accessibility_probability import plot_accessibility_probability
 
-                output_path = os.path.join(self.output_dir, f"{self.country_code}_{self.resolution}km_access_probability.png")
-                print(f"[THREAD] Generating access map at {output_path}...")
+    def run(self):
+        try:
 
-                plot_accessibility_probability(
-                    population_raster_path=self.population_raster_path,
-                    linac_excel_path=f"c_probability_of_access/linac/{self.country_code}_DIRAC.xlsx",  # Adjust if needed
-                    output_path=output_path
-                )
+            output_path = os.path.join(
+                self.output_dir, f"{self.country_code}_{self.resolution}km_access_probability.png"
+            )
+            print(f"[THREAD] Generating access map at {output_path}...")
 
-                with open(output_path, "rb") as f:
-                    image_data = f.read()
+            probability = generate_accessibility_plot(
+                population_raster_path=self.population_raster_path,
+                linac_excel_path=f"c_probability_of_access/linac/{self.country_code}_DIRAC.xlsx",  # Adjust path if needed
+                country=self.country_code,
+                output_dir=self.output_dir,
+                output_name=f"{self.country_code}_{self.resolution}km_access_probability.png",
+                lambda_km=self.resolution,
+                max_distance_km=5 * self.resolution,
+                dpi=300,
+                show_plot=False
+            )
 
-                self.finished.emit(image_data, "", output_path)
+            with open(output_path, "rb") as f:
+                image_data = f.read()
 
-            except Exception as e:
-                print(f"[THREAD] Error generating access map: {e}")
-                self.error.emit(str(e))
+            self.finished.emit(image_data, "", output_path)
+
+        except Exception as e:
+            print(f"[THREAD] Error generating access map: {e}")
+            self.error.emit(str(e))
+
 # Main window
 
 class GeoSpacRadAccess(QMainWindow):
