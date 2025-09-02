@@ -1,28 +1,36 @@
 import sys
 import os
 import subprocess
+from pathlib import Path
+import xarray as xr
 import pandas as pd 
+
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QComboBox, 
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
     QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, QSplitter
 )
-from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QScrollArea, QTextEdit, QListWidget, QListWidgetItem
+from PyQt5.QtWidgets import QCheckBox, QScrollArea, QTextEdit, QListWidget, QListWidgetItem
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
 import io
 from PIL import Image
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+
 from pycountry import countries
+
 from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
-from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
-from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only
+from b_cancer_incidence.generate_cancer_type_map_v2 import generate_cancer_type_map
+from b_cancer_incidence.generate_cancer_type_map_v2 import generate_population_density_map_only
 from c_probability_of_access.visualization.generate_access_map import generate_accessibility_plot
 
-
-
+# Defaults
+BASE_DIR = Path(__file__).resolve().parents[1]
+#DEFAULT_XARRAY_PATH = BASE_DIR / "b_cancer_incidence" / "globocan_xarray.nc"
+DEFAULT_XARRAY_PATH = "b_cancer_incidence/globocan_xarray.nc"
+DEFAULT_METRIC_NAME = "New_Cases_Number"
 
 # ==== All Qthreads below for resampling, downloading and mapping ====
 
@@ -199,7 +207,7 @@ class PopulationMapThread(QThread):
             self.finished.emit(image_data, tif_path, png_path)
         except Exception as e:
             self.error.emit(str(e))
-
+                
 class MapGenerationThread(QThread):
     """
     QThread worker that generates cancer-type maps from a population raster without blocking the GUI.
@@ -224,8 +232,8 @@ class MapGenerationThread(QThread):
         resolution (float | int | str): Target map resolution in kilometers (passed through).
         population_raster_path (str | pathlib.Path): Path to the (resampled) population raster.
         overwrite_cancer_type_map (bool): Whether to overwrite existing outputs.
-        include_fraction (bool): Forwarded flag (e.g., include standard radiotherapy fraction layer).
-        include_optimal_fraction (bool): Forwarded flag (e.g., include optimal radiotherapy fraction layer).
+        include_RT_utilisation (bool): Forwarded flag (e.g., include standard radiotherapy fraction layer).
+        include_optimal_RT_utilisation (bool): Forwarded flag (e.g., include optimal radiotherapy fraction layer).
 
     Workflow:
         - Calls `generate_cancer_type_map(..., return_image=True, ...)`.
@@ -245,8 +253,8 @@ class MapGenerationThread(QThread):
             resolution=1.0,
             population_raster_path="a_population_density/resampled/gbr_1.0km.tif",
             overwrite_cancer_type_map=True,
-            include_fraction=True,
-            include_optimal_fraction=False,
+            include_RT_utilisation=True,
+            include_optimal_RT_utilisation=False,
         )
         thread.finished.connect(self.on_map_ready)
         thread.error.connect(self.on_map_error)
@@ -255,15 +263,15 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False, include_optimal_fraction=False, include_access_map = False):
+    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_RT_utilisation=False, include_optimal_RT_utilisation=False, include_access_map = False):
         super().__init__()
         self.country_code = country_code
         self.cancer_types = cancer_types
         self.resolution = resolution
         self.population_raster_path = population_raster_path
         self.overwrite_cancer_type_map = overwrite_cancer_type_map
-        self.include_fraction = include_fraction
-        self.include_optimal_fraction = include_optimal_fraction
+        self.include_RT_utilisation = include_RT_utilisation
+        self.include_optimal_RT_utilisation = include_optimal_RT_utilisation
 
     def run(self):
         try:
@@ -273,10 +281,10 @@ class MapGenerationThread(QThread):
                 cancer_types=self.cancer_types,
                 resolution=self.resolution,
                 population_raster_path=self.population_raster_path,
-                return_image=True,
+                return_image=True, # Do we need this                                        <-- CHECK ME
                 overwrite_cancer_type_map=self.overwrite_cancer_type_map,
-                include_fraction=self.include_fraction,
-                include_optimal_fraction = self.include_optimal_fraction
+                include_RT_utilisation=self.include_RT_utilisation,
+                include_optimal_RT_utilisation= self.include_optimal_RT_utilisation
             )
             print(f"[THREAD] Finished map generation.")
 
@@ -675,46 +683,30 @@ class GeoSpacRadAccess(QMainWindow):
         except:
             self.resample_btn.setEnabled(False)
 
-    def load_cancer_types(self, excel_path="b_cancer_incidence/cancer_type_radiotherapy.xlsx"):
+    def load_cancer_types(self, xarray_path: str | Path | None = None) -> list[str]:
         """
-        Load and return a sorted list of unique cancer types from an Excel file.
+        Load and return a sorted list of unique cancer types from the on-disk xarray tensor.
 
-        This helper reads the Excel sheet at `excel_path` using pandas, normalizes
-        column names to lowercase (stripped), and looks for a column named
-        "cancer type" (case-insensitive via normalization). If found, it extracts
-        non-null values, de-duplicates them, sorts alphabetically, and returns the
-        resulting list. If the column is missing or any error occurs while reading
-        the file, an error dialog is shown and an empty list is returned.
+        Reads the DataArray at `xarray_path` (defaults to b_cancer_incidence/globocan_xarray.nc),
+        validates required coords/dims, extracts `Cancer` coordinate values, de-duplicates,
+        sorts, and returns them. On error, shows a dialog and returns [].
 
-        Args:
-            excel_path (str): Path to the Excel file containing a "Cancer Type"
-                column (name treated case-insensitively). Defaults to
-                "b_cancer_incidence/cancer_type_radiotherapy.xlsx".
-
-        Returns:
-            list[str]: Sorted unique cancer type names, or an empty list on failure
-            or if the expected column is absent.
-
-        Side Effects:
-            - Displays a critical QMessageBox on exceptions.
-            - Performs file I/O synchronously; for large files consider offloading
-            to a worker to keep the UI responsive.
-
-        Requirements/Assumptions:
-            - `pandas` is available as `pd`.
-            - `self` is a QWidget (or subclass) so QMessageBox can parent to it.
-            - The Excel file contains a "Cancer Type" column (any case).
         """
         try:
-            df = pd.read_excel(excel_path)
-            df.columns = [str(c).strip().lower() for c in df.columns]
-            if "cancer type" in df.columns:
-                types = sorted(df["cancer type"].dropna().unique())
-                return types
-            else:
-                return []
+            p = Path(xarray_path) if xarray_path else DEFAULT_XARRAY_PATH
+            #if not p.exists():
+            #    raise FileNotFoundError(f"Tensor not found: {p}")
+
+            da = xr.load_dataarray(p)
+            required = {"Cancer", "Metric", "ISO3"}
+            if not required.issubset(set(da.dims)) and not required.issubset(set(da.coords)):
+                raise ValueError(f"Tensor missing required dims/coords {required}; found dims={list(da.dims)} coords={list(da.coords)}")
+
+            cancers = [str(c) for c in da.coords["Cancer"].values]
+            cancers = sorted({c for c in cancers if c and str(c).strip().lower() not in ("nan", "none")})
+            return cancers
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load cancer types: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load cancer types from xarray: {e}")
             return []
 
     def check_cancer_map_availability(self): 
@@ -983,8 +975,8 @@ class GeoSpacRadAccess(QMainWindow):
             If a cancer map is requested and no types are selected, show a critical
             message box and return.
         2) Determine output intent and flags:
-            - `include_fraction`  ← True iff "Treated by Radiotherapy"
-            - `include_optimal_fraction` ← True iff "Optimally Treated by Radiotherapy"
+            - `include_RT_utilisation`  ← True iff "Treated by Radiotherapy"
+            - `include_optimal_RT_utilisation` ← True iff "Optimally Treated by Radiotherapy"
             - Choose `filename_prefix` and `output_subfolder` accordingly, then
             `os.makedirs(output_subfolder, exist_ok=True)`.                                     <-- CHECK ME (will need to see if applies beyond CRUK Data)
         3) Resolve the ISO-3 country code via `pycountry.countries.lookup(country)` and
@@ -1050,8 +1042,8 @@ class GeoSpacRadAccess(QMainWindow):
         safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
 
         # Set flags
-        include_fraction = map_type_text == "Treated by Radiotherapy"
-        include_optimal_fraction = map_type_text == "Optimally Treated by Radiotherapy"
+        include_RT_utilisation = map_type_text == "Treated by Radiotherapy"
+        include_optimal_RT_utilisation = map_type_text == "Optimally Treated by Radiotherapy"
 
         if map_type_text == "Population Density":
             filename_prefix = "population"
@@ -1061,11 +1053,11 @@ class GeoSpacRadAccess(QMainWindow):
             filename_prefix = "access_probability" 
             output_subfolder = "c_probability_of_access/access_probability_maps"
         
-        elif include_optimal_fraction:
+        elif include_optimal_RT_utilisation:
             filename_prefix = "optimally_treated"
             output_subfolder = "b_cancer_incidence/cancer_type_maps/optimally_treated"
         
-        elif include_fraction:
+        elif include_RT_utilisation:
             filename_prefix = "treated"
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
         
@@ -1134,8 +1126,8 @@ class GeoSpacRadAccess(QMainWindow):
                 resolution,
                 population_raster_path,
                 overwrite,
-                include_fraction,
-                include_optimal_fraction
+                include_RT_utilisation,
+                include_optimal_RT_utilisation
             )
 
         self.map_thread.finished.connect(self.cancer_type_map_completed)

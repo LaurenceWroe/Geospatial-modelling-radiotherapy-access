@@ -42,8 +42,8 @@ def _load_default_da(xarray_path: Optional[str] = None) -> xr.DataArray:
     Expects dims ['Cancer','Metric','ISO3'] (order can vary).
     """
     p = Path(xarray_path) if xarray_path else DEFAULT_XARRAY_PATH
-    if not p.exists():
-        raise FileNotFoundError(f"Xarray DataArray file not found: {p}")
+    #if not p.exists():
+    #    raise FileNotFoundError(f"Xarray DataArray file not found: {p}")
     da = xr.load_dataarray(p)
 
     required = {"Cancer", "Metric", "ISO3"}
@@ -63,34 +63,64 @@ def _norm_key(s: str) -> str:
     return "".join(ch for ch in str(s).strip().lower() if ch.isalnum())
 
 
-def   _load_rad_utilisation_csv(csv_path: str) -> Dict[str, float]:
+def _load_rad_utilisation_csv(csv_path: str) -> Dict[str, float]:
     """
-    Load a two-column CSV with cancer name and utilisation.
-    Returns a mapping of normalized cancer name -> utilisation (float in [0,1]).
+    Load a CSV where the *last* field on each line is the utilisation value
+    and everything before it (which may contain commas) is the cancer name.
+
+    Accepts comma-, tab-, or semicolon-separated lines. Supports values given
+    as fractions (0–1) or percentages (e.g., "45" or "45%").
     """
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
-    try:
-        # Try straightforward parse: two columns, comma-separated
-        df = pd.read_csv(csv_path, header=None, names=["Cancer", "Fraction"])
-    except Exception:
-        # Fallback: more permissive engine
-        df = pd.read_csv(csv_path, header=None, names=["Cancer", "Fraction"], engine="python")
+    mapping: Dict[str, float] = {}
 
-    # Clean
-    df["Cancer"] = df["Cancer"].astype(str).str.strip()
-    # Some rows may have lingering stray commas/spaces in the first column; already handled by sep,
-    # but we also strip the second and coerce to float safely.
-    df["Fraction"] = pd.to_numeric(df["Fraction"].astype(str).str.strip(), errors="coerce")
-    df = df.dropna(subset=["Cancer", "Fraction"])
+    # utf-8-sig handles possible BOM on first line
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        for i, raw in enumerate(f, start=1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
 
-    mapping = {}
-    for _, row in df.iterrows():
-        key = _norm_key(row["Cancer"])
-        val = float(row["Fraction"])
-        if 0 <= val <= 1:
-            mapping[key] = val
+            # Pick a delimiter present on this line
+            if "," in line:
+                parts = [p.strip() for p in line.split(",")]
+            elif "\t" in line:
+                parts = [p.strip() for p in line.split("\t")]
+            elif ";" in line:
+                parts = [p.strip() for p in line.split(";")]
+            else:
+                # Not a data line
+                continue
+
+            if len(parts) < 2:
+                # Not enough fields
+                continue
+
+            value_str = parts[-1].strip().strip('"').strip("'")
+            name = ", ".join([p for p in parts[:-1] if p != ""]).strip().strip('"').strip("'")
+            if not name:
+                continue
+
+            # Parse value as fraction or percent
+            try:
+                if value_str.endswith("%"):
+                    val = float(value_str[:-1]) / 100.0
+                else:
+                    val = float(value_str)
+                    if 1.0 < val <= 100.0:  # treat bare % numbers as percent
+                        val = val / 100.0
+            except ValueError:
+                raise ValueError(f"Bad numeric value on line {i} in {csv_path!s}: {value_str!r}")
+
+            if 0.0 <= val <= 1.0:
+                mapping[_norm_key(name)] = float(val)
+            # silently skip out-of-range rows
+
+    if not mapping:
+        raise ValueError(f"No usable rows found in {csv_path}")
+
     return mapping
 
 
