@@ -1,0 +1,35 @@
+Breast, 0.83 
+Stomach, 0.68 
+Lung, 0.76 
+Cervix uteri, 0.58 
+Leukaemia, 0.04 
+Colorectum, 0.5 
+Brain CNS, 0.92 
+Lip, oral cavity, 0.2 
+Oesophagus, 0.8 
+Liver, 0 
+NHL, 0.65
+Kidney, 0.27 
+Ovary, 0.35 
+Prostate, 0.6 
+Corpus uteri, 0.35 
+Bladder, 0.58 
+Pancreas ,0.57 
+Thyroid, 1 
+Hodgkin Lymphoma, 0.65 
+Larynx ,1 
+Testis, 0.49 
+Gallbladder, 0.13 
+Oropharynx, 0.1 
+Hypopharynx, 1 
+Nasopharynx, 1 
+Multiple myeloma, 0.38 
+Melanoma, 0.23 
+Salivary glands, 0.87 
+Vulva, 0.35 
+Kaposi sarcoma, 0.5 
+Vagina, 0.35 
+Mesothelioma, 0.5 
+All cancers, 0.52 
+All cancers excl. NMSC, 0.52 
+Penis, 0.5
