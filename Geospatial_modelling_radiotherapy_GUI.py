@@ -19,6 +19,8 @@ from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map import generate_cancer_type_map
 from b_cancer_incidence.generate_cancer_type_map import generate_population_density_map_only
+from c_probability_of_access.visualization.generate_access_map import generate_accessibility_plot
+
 
 
 
@@ -253,7 +255,7 @@ class MapGenerationThread(QThread):
     finished = pyqtSignal(bytes, str, str)
     error = pyqtSignal(str)
 
-    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False, include_optimal_fraction=False):
+    def __init__(self, country_code, cancer_types, resolution, population_raster_path, overwrite_cancer_type_map=False, include_fraction=False, include_optimal_fraction=False, include_access_map = False):
         super().__init__()
         self.country_code = country_code
         self.cancer_types = cancer_types
@@ -277,11 +279,53 @@ class MapGenerationThread(QThread):
                 include_optimal_fraction = self.include_optimal_fraction
             )
             print(f"[THREAD] Finished map generation.")
+
             self.finished.emit(image_data, tif_path, png_path)
+
         except Exception as e:
             print(f"[THREAD] Error during map generation: {e}")
             self.error.emit(str(e))
 
+class AccessMapThread(QThread): 
+    finished = pyqtSignal(bytes, str, str) 
+    error = pyqtSignal(str) 
+
+    def __init__(self, country_code, resolution, population_raster_path, output_dir, overwrite_existing=False):
+        super().__init__()
+        self.country_code = country_code 
+        self.resolution = resolution 
+        self.population_raster_path = population_raster_path 
+        self.output_dir = output_dir 
+        self.overwrite_existing = overwrite_existing 
+
+    def run(self):
+        try:
+
+            output_path = os.path.join(
+                self.output_dir, f"{self.country_code}_{self.resolution}km_access_probability.png"
+            )
+            print(f"[THREAD] Generating access map at {output_path}...")
+
+            probability = generate_accessibility_plot(
+                population_raster_path=self.population_raster_path,
+                linac_excel_path=f"c_probability_of_access/linac/{self.country_code}_DIRAC.xlsx",  # Adjust path if needed
+                country=self.country_code,
+                output_dir=self.output_dir,
+                output_name=f"{self.country_code}_{self.resolution}km_access_probability.png",
+                lambda_km=self.resolution,
+                max_distance_km=5 * self.resolution,
+                dpi=300,
+                show_plot=False
+            )
+
+            with open(output_path, "rb") as f:
+                image_data = f.read()
+
+            self.finished.emit(image_data, "", output_path)
+
+        except Exception as e:
+            print(f"[THREAD] Error generating access map: {e}")
+            self.error.emit(str(e))
 
 # ==== Main GUI Window Class ====
 
@@ -434,7 +478,7 @@ class GeoSpacRadAccess(QMainWindow):
         # Map type box
         self.map_type_label = QLabel("Select map to generate:")
         self.map_type_combo = QComboBox() 
-        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density"])
+        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density", "Effective Access (Population-Weighted)"])
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
@@ -983,8 +1027,10 @@ class GeoSpacRadAccess(QMainWindow):
         """
         country = self.country_combo.currentText()
         map_type_text = self.map_type_combo.currentText()
+       
 
-        if map_type_text == "Population Density":
+
+        if map_type_text in ["Population Density", "Effective Access (Population-Weighted)"]:
             selected_cancer_types = []  # no cancer types
         else:
             selected_cancer_types = []
@@ -1003,12 +1049,17 @@ class GeoSpacRadAccess(QMainWindow):
         # Construct target file name
         safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
 
+        # Set flags
         include_fraction = map_type_text == "Treated by Radiotherapy"
         include_optimal_fraction = map_type_text == "Optimally Treated by Radiotherapy"
 
         if map_type_text == "Population Density":
             filename_prefix = "population"
             output_subfolder = "a_population_density/population_density_maps"
+
+        elif map_type_text == "Effective Access (Population-Weighted)": 
+            filename_prefix = "access_probability" 
+            output_subfolder = "c_probability_of_access/access_probability_maps"
         
         elif include_optimal_fraction:
             filename_prefix = "optimally_treated"
@@ -1051,9 +1102,11 @@ class GeoSpacRadAccess(QMainWindow):
         # Update status
         self.update_status(f"Generating map for {', '.join(selected_cancer_types)}...")
         self.generate_map_btn.setEnabled(False)
+
         if self.map_thread is not None and self.map_thread.isRunning():
             self.map_thread.quit()
             self.map_thread.wait()
+
         # Create and start the thread
         if filename_prefix == "population":
             self.map_thread = PopulationMapThread(
@@ -1063,9 +1116,16 @@ class GeoSpacRadAccess(QMainWindow):
                 output_dir=output_subfolder,
                 overwrite_existing=overwrite
             )
-            self.map_thread.finished.connect(self.cancer_type_map_completed)
-            self.map_thread.error.connect(self.on_map_generation_error)
-            self.map_thread.start()
+
+        
+        elif map_type_text == "Effective Access (Population-Weighted)": 
+            self.map_thread = AccessMapThread(country_code=country_code,
+            resolution=resolution,
+            population_raster_path=population_raster_path,
+            output_dir=output_subfolder,
+            overwrite_existing=overwrite
+        )
+
         else:
             # Call thread for cancer maps
             self.map_thread = MapGenerationThread(
@@ -1077,6 +1137,7 @@ class GeoSpacRadAccess(QMainWindow):
                 include_fraction,
                 include_optimal_fraction
             )
+
             self.map_thread.finished.connect(self.cancer_type_map_completed)
             self.map_thread.error.connect(self.on_map_generation_error)
             self.map_thread.start()

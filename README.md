@@ -67,7 +67,7 @@ To Do (27/08/2025)
 
 To Do (29/08/2025) 
 - GUI code commenting and neatening up (Archie) (DONE) 
-- Updating Data Flow chart to include GUI usage, GLOBOCAN data, where we would like the new data to come from (Sophia) 
+- Updating Data Flow chart to include GUI usage, GLOBOCAN data, where we would like the new data to come from (Sophia) (DONE)
 - Presentation slides 
 - Probability of access maps (Sophia) 
 - Look at UK Gov data source to collect data on stage at diagnosis (Sophia) 
@@ -77,6 +77,8 @@ To Do (29/08/2025)
 - If time, add a function that allows the user to plot a LINAC (archie)
 
 - I (archie) want to edit the plots so that cancers are displayed as a list next to the plot as selecting a few makes it a super long title
+
+- code for probability access plots i think takes too long to compute or soemthing is wrong with the code that geenrates the plots in the GUI but i (sophia) cant work it out 
 
 
 
