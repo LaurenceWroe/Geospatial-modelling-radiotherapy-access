@@ -4,20 +4,22 @@ import subprocess
 from pathlib import Path
 import xarray as xr
 import pandas as pd 
+import numpy as np
 
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QComboBox, 
     QPushButton, QVBoxLayout, QWidget, QMessageBox,
-    QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, QSplitter
+    QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, 
+    QSplitter, QCheckBox, QScrollArea, QTextEdit, 
+    QListWidget, QListWidgetItem, QTreeWidget, 
+    QTreeWidgetItem, QHeaderView
 )
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QCheckBox, QScrollArea, QTextEdit, QListWidget, QListWidgetItem
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
 import io
 from PIL import Image
-
 from pycountry import countries
 
 from a_population_density.download_worldpop import download_worldpop
@@ -31,6 +33,12 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 #DEFAULT_XARRAY_PATH = BASE_DIR / "b_cancer_incidence" / "globocan_xarray.nc"
 DEFAULT_XARRAY_PATH = "b_cancer_incidence/globocan_xarray.nc"
 DEFAULT_METRIC_NAME = "New_Cases_Number"
+
+# Sentinel (mutually exclusive) cancer buckets
+SENTINEL_CANCERS = ("All cancers", "All cancers excl. NMSC")
+_SENTINELS_NORM = {s.strip().casefold() for s in SENTINEL_CANCERS}
+def _is_sentinel_cancer(name: str) -> bool:
+        return name.strip().casefold() in _SENTINELS_NORM
 
 # ==== All Qthreads below for resampling, downloading and mapping ====
 
@@ -335,6 +343,36 @@ class AccessMapThread(QThread):
             print(f"[THREAD] Error generating access map: {e}")
             self.error.emit(str(e))
 
+# ==== Helper class to sort numbers correctly ====
+
+class _NumericSortItem(QTreeWidgetItem):
+    """Enables numeric sorting for column 1 (cases) of the cancer selection lis, with unknown (None) always last in both orders."""
+    def __lt__(self, other):
+        tw = self.treeWidget()
+        if not tw:
+            return super().__lt__(other)
+        
+        col = tw.sortColumn()
+        if col != 1:
+            # default for non-numeric column
+            return super().__lt__(other)
+
+        desc = bool(tw.property("cases_desc")) # set this in apply_cancer_sort()
+
+        def key(it):
+            raw = it.data(1, Qt.UserRole)  # float or None
+            if raw is None:
+                # missing last in both modes
+                return (1,0.0)
+            num = float(raw)
+            if desc:
+                # flip only here; we will always call sortByColumn(..., AcendingOrder)
+                num = -num
+            return (0, num)
+
+        return key(self) < key(other)
+
+
 # ==== Main GUI Window Class ====
 
 class GeoSpacRadAccess(QMainWindow):
@@ -344,12 +382,17 @@ class GeoSpacRadAccess(QMainWindow):
         self.recent_countries = []
         self.max_recent = 5  # or however many you want to show
         self.map_thread = None # ensures self.map_thread is always defined
+        self.hide_missing_cases = True
+        self._suppress_item_changed = False
         self.setup_ui()
+          
+
     
     # ---- Initial UI setup ----
 
     def setup_ui(self):
         """
+        UPDATE ME
         This builds and wires up the main window UI.
 
         This method constructs the entire interface and connects signals to slots. It creates a
@@ -410,7 +453,7 @@ class GeoSpacRadAccess(QMainWindow):
         """
 
         self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
-        self.setFixedSize(1200, 800)
+        self.setFixedSize(1300, 800)
 
         # Main splitter (used at the end)
         splitter = QSplitter(Qt.Horizontal)
@@ -464,17 +507,27 @@ class GeoSpacRadAccess(QMainWindow):
 
         # Cancer type list
         self.cancer_label = QLabel("Select a cancer type:")
-        cancer_types = self.load_cancer_types()
 
-        self.cancer_list = QListWidget()
-        self.cancer_list.setSelectionMode(QListWidget.MultiSelection)
+        # New 2-column tree with checkboxes
+        self.cancer_table = QTreeWidget()
+        self.cancer_table.setProperty("cases_desc", False)
+        self.cancer_table.setColumnCount(2)
+        self.cancer_table.setHeaderLabels(["Cancer type", "Cases"])
+        self.cancer_table.setRootIsDecorated(False)
+        self.cancer_table.setAlternatingRowColors(True)
+        self.cancer_table.setSortingEnabled(True)
+        self.cancer_table.sortByColumn(0, Qt.AscendingOrder)
 
-        for ctype in cancer_types:
-            item = QListWidgetItem(ctype)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            self.cancer_list.addItem(item)
+        # Nice sizing
+        hdr = self.cancer_table.header()
+        hdr.setSortIndicatorShown(True)
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
 
+        # Populate for current country
+        self.refresh_cancer_table()
+
+    
         # "Select All Cancers" Checkbox
         self.select_all_checkbox = QCheckBox("Select All Cancer Types") 
         self.select_all_checkbox.stateChanged.connect(self.toggle_select_all_cancers)
@@ -492,7 +545,9 @@ class GeoSpacRadAccess(QMainWindow):
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
 
         map_layout.addWidget(self.cancer_label)
-        map_layout.addWidget(self.cancer_list)
+
+        map_layout.addWidget(self.cancer_table)
+
         map_layout.addWidget(self.select_all_checkbox) 
         map_layout.addWidget(self.map_type_label)
         map_layout.addWidget(self.map_type_combo)
@@ -508,7 +563,7 @@ class GeoSpacRadAccess(QMainWindow):
 
         # Setting size of left panel
         left_panel.setLayout(left_layout)
-        left_panel.setMaximumWidth(450)
+        left_panel.setMaximumWidth(500)
         left_panel.setMinimumWidth(350)
 
 
@@ -561,9 +616,118 @@ class GeoSpacRadAccess(QMainWindow):
         
         # When country/resolultion/map-type changes, update and check for either raw data for resampling/resampled file for map
         self.country_combo.currentTextChanged.connect(self.check_resample_availability) 
+        self.country_combo.currentTextChanged.connect(lambda _: self.refresh_cancer_table())
         self.country_combo.currentTextChanged.connect(self.check_cancer_map_availability) 
+
         self.resolution_combo.currentTextChanged.connect(self.check_cancer_map_availability) 
+
+        self.cancer_table.itemChanged.connect(self._on_cancer_item_changed)
+
         self.map_type_combo.currentTextChanged.connect(self.check_cancer_map_availability)
+
+    # ---- New unsorted Helpers for the cancer table ----
+
+    def _get_current_iso3(self) -> str | None:
+        try:
+            return countries.lookup(self.country_combo.currentText()).alpha_3.upper()
+        except Exception:
+            return None
+        
+    def _load_cancer_case_counts(self, iso3: str, 
+                                 metric: str = DEFAULT_METRIC_NAME,
+                                 xarray_path: str | Path = None) -> dict[str, float]:
+        """
+        Returns {Cancer -> cases} for the given ISO3 and metric.
+        Falls back to {} on error (UI still shows cancers, cases blank)
+        """
+        try:
+            p = Path(xarray_path) if xarray_path else DEFAULT_XARRAY_PATH
+            da = xr.load_dataarray(p)
+            # Select down to Cancer dimension
+            sel = da.sel(Metric=metric, ISO3=iso3)
+            # Convert to a Series keyed by Cancer names
+            series = sel.to_series()
+            # Make plain dict with floats
+            return {str(idx): float(val) for idx, val in series.items() if pd.notna(val)}
+        except Exception as e:
+            self.update_status(f"Warning: couldn't load case counts: {e}")
+            return {}
+        
+    def refresh_cancer_table(self):
+        """
+        Rebuild the 2-column cancer table for the selected country, 
+        preserving existing checkmarks when possible
+        """
+        # Preserve existing checks
+        previously_checked = set(self.get_selected_cancer_types())
+
+        cancers = self.load_cancer_types()
+        iso3 = self._get_current_iso3()
+        counts = self._load_cancer_case_counts(iso3) if iso3 else {}
+
+        self.cancer_table.clear()
+        self.cancer_table.setSortingEnabled(False)
+
+        self._suppress_item_changed = True
+        try:
+            for ctype in cancers:
+                val = counts.get(ctype)
+                has_num = (val is not None) and np.isfinite(val)
+
+                if self.hide_missing_cases and not has_num:
+                    continue # Skip missing cases entirely
+
+                display = f"{val:,.0f}" if has_num else "-"
+                item = _NumericSortItem([ctype, display])
+
+                # Store raw number for numeric sort
+                item.setData(1, Qt.UserRole, float(val) if has_num else None)
+
+                # make checkable 
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.Checked if ctype in previously_checked else Qt.Unchecked)
+                # align cases right
+                item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+                self.cancer_table.addTopLevelItem(item)
+        finally:
+            self._suppress_item_changed = False
+
+        # apply current sort choice
+        self.cancer_table.setSortingEnabled(True)
+
+    def _on_cancer_item_changed(self, item: QTreeWidgetItem, column: int):
+        # Only react to user check/uncheck on the checkbox column
+        if self._suppress_item_changed or column != 0:
+            return
+
+        name = item.text(0)
+        checked = (item.checkState(0) == Qt.Checked)
+
+        # If a sentinel gets checked, uncheck every other item
+        if checked and _is_sentinel_cancer(name):
+            self._suppress_item_changed = True
+            try:
+                for i in range(self.cancer_table.topLevelItemCount()):
+                    it = self.cancer_table.topLevelItem(i)
+                    if it is not item:
+                        it.setCheckState(0, Qt.Unchecked)
+            finally:
+                self._suppress_item_changed = False
+            return
+
+        # If a non-sentinel gets checked, uncheck all sentinel items
+        if checked and not _is_sentinel_cancer(name):
+            self._suppress_item_changed = True
+            try:
+                for i in range(self.cancer_table.topLevelItemCount()):
+                    it = self.cancer_table.topLevelItem(i)
+                    if _is_sentinel_cancer(it.text(0)):
+                        it.setCheckState(0, Qt.Unchecked)
+            finally:
+                self._suppress_item_changed = False
+
+    
+
 
 
     # ---- HELPER METHODS for setup_ui(): re-ordered by appearance ----
@@ -771,6 +935,7 @@ class GeoSpacRadAccess(QMainWindow):
 
     def toggle_select_all_cancers(self, state):
         """
+        UPDATE ME
         Check or uncheck every cancer-type item to mirror the “Select All Cancer Types” checkbox.
 
         Behavior:
@@ -798,9 +963,23 @@ class GeoSpacRadAccess(QMainWindow):
         """
         
         check_state = Qt.Checked if state == Qt.Checked else Qt.Unchecked
-        for i in range(self.cancer_list.count()):
-            item = self.cancer_list.item(i)
-            item.setCheckState(check_state)
+        self._suppress_item_changed = True
+        try:
+            for i in range(self.cancer_table.topLevelItemCount()):
+                item = self.cancer_table.topLevelItem(i)
+                name = item.text(0)
+
+                if check_state == Qt.Checked:
+                    # Select-all: check everything EXCEPT the two sentinel buckets
+                    if _is_sentinel_cancer(name):
+                        item.setCheckState(0, Qt.Unchecked)
+                    else:
+                        item.setCheckState(0, Qt.Checked)
+                else:
+                    # Unselect-all: uncheck everything, including sentinels
+                    item.setCheckState(0, Qt.Unchecked)
+        finally:
+            self._suppress_item_changed = False
 
     def initiate_download(self):
         """
@@ -958,6 +1137,7 @@ class GeoSpacRadAccess(QMainWindow):
 
     def initiate_cancer_type_map_generate(self):
         """
+        UPDATE ME
         Orchestrates generation of either a Population Density map or a Cancer-Type map
         for the selected country at the chosen resolution, without blocking the GUI.
 
@@ -1025,14 +1205,9 @@ class GeoSpacRadAccess(QMainWindow):
         if map_type_text in ["Population Density", "Effective Access (Population-Weighted)"]:
             selected_cancer_types = []  # no cancer types
         else:
-            selected_cancer_types = []
-            for i in range(self.cancer_list.count()):
-                item = self.cancer_list.item(i)
-                if item.checkState() == Qt.Checked:
-                    selected_cancer_types.append(item.text())
-
+            selected_cancer_types = self.get_selected_cancer_types()
             if not selected_cancer_types:
-                QMessageBox.critical(self, "Error", "Please select at least one cancer type.")
+                QMessageBox.crtical(self, "error", "Please select at least one cancer type.")
                 return
 
         resolution = float(self.resolution_combo.currentText())
@@ -1348,6 +1523,14 @@ class GeoSpacRadAccess(QMainWindow):
         QMessageBox.critical(self, "Error", f"Map generation failed:\n{error_msg}")
         self.update_status(f"Error: {error_msg}")
 
+    def get_selected_cancer_types(self) -> list[str]:
+        out = []
+        for i in range(self.cancer_table.topLevelItemCount()):
+            item = self.cancer_table.topLevelItem(i)
+            if item.checkState(0) == Qt.Checked:
+                out.append(item.text(0))
+        return out
+    
     # End of small sub-helpers
 
 # ==== Run Below ====
