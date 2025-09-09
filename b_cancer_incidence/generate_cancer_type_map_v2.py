@@ -12,7 +12,7 @@ Outputs:
 - PNG heatmap with LogNorm and consistent styling,
 - Always also emits a PNG for raw population density (for comparison).
 
-original Sophia + Alika by Archie: adapted for tensor+CSV workflow
+original Sophia + Alika, by Archie: adapted for tensor+CSV workflow
 """
 
 import os

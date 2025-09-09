@@ -13,19 +13,34 @@ from PyQt5.QtWidgets import (
     QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, 
     QSplitter, QCheckBox, QScrollArea, QTextEdit, 
     QListWidget, QListWidgetItem, QTreeWidget, 
-    QTreeWidgetItem, QHeaderView
+    QTreeWidgetItem, QHeaderView, QSpinBox
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.figure import Figure
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import LogLocator, ScalarFormatter
+from matplotlib import cm
+
+
 import io
 from PIL import Image
 from pycountry import countries
+import rasterio
 
 from a_population_density.download_worldpop import download_worldpop
 from a_population_density.resample_population import resample_population
 from b_cancer_incidence.generate_cancer_type_map_v2 import generate_cancer_type_map
 from b_cancer_incidence.generate_cancer_type_map_v2 import generate_population_density_map_only
+from b_cancer_incidence.generate_cancer_type_map_v2 import (
+    _load_rad_utilisation_csv as _rt_load_csv,
+    _norm_key as _rt_norm_key,
+    DEFAULT_OPTIMAL_RT_CSV,
+    DEFAULT_ACTUAL_RT_DIR,
+)
 from c_probability_of_access.visualization.generate_access_map import generate_accessibility_plot
 
 # Defaults
@@ -384,6 +399,7 @@ class GeoSpacRadAccess(QMainWindow):
         self.map_thread = None # ensures self.map_thread is always defined
         self.hide_missing_cases = True
         self._suppress_item_changed = False
+        self._current_title = ""
         self.setup_ui()
           
 
@@ -453,7 +469,7 @@ class GeoSpacRadAccess(QMainWindow):
         """
 
         self.setWindowTitle("Geospatial Modelling of Radiotherapy Access")
-        self.setFixedSize(1300, 800)
+        self.setFixedSize(1300, 1000)
 
         # Main splitter (used at the end)
         splitter = QSplitter(Qt.Horizontal)
@@ -570,20 +586,69 @@ class GeoSpacRadAccess(QMainWindow):
         # ==== Right panel for image display ====
 
         right_panel  = QWidget()
+        self._extent = None
         right_layout = QVBoxLayout()
         
+        """
         self.image_label = QLabel("Generated map will appear here")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(600, 500)
         self.image_label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
-        
+        """
+
         self.status_text = QTextEdit()
         self.status_text.setMaximumHeight(80)
         self.status_text.setReadOnly(True)
         
+        """
         right_layout.addWidget(QLabel("Generated Map:"))
         right_layout.addWidget(self.image_label)
+        """
 
+        right_layout.addWidget(QLabel("Generated Map:"))
+
+        # ---- Log10 upper-limit control (10^k) ----
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Log scale"))
+        self.exp_spin = QSpinBox()
+        self.exp_spin.setRange(1, 10)   # k in 10^k
+        self.exp_spin.setValue(6)         # default; will auto-set on first image
+        row.addWidget(QLabel("Upper 10^k (k):"))
+        row.addWidget(self.exp_spin)
+        self.auto_btn = QPushButton("Auto from data")
+        row.addWidget(self.auto_btn)
+
+        # bucket < 1 option
+        self.under1_checkbox = QCheckBox("Colour all values < 1 the same")
+        self.under1_checkbox.setChecked(False)
+        row.addWidget(self.under1_checkbox)
+
+        right_layout.addLayout(row)
+
+        # --- Matplotlib canvas + toolbar (interactive) ---
+        self.fig = Figure(constrained_layout=True)
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_axis_off()  # start without axes
+        self.toolbar = NavigationToolbar(self.canvas, self)
+
+        # A gentle frame like your QLabel had
+        self.canvas.setMinimumSize(650, 650)
+        self.canvas.setStyleSheet("border: 1px solid gray; background-color: #f8f8f8;")
+
+        right_layout.addWidget(self.toolbar)
+        right_layout.addWidget(self.canvas)
+        # --- end Matplotlib block ---
+
+        # ---- state + signals ----
+        self._data = None     # 2D masked array (positive numeric values only)
+        self._im = None       # AxesImage
+        self._cbar = None
+        self.exp_spin.valueChanged.connect(self._apply_exp_upper)
+        self.auto_btn.clicked.connect(self._auto_from_data_set_upper)
+        self.under1_checkbox.stateChanged.connect(lambda _:
+                                                  self._redraw_with_current_settings())
+        
         right_layout.addWidget(QLabel("Status:"))
         right_layout.addWidget(self.status_text)
 
@@ -726,8 +791,178 @@ class GeoSpacRadAccess(QMainWindow):
             finally:
                 self._suppress_item_changed = False
 
-    
+    # ---- Colourbar Update ----
 
+    def _read_raster(self, tif_path: str) -> np.ma.MaskedArray:
+        """Read first band as float64, mask non-finite and <= 0 (LogNorm-safe)."""
+        with rasterio.open(tif_path) as ds:
+            data = ds.read(1).astype(np.float64)
+            b = ds.bounds
+            self._extent = (b.left, b.right, b.bottom, b.top)
+
+        data = np.where(np.isfinite(data), data, np.nan)
+        m = np.ma.masked_invalid(data)
+        m = np.ma.masked_less_equal(m, 0.0)
+        return m
+
+    def display_raster_from_tif(self, tif_path: str):
+        """
+        Load numeric data from GeoTIFF and draw it with LogNorm + colorbar,
+        enabling live scale control via the existing spinbox.
+        """
+        try:
+            self._data = self._read_raster(tif_path)   # masked, >0
+            if self._data is None or self._data.size == 0 or self._data.mask.all():
+                self.update_status("No positive data to display.")
+                return
+            # Initial draw (auto vmin/vmax inside)
+            self._plot_log(self._data)
+            self.update_status(f"Rendered from: {tif_path}")
+            # Make the controls usable
+            self.exp_spin.setEnabled(True)
+            self.auto_btn.setEnabled(True)
+        except Exception as e:
+            self.update_status(f"Error reading raster: {e}")
+
+    def _plot_log(self, data: np.ma.MaskedArray, vmin=None, vmax=None):
+        """Initial draw or update with LogNorm + colorbar."""
+        # choose defaults if not supplied
+        vals = data.compressed()
+        if vals.size == 0:
+            self.update_status("No positive values for log scaling.")
+            return
+    
+        # Defaults if not given
+        if vmin is None:
+            vmin = float(np.percentile(vals, 2))
+            vmin = max(vmin, 1e-12)
+        if vmax is None:
+            vmax = float(np.percentile(vals, 98))
+            if vmax <= vmin:  # safety
+                vmax = vmin * 10.0
+
+        # (a) Bucket < 1 into a single colour when enabled
+        bucket_under_one = hasattr(self, "under1_checkbox") and self.under1_checkbox.isChecked()
+        if bucket_under_one:
+            vmin = max(vmin, 1.0)  # ensure the scale starts at 1
+        norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+
+        # Use a copy so set_under doesn't mutate the global cmap
+        cmap = cm.get_cmap("viridis").copy()
+        extend_mode = "neither"
+        if bucket_under_one:
+            cmap.set_under("#d9d9d9")  # choose the "bucketed" colour here
+            extend_mode = "min"        # show a lower-triangle on the colorbar
+
+        norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+
+        if self._im is None:
+            self.ax.clear(); 
+            self.ax.set_axis_on()
+            self._im = self.ax.imshow(
+                data, 
+                origin="upper", 
+                cmap=cmap,
+                norm=norm, 
+                interpolation="nearest",
+                extent=getattr(self, "_extent", None)  # (b) geospatial axes if available
+            )
+            self.ax.set_aspect("equal", adjustable="box")
+            self.ax.set_xlabel("Longitude")
+            self.ax.set_ylabel("Latitude")
+
+            # (Re)create colorbar with correct 'extend'
+            if self._cbar:
+                self._cbar.remove()
+            self._cbar = self.fig.colorbar(
+                self._im, ax=self.ax, fraction=0.046, pad=0.04, extend=extend_mode
+            )
+                
+        else:
+            self._im.set_data(data)
+            self._im.set_norm(norm)
+            self._im.set_cmap(cmap)
+
+            if self._extent is not None:
+                self._im.set_extent(self._extent)
+            self.ax.set_aspect("equal", adjustable="box")
+
+            # Recreate colorbar if extend mode changes; otherwise just update
+            need_recreate = (self._cbar is None) or (getattr(self._cbar, "extend", None) != extend_mode)
+            if need_recreate:
+                if self._cbar:
+                    self._cbar.remove()
+                self._cbar = self.fig.colorbar(
+                    self._im, ax=self.ax, fraction=0.046, pad=0.04, extend=extend_mode
+                )
+            else:
+                self._cbar.update_normal(self._im)
+
+        # nice log ticks
+        self._cbar.locator = LogLocator(base=10)
+        self._cbar.formatter = ScalarFormatter()
+
+        if bucket_under_one:
+            self._cbar.set_label("Values < 1 shown in purple")
+
+        self._cbar.update_ticks()
+        
+
+        # set k so 10^k ~= current vmax
+        import math
+        k = int(math.ceil(math.log10(max(vmax, 1e-12))))
+        # avoid signal storm on init
+        self.exp_spin.blockSignals(True)
+        self.exp_spin.setValue(k)
+        self.exp_spin.blockSignals(False)
+
+        self.ax.set_title(getattr(self, "_current_title", ""), fontsize=11, pad=6)
+        self.canvas.draw_idle()
+
+    
+    def _redraw_with_current_settings(self):
+        if self._data is None or self._im is None:
+            return
+        current_norm = getattr(self._im, "norm", None)
+        vmin = getattr(current_norm, "vmin", None)
+        vmax = getattr(current_norm, "vmax", None)
+        self._plot_log(self._data, vmin=vmin, vmax=vmax)
+
+    def _apply_exp_upper(self):
+        """When k changes: set vmax = 10^k, keep vmin sane, redraw."""
+        if self._data is None or self._im is None:
+            return
+        import math
+        k = self.exp_spin.value()
+        vmax = 10.0 ** k
+
+        # keep existing vmin if possible
+        current_norm = self._im.norm
+        vmin = getattr(current_norm, 'vmin', None)
+
+        # Respect the bucket-under-1 setting
+        bucket_under_one = hasattr(self, "under1_checkbox") and self.under1_checkbox.isChecked()
+        floor = 1.0 if bucket_under_one else 1e-12
+
+        if vmin is None or vmin >= vmax:
+            vmin = max(vmax / 1000.0, 1e-12)  # default: 3 decades below vmax
+        else:
+            vmin = max(vmin, floor)
+        self._plot_log(self._data, vmin=vmin, vmax=vmax)
+
+    def _auto_from_data_set_upper(self):
+        """Pick k from the data (≈ceil(log10(98th percentile)))."""
+        if self._data is None:
+            return
+        vals = self._data.compressed()
+        if vals.size == 0:
+            return
+        import math
+        vmax = float(np.percentile(vals, 98))
+        vmax = max(vmax, 1e-12)
+        k = int(math.ceil(math.log10(vmax)))
+        # set spin (which will call _apply_exp_upper via signal)
+        self.exp_spin.setValue(k)
 
 
     # ---- HELPER METHODS for setup_ui(): re-ordered by appearance ----
@@ -1207,14 +1442,16 @@ class GeoSpacRadAccess(QMainWindow):
         else:
             selected_cancer_types = self.get_selected_cancer_types()
             if not selected_cancer_types:
-                QMessageBox.crtical(self, "error", "Please select at least one cancer type.")
+                QMessageBox.critical(self, "error", "Please select at least one cancer type.")
                 return
 
         resolution = float(self.resolution_combo.currentText())
         map_type_text = self.map_type_combo.currentText()
 
         # Construct target file name
-        safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types)
+        safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types) if selected_cancer_types else "All cancers"
+        cancers = ", ".join(selected_cancer_types) if selected_cancer_types else "All cancers"
+
 
         # Set flags
         include_RT_utilisation = map_type_text == "Treated by Radiotherapy"
@@ -1223,22 +1460,29 @@ class GeoSpacRadAccess(QMainWindow):
         if map_type_text == "Population Density":
             filename_prefix = "population"
             output_subfolder = "a_population_density/population_density_maps"
+            title = f"{country} — Population Density ({resolution} km)"
 
         elif map_type_text == "Effective Access (Population-Weighted)": 
             filename_prefix = "access_probability" 
             output_subfolder = "c_probability_of_access/access_probability_maps"
+            title = f"{country} — Effective Access (λ={resolution} km)"
         
         elif include_optimal_RT_utilisation:
             filename_prefix = "optimally_treated"
             output_subfolder = "b_cancer_incidence/cancer_type_maps/optimally_treated"
+            title = f"{country} — {map_type_text}: {cancers} ({resolution} km)"
         
         elif include_RT_utilisation:
             filename_prefix = "treated"
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+            title = f"{country} — {map_type_text}: {cancers} ({resolution} km)"
         
         else:
             filename_prefix = "incidence"
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
+            title = f"{country} — {map_type_text}: {cancers} ({resolution} km)"
+
+        self._current_title = title  
 
 
         os.makedirs(output_subfolder, exist_ok=True)
@@ -1423,43 +1667,41 @@ class GeoSpacRadAccess(QMainWindow):
             - For very frequent updates, consider throttling to avoid UI jank.
         """
         self.status_text.append(message)
-
+    
     def display_image(self, image_data):
         """
-        Render an in-memory image into the preview area and report status.
-
-        Loads `image_data` (expected to be bytes/bytes-like, e.g., PNG or JPEG)
-        into a QPixmap, scales it to fit `self.image_label` while preserving aspect
-        ratio (using smooth interpolation), and displays it. If no data is provided,
-        clears the preview and shows a placeholder message. In both cases, appends
-        a short status line via `update_status(...)`.
-
-        Args:
-            image_data (bytes | bytearray | memoryview | None): Encoded image data to
-                display. If falsy, the preview is cleared instead.
-
-        Side Effects:
-            - Mutates `self.image_label` pixmap/contents.
-            - Appends a message to the status log via `self.update_status`.
-
-        Threading:
-            - Call from the GUI thread. If originating in a worker thread, emit a
-            signal and connect it to this slot so Qt marshals to the main thread.
+        Preview an already-coloured PNG/JPEG (no live colour scaling).
         """
-        if image_data:
-            pixmap = QPixmap()
-            pixmap.loadFromData(image_data)
-            self.image_label.setPixmap(pixmap.scaled(
-                self.image_label.width(), 
-                self.image_label.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            ))
-            self.update_status("Map displayed successfully!")
-        else:
-            self.image_label.clear()
-            self.image_label.setText("No image to display")
-            self.update_status("Failed to generate map image.")
+        if not image_data:
+            self.ax.clear(); self.ax.set_axis_off()
+            if self._cbar:
+                self._cbar.remove(); self._cbar = None
+                self.ax.set_title(getattr(self, "_current_title", ""), fontsize=11, pad=6)
+            self.canvas.draw_idle()
+            self.update_status("No image to display.")
+            return
+
+        try:
+            img = Image.open(io.BytesIO(image_data)).convert("RGBA")
+            arr = np.array(img)
+            self._last_image_arr = arr
+        except Exception as e:
+            self.ax.clear(); self.ax.set_axis_off()
+            self.ax.text(0.5, 0.5, f"Image decode error:\n{e}",
+                        ha="center", va="center", transform=self.ax.transAxes)
+            self.canvas.draw_idle()
+            self.update_status(f"Image decode error: {e}")
+            return
+
+        self.ax.clear(); self.ax.set_axis_off()
+        # Show as-is (no norm/cmap on RGBA)
+        self.ax.imshow(arr, origin="upper", interpolation="nearest")
+        self.ax.set_aspect("equal", adjustable="box")
+        # Remove any old colourbar to avoid confusion
+        if self._cbar:
+            self._cbar.remove(); self._cbar = None
+        self.canvas.draw_idle()
+        self.update_status("PNG preview displayed.")
 
     def cancer_type_map_completed(self, image_data, tif_path, png_path):
         """
@@ -1492,9 +1734,18 @@ class GeoSpacRadAccess(QMainWindow):
             None
         """
         self.generate_map_btn.setEnabled(True)
-        if image_data:
-            self.display_image(image_data)
+        
+        if tif_path:  # best path: draw numeric data with live scale
+            self.display_raster_from_tif(tif_path)
             self.update_status(f"Map generated successfully!\nTIFF: {tif_path}\nPNG: {png_path}")
+            return
+        
+        if image_data:
+            # Disable scale controls when showing RGBA
+            self.exp_spin.setEnabled(False)
+            self.auto_btn.setEnabled(False)
+            self.display_image(image_data)
+            self.update_status(f"(Previewed PNG only)\nPNG: {png_path or '(in-memory)'}")
         else:
             self.update_status("Map generated but no image data returned.")
 
@@ -1540,7 +1791,11 @@ if __name__ == "__main__":
     import signal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+
     app = QApplication(sys.argv)
+
     window = GeoSpacRadAccess()
     window.show()
     ret = app.exec_() 
