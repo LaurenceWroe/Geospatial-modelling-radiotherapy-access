@@ -1,5 +1,164 @@
+<a id="readme-top"></a>
 # Geospatial Modelling Radiotherapy Access
 
+<!-- TABLE OF CONTENTS -->
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li>
+      <a href="#about-the-project">About The Project</a>
+      <ul>
+        <li><a href="#built-with">Built With</a></li>
+      </ul>
+    </li>
+    <li>
+      <a href="#getting-started">Getting Started</a>
+      <ul>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#installation">Installation</a></li>
+      </ul>
+    </li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+    <li><a href="#contact">Contact</a></li>
+    <li><a href="#acknowledgments">Acknowledgments</a></li>
+  </ol>
+</details>
+
+<!-- ABOUT THE PROJECT -->
+## About The Project
+
+This project aims to visualise and calculate access and capacity for radiotherapy centres, with cancer data sourced from individual countries.
+
+This GitHub provides a tool that can use either distance-based or time-based calculations to determine probability of access. From this tool, analysis can be done
+
+![Alt text](Data_flow.png?raw=true "Data Flow Plan Diagram")
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+### Built With
+
+* [![Python][Python.js]][Python-url]
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- GETTING STARTED -->
+## Getting Started
+
+This is an example of how you may give instructions on setting up your project locally.
+To get a local copy up and running follow these simple example steps.
+
+### Prerequisites
+
+Install Python in your favourite IDE (or other means)
+
+* pycountry
+  ```sh
+  pip install pycountry
+  ```
+* rioxarray
+  ```sh
+  pip install rioxarray
+  ```
+  
+### Installation
+
+
+1. Clone the repo
+   ```sh
+   git clone https://github.com/smartin3113/Geospatial-modelling-radiotherapy-access
+   ```
+2. Install python and associated packages in the Prerequisites
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+
+<!-- USAGE EXAMPLES -->
+## Usage
+
+To be written
+
+_For more examples, please refer to the [Documentation](https://example.com)_
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+
+<!-- ROADMAP -->
+## Roadmap
+
+- [x] TO WRITE
+- 
+
+
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+
+<!-- CONTRIBUTING -->
+## Contributing
+
+<!-- 
+Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+
+If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
+Don't forget to give the project a star! Thanks again!
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+-->
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+
+<!-- LICENSE -->
+## License
+
+TO BE DETERMINED
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+
+<!-- CONTACT -->
+## Contact
+
+Laurence Wroe - laurence.wroe@cern.ch
+
+Alika Ho - alika.ho@queens.ox.ac.uk
+
+Archie Brown - archie.brown@st-hughs.ox.ac.uk
+
+Sophia Martin - sophia.martin@lmh.ox.ac.uk
+
+Project Link: [https://github.com/smartin3113/Geospatial-modelling-radiotherapy-access](https://github.com/smartin3113/Geospatial-modelling-radiotherapy-access)
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+
+<!-- ACKNOWLEDGMENTS -->
+## Acknowledgments
+
+* [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[Python.js]: https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff
+[Python-url]: https://www.python.org/
+
+<!-- ACKNOWLEDGMENTS -->
+## RUNNING TO DO LIST TO TIDY AND DELETE
 
 To do (15/08/2025)
 
@@ -78,9 +237,12 @@ To Do (29/08/2025)
 
 - I (archie) want to edit the plots so that cancers are displayed as a list next to the plot as selecting a few makes it a super long title
 
+
+
 - code for probability access plots i think takes too long to compute or soemthing is wrong with the code that geenrates the plots in the GUI but i (sophia) cant work it out 
 
 
 
 
-![Alt text](Data_flow.png?raw=true "Data Flow Plan Diagram")
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
