@@ -89,10 +89,43 @@ _For more examples, please refer to the [Documentation](https://example.com)_
 
 <!-- ROADMAP -->
 ## Roadmap
+Tool:
+Longer (probably in order of priority, but note we have to get the linac capacity calculation incorporated)
+- [] Change to using H3 hexagons. Download population at the 400 m resolution and resample? Note that the hexagons will have different sizes across the country, this is okay, but need to make sure calculation is working correctly
+- [] Implement traveltime API hit. For functionality, add a button to switch between time (driving and public transport) and distance-based calculations (warn or stop user, if API is not configured correctly)
+- [] Incorporate OpenStreetMap and overlay the plots on top (using transparency)
+- [] Add in the linac capacity calculation code (allow the user to change the lambda, and capacity of each linac)
+- [] Get the linac locations for all countries, either from IAEA or Polish paper
+- [] Add in the isochrone plot (maybe this is extra, we can just use the API directly to plot the individual traveltimes)
+- [] Add in the functionality for the user to click to add linacs
 
-- [x] TO WRITE
-- 
+Medium 
+- [] Add functionaility and a dropdown to allow user to switch between exponential decay probability and a step-function
+- [] Add some additional information into the title, or nearby. For example, mean probability by square, mean probability per population, mean distance to linac etc.
+- [] Create an updated flowchart to insert into the readme
+  
+Shorter
+- [] Add clarity to treated by radiotherapy plot - add a textbox which allows user to set a flat percentage (e.g. 10 %, 25 %) and also add a tickbox that loads the treated percentage per cancer type (if found)
+- [] Add variable distance scale to Distance to Nearest LINAC (keep linear ? or log?)
+- [] Add a lower 10^k to all plot colourbars
 
+Paper / publicity:
+- [] Present to CERN people
+- [] Release the tool on GitHub
+- [] White paper presenting the tool in journal such as Radiotherapy and Oncology (The Green Journal) / Frontiers in Oncology – Radiation Oncology Section / Physics in Medicine & Biology (PMB) / The Lancet Oncology (?)
+- [] Analysis paper focusing on (e.g.) UK
+
+Thorough UK Analysis:
+- [] Determine the cities of poorest access in the UK, for public transport and driving
+- [] Analyse the difference between using distance and travel time
+- [] how much should linac capacity be to improve access (i,e, number of new machines)? where should new centres be placed to improve access? (look at existing hospital sites w/out machine)
+- [] Speak / present to Sarah Quinlan (Radiotherapy UK)
+
+<!-- ROADMAP -->
+## Bugs
+
+- [] Fix select all cancer types ticking all cancers and then erroring cos filename is too long
+- [] Fix that when you go onto the distance plotting, the 'distance' text then stays if you swap back to another plot
 
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
