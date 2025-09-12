@@ -13,15 +13,16 @@ from PyQt5.QtWidgets import (
     QProgressBar, QFileDialog, QHBoxLayout, QGroupBox, 
     QSplitter, QCheckBox, QScrollArea, QTextEdit, 
     QListWidget, QListWidgetItem, QTreeWidget, 
-    QTreeWidgetItem, QHeaderView, QSpinBox
+    QTreeWidgetItem, QHeaderView, QSpinBox,
+    QDoubleSpinBox,
 )
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, Normalize
 from matplotlib.ticker import LogLocator, ScalarFormatter
 from matplotlib import cm
 
@@ -41,9 +42,10 @@ from b_cancer_incidence.generate_cancer_type_map_v2 import (
     DEFAULT_OPTIMAL_RT_CSV,
     DEFAULT_ACTUAL_RT_DIR,
 )
-from c_probability_of_access.visualization.generate_access_map import generate_accessibility_plot
+from c_probability_of_access.visualization.generate_access_map_v2 import generate_accessibility_plot
 
-# Defaults
+# ---- DEFAULTS ----
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 #DEFAULT_XARRAY_PATH = BASE_DIR / "b_cancer_incidence" / "globocan_xarray.nc"
 DEFAULT_XARRAY_PATH = "b_cancer_incidence/globocan_xarray.nc"
@@ -54,6 +56,12 @@ SENTINEL_CANCERS = ("All cancers", "All cancers excl. NMSC")
 _SENTINELS_NORM = {s.strip().casefold() for s in SENTINEL_CANCERS}
 def _is_sentinel_cancer(name: str) -> bool:
         return name.strip().casefold() in _SENTINELS_NORM
+
+# Map labels (keep in one place to avoid typos)
+ACCESS_PROB_DIST = "Probability of Treatment Access (distance)"
+ACCESS_PROB_POPW = "Population-Weighted Treatment Access (distance)"
+ACCESS_DIST_NEAREST = "Distance to Nearest LINAC (km)"
+
 
 # ==== All Qthreads below for resampling, downloading and mapping ====
 
@@ -317,42 +325,105 @@ class MapGenerationThread(QThread):
             print(f"[THREAD] Error during map generation: {e}")
             self.error.emit(str(e))
 
-class AccessMapThread(QThread): 
-    finished = pyqtSignal(bytes, str, str) 
-    error = pyqtSignal(str) 
+class AccessMapThread(QThread):
+    """
+    Generates an Effective Access map (probability or population-weighted)
+    on a worker thread and returns:
+      - PNG bytes for quick preview,
+      - path to the numeric GeoTIFF (so the GUI can load it for live colour scaling),
+      - path to the PNG.
 
-    def __init__(self, country_code, resolution, population_raster_path, output_dir, overwrite_existing=False):
+    Params:
+      country_code: ISO3 lower-case (e.g., "gbr")
+      resolution: map pixel size in km (you can keep using this as default lambda)
+      population_raster_path: resampled raster path for the country+resolution
+      output_dir: where to write outputs
+      overwrite_existing: allow overwrite of existing .png/.tif
+      lambda_km: optional; if None, falls back to `resolution`
+      cutoff_factor: max distance = cutoff_factor * lambda_km
+      value_to_plot: "pop_weighted" (default) or "prob"
+      mode: "nearest" (fast, default) or "multi" (independence-product)
+    """
+    finished = pyqtSignal(bytes, str, str)  # (image_bytes, tif_path, png_path)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        country_code,
+        resolution,
+        population_raster_path,
+        output_dir,
+        overwrite_existing=True,
+        *,
+        lambda_km=None,
+        cutoff_factor=5.0,
+        value_to_plot="pop_weighted",
+        mode="nearest",
+    ):
         super().__init__()
-        self.country_code = country_code 
-        self.resolution = resolution 
-        self.population_raster_path = population_raster_path 
-        self.output_dir = output_dir 
-        self.overwrite_existing = overwrite_existing 
+        self.country_code = country_code
+        self.resolution = float(resolution)
+        self.population_raster_path = population_raster_path
+        self.output_dir = output_dir
+        self.overwrite_existing = bool(overwrite_existing)
+
+        # new, user-tunable knobs (safe defaults)
+        self.lambda_km = float(lambda_km) if lambda_km is not None else None
+        self.cutoff_factor = float(cutoff_factor)
+        self.value_to_plot = str(value_to_plot)
+        self.mode = str(mode)
 
     def run(self):
         try:
+            type_tag_map = {
+                "pop_weighted": "access_prob_popw",
+                "prob":         "access_prob_dist",
+                "distance_km":  "distance_to_linac",
+            }
+            type_tag = type_tag_map.get(self.value_to_plot, "access_prob_dist")
 
-            output_path = os.path.join(
-                self.output_dir, f"{self.country_code}_{self.resolution}km_access_probability.png"
+            # Only append mode for probability maps
+            if self.value_to_plot in ("pop_weighted", "prob"):
+                base = f"{self.country_code}_{self.resolution}km_{type_tag}_{self.mode}"
+            else:
+                base = f"{self.country_code}_{self.resolution}km_{type_tag}"
+
+
+            linac_xlsx = os.path.join(
+                "c_probability_of_access", "linac", f"{self.country_code}_DIRAC.xlsx"
             )
-            print(f"[THREAD] Generating access map at {output_path}...")
 
-            probability = generate_accessibility_plot(
+            # λ defaults to resolution (backward compatible)
+            lam = self.lambda_km if self.lambda_km is not None else self.resolution
+            cutoff_km = self.cutoff_factor * lam
+
+            print(f"[THREAD] Generating access map: base={base}, λ={lam} km, cutoff={cutoff_km} km, mode={self.mode}")
+
+            # New API returns (array, tif_path, png_path, stats)
+            _, tif_path, png_path, stats = generate_accessibility_plot(
                 population_raster_path=self.population_raster_path,
-                linac_excel_path=f"c_probability_of_access/linac/{self.country_code}_DIRAC.xlsx",  # Adjust path if needed
+                linac_excel_path=linac_xlsx,
                 country=self.country_code,
                 output_dir=self.output_dir,
-                output_name=f"{self.country_code}_{self.resolution}km_access_probability.png",
-                lambda_km=self.resolution,
-                max_distance_km=5 * self.resolution,
+                output_name=base,          # basename only; function appends .tif/.png
+                lambda_km=lam,
+                max_distance_km=cutoff_km,
                 dpi=300,
-                show_plot=False
+                show_plot=False,
+                value_to_plot=self.value_to_plot,  # "pop_weighted" or "prob"
+                mode=self.mode,                    # "nearest" or "multi"
+                write_tif=True,                    # crucial for GUI interactivity
+                overwrite=self.overwrite_existing,
             )
 
-            with open(output_path, "rb") as f:
-                image_data = f.read()
+            # Read PNG bytes for the quick preview (GUI will prefer TIFF if present)
+            image_data = b""
+            if png_path and os.path.exists(png_path):
+                with open(png_path, "rb") as f:
+                    image_data = f.read()
 
-            self.finished.emit(image_data, "", output_path)
+            # Hand both paths back; your slot will load the TIFF for interactive scaling
+            self.finished.emit(image_data, tif_path or "", png_path or "")
 
         except Exception as e:
             print(f"[THREAD] Error generating access map: {e}")
@@ -400,6 +471,8 @@ class GeoSpacRadAccess(QMainWindow):
         self.hide_missing_cases = True
         self._suppress_item_changed = False
         self._current_title = ""
+        self._is_probability_map = False
+        self._is_distance_map = False
         self.setup_ui()
           
 
@@ -555,7 +628,14 @@ class GeoSpacRadAccess(QMainWindow):
         # Map type box
         self.map_type_label = QLabel("Select map to generate:")
         self.map_type_combo = QComboBox() 
-        self.map_type_combo.addItems(["Cancer Incidence", "Treated by Radiotherapy", "Optimally Treated by Radiotherapy", "Population Density", "Effective Access (Population-Weighted)"])
+        self.map_type_combo.addItems([
+            "Cancer Incidence", "Treated by Radiotherapy", 
+            "Optimally Treated by Radiotherapy", "Population Density", 
+            ACCESS_PROB_DIST,
+            ACCESS_PROB_POPW,
+            ACCESS_DIST_NEAREST,
+
+        ])
         self.generate_map_btn = QPushButton("Generate Map")
         self.generate_map_btn.setEnabled(False)  
         self.check_cancer_map_availability() # check if cancer map generation is available, if so enable the button
@@ -623,6 +703,34 @@ class GeoSpacRadAccess(QMainWindow):
         self.under1_checkbox.setChecked(False)
         row.addWidget(self.under1_checkbox)
 
+        # ---- λ (km) control for access maps ----
+        self.lambda_label = QLabel("    λ (km):")
+        self.lambda_spin = QDoubleSpinBox()
+        self.lambda_spin.setDecimals(1)
+        self.lambda_spin.setRange(0.1, 5000.0)
+        self.lambda_spin.setSingleStep(0.5)
+        self.lambda_spin.setSuffix(" km")
+        # default λ = current resolution; also starts disabled until an access map is chosen
+        self.lambda_spin.setValue(float(self.resolution_combo.currentText()))
+        self.lambda_label.setVisible(False)
+        self.lambda_spin.setVisible(False)
+
+        row.addWidget(self.lambda_label)
+        row.addWidget(self.lambda_spin)
+
+        # ---- NEW: Access mode selector ----
+        self.mode_label = QLabel("Mode:")
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems([
+            "Nearest LINAC (fast)",
+            "Multiple LINACs (independence)"
+        ])
+        self.mode_combo.setCurrentIndex(0)
+        self.mode_label.setVisible(False)
+        self.mode_combo.setVisible(False)
+        row.addWidget(self.mode_label)
+        row.addWidget(self.mode_combo)
+
         right_layout.addLayout(row)
 
         # --- Matplotlib canvas + toolbar (interactive) ---
@@ -649,6 +757,22 @@ class GeoSpacRadAccess(QMainWindow):
         self.under1_checkbox.stateChanged.connect(lambda _:
                                                   self._redraw_with_current_settings())
         
+        # update λ visibility & behavior when map-type or resolution changes
+        self.map_type_combo.currentTextChanged.connect(self._on_map_type_changed)
+        #self.resolution_combo.currentTextChanged.connect(self._on_resolution_changed)
+
+
+        # Debounce timer for access-map refreshes
+        self._access_regen_timer = QTimer(self)
+        self._access_regen_timer.setSingleShot(True)
+        self._access_regen_timer.setInterval(300)  # 300 ms debounce
+        self._access_regen_timer.timeout.connect(self._refresh_access_map)
+
+        self.lambda_spin.valueChanged.connect(self._schedule_access_map_refresh)
+        self.mode_combo.currentIndexChanged.connect(self._schedule_access_map_refresh)
+
+        
+
         right_layout.addWidget(QLabel("Status:"))
         right_layout.addWidget(self.status_text)
 
@@ -791,9 +915,9 @@ class GeoSpacRadAccess(QMainWindow):
             finally:
                 self._suppress_item_changed = False
 
-    # ---- Colourbar Update ----
+    # ---- Colourbar Graph Update ----
 
-    def _read_raster(self, tif_path: str) -> np.ma.MaskedArray:
+    def _read_raster(self, tif_path: str, mask_zero_for_log: bool = True) -> np.ma.MaskedArray:
         """Read first band as float64, mask non-finite and <= 0 (LogNorm-safe)."""
         with rasterio.open(tif_path) as ds:
             data = ds.read(1).astype(np.float64)
@@ -802,124 +926,174 @@ class GeoSpacRadAccess(QMainWindow):
 
         data = np.where(np.isfinite(data), data, np.nan)
         m = np.ma.masked_invalid(data)
-        m = np.ma.masked_less_equal(m, 0.0)
+        if mask_zero_for_log:
+            # For log-scaled maps: exclude 0 to keep LogNorm happy
+            m = np.ma.masked_less_equal(m, 0.0)
+        else:
+            # For probability maps (linear): allow 0, only mask negatives
+            m = np.ma.masked_less(m, 0.0)
         return m
 
     def display_raster_from_tif(self, tif_path: str):
-        """
-        Load numeric data from GeoTIFF and draw it with LogNorm + colorbar,
-        enabling live scale control via the existing spinbox.
-        """
         try:
-            self._data = self._read_raster(tif_path)   # masked, >0
+            # mask zeros ONLY for log-style maps (neither probability nor distance)
+            mask_zeros = (not getattr(self, "_is_probability_map", False)) and (not getattr(self, "_is_distance_map", False))
+            self._data = self._read_raster(tif_path, mask_zero_for_log=mask_zeros)
+            
             if self._data is None or self._data.size == 0 or self._data.mask.all():
                 self.update_status("No positive data to display.")
                 return
-            # Initial draw (auto vmin/vmax inside)
-            self._plot_log(self._data)
+
+            self._plot_log(self._data)  # (name kept, behaviour branches inside)
+
+            # Toggle controls: log-scale widgets off for probability maps
+            is_prob = getattr(self, "_is_probability_map", False)
+            is_dist = getattr(self, "_is_distance_map", False)
+            disable_logs = is_prob or is_dist
+
+            self.exp_spin.setEnabled(not disable_logs)
+            self.auto_btn.setEnabled(not disable_logs)
+            if hasattr(self, "under1_checkbox"):
+                self.under1_checkbox.setEnabled(not disable_logs)
+                if disable_logs and self.under1_checkbox.isChecked():
+                    self.under1_checkbox.setChecked(False)
+
             self.update_status(f"Rendered from: {tif_path}")
-            # Make the controls usable
-            self.exp_spin.setEnabled(True)
-            self.auto_btn.setEnabled(True)
         except Exception as e:
             self.update_status(f"Error reading raster: {e}")
 
     def _plot_log(self, data: np.ma.MaskedArray, vmin=None, vmax=None):
-        """Initial draw or update with LogNorm + colorbar."""
-        # choose defaults if not supplied
         vals = data.compressed()
         if vals.size == 0:
-            self.update_status("No positive values for log scaling.")
+            self.update_status("No data available for plotting.")
             return
-    
-        # Defaults if not given
-        if vmin is None:
-            vmin = float(np.percentile(vals, 2))
-            vmin = max(vmin, 1e-12)
-        if vmax is None:
-            vmax = float(np.percentile(vals, 98))
-            if vmax <= vmin:  # safety
-                vmax = vmin * 10.0
 
-        # (a) Bucket < 1 into a single colour when enabled
-        bucket_under_one = hasattr(self, "under1_checkbox") and self.under1_checkbox.isChecked()
-        if bucket_under_one:
-            vmin = max(vmin, 1.0)  # ensure the scale starts at 1
-        norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+        is_prob = getattr(self, "_is_probability_map", False)
+        is_dist = getattr(self, "_is_distance_map", False)
 
-        # Use a copy so set_under doesn't mutate the global cmap
-        cmap = cm.get_cmap("viridis").copy()
-        extend_mode = "neither"
-        if bucket_under_one:
-            cmap.set_under("#d9d9d9")  # choose the "bucketed" colour here
-            extend_mode = "min"        # show a lower-triangle on the colorbar
+        if is_prob:
+            # ---- Linear scale for probability 0..1 ----
+            # Default limits
+            if vmin is None:
+                vmin = 0.0
+            if vmax is None:
+                # cap at 1.0 but allow lower if all data < 1
+                vmax = float(np.nanmax(vals)) if np.isfinite(np.nanmax(vals)) else 1.0
+                vmax = min(max(vmax, 0.0), 1.0)
+                if vmax <= vmin:
+                    vmax = vmin + 1e-6
 
-        norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+            # Safety (prevents the “Invalid vmin or vmax” crash)
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                vmin, vmax = 0.0, 1.0
 
+            norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+            cmap = cm.get_cmap("viridis").copy()
+            #cmap.set_bad("#f0f0f0")   # <— sea/nodata light grey
+            extend_mode = "neither"
+
+        elif is_dist:
+            # ---- Linear scale for distance (km), include zeros ----
+            if vmin is None: vmin = 0.0
+            if vmax is None:
+                # robust upper for pretty map; adjust if you prefer max()
+                vmax = float(np.nanpercentile(vals, 98)) if vals.size else 1.0
+                if vmax <= vmin: vmax = vmin + 1e-6
+            norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+            cmap = cm.get_cmap("viridis").copy()
+            extend_mode = "neither"
+
+        else:
+            # ---- Log scale for non-probability maps ----
+            if vmin is None:
+                vmin = float(np.percentile(vals, 2))
+                vmin = max(vmin, 1e-12)
+            if vmax is None:
+                vmax = float(np.percentile(vals, 98))
+                if vmax <= vmin:
+                    vmax = vmin * 10.0
+
+            bucket_under_one = hasattr(self, "under1_checkbox") and self.under1_checkbox.isChecked()
+            if bucket_under_one:
+                vmin = max(vmin, 1.0)
+            norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+            cmap = cm.get_cmap("viridis").copy()
+            extend_mode = "min" if bucket_under_one else "neither"
+            if bucket_under_one:
+                cmap.set_under("#d9d9d9")
+
+        # --- draw/update ---
         if self._im is None:
-            self.ax.clear(); 
+            self.ax.clear()
             self.ax.set_axis_on()
             self._im = self.ax.imshow(
-                data, 
-                origin="upper", 
-                cmap=cmap,
-                norm=norm, 
-                interpolation="nearest",
-                extent=getattr(self, "_extent", None)  # (b) geospatial axes if available
+                data, origin="upper", cmap=cmap, norm=norm,
+                interpolation="nearest", extent=getattr(self, "_extent", None)
             )
             self.ax.set_aspect("equal", adjustable="box")
             self.ax.set_xlabel("Longitude")
             self.ax.set_ylabel("Latitude")
-
-            # (Re)create colorbar with correct 'extend'
             if self._cbar:
                 self._cbar.remove()
-            self._cbar = self.fig.colorbar(
-                self._im, ax=self.ax, fraction=0.046, pad=0.04, extend=extend_mode
-            )
-                
+            self._cbar = self.fig.colorbar(self._im, ax=self.ax, fraction=0.046, pad=0.04, extend=extend_mode)
         else:
             self._im.set_data(data)
             self._im.set_norm(norm)
             self._im.set_cmap(cmap)
-
             if self._extent is not None:
                 self._im.set_extent(self._extent)
             self.ax.set_aspect("equal", adjustable="box")
-
-            # Recreate colorbar if extend mode changes; otherwise just update
             need_recreate = (self._cbar is None) or (getattr(self._cbar, "extend", None) != extend_mode)
             if need_recreate:
                 if self._cbar:
                     self._cbar.remove()
-                self._cbar = self.fig.colorbar(
-                    self._im, ax=self.ax, fraction=0.046, pad=0.04, extend=extend_mode
-                )
+                self._cbar = self.fig.colorbar(self._im, ax=self.ax, fraction=0.046, pad=0.04, extend=extend_mode)
             else:
                 self._cbar.update_normal(self._im)
 
-        # nice log ticks
-        self._cbar.locator = LogLocator(base=10)
-        self._cbar.formatter = ScalarFormatter()
-
-        if bucket_under_one:
-            self._cbar.set_label("Values < 1 shown in purple")
-
-        self._cbar.update_ticks()
+        # ---- tick formatting ----
+        if is_prob:
+            # linear ticks 0..1
+            ticks = np.linspace(0.0, 1.0, 6)
+            try:
+                self._cbar.set_ticks(ticks)
+                self._cbar.set_ticklabels([f"{t:.1f}" for t in ticks])
+            except Exception:
+                pass
+            self._cbar.set_label("Probability", rotation=90)
         
+        elif is_dist:
+            # linear ticks in km
+            try:
+                lo, hi = norm.vmin, norm.vmax
+                ticks = np.linspace(lo, hi, 6)
+                self._cbar.set_ticks(ticks)
+                self._cbar.set_ticklabels([f"{t:.0f}" for t in ticks])
+            except Exception:
+                pass
+            self._cbar.set_label("Distance (km)", rotation=90)
+        
+        else:
+            self._cbar.locator = LogLocator(base=10)
+            self._cbar.formatter = ScalarFormatter()
+            self._cbar.update_ticks()
 
-        # set k so 10^k ~= current vmax
-        import math
-        k = int(math.ceil(math.log10(max(vmax, 1e-12))))
-        # avoid signal storm on init
-        self.exp_spin.blockSignals(True)
-        self.exp_spin.setValue(k)
-        self.exp_spin.blockSignals(False)
+        # ---- keep title + update exp_spin state for log-only ----
+        if is_prob or is_dist:
+            # Sync the spin to something sensible but keep it disabled by caller
+            self.exp_spin.blockSignals(True)
+            self.exp_spin.setValue(0)
+            self.exp_spin.blockSignals(False)
+        else:
+            import math
+            k = int(math.ceil(math.log10(max(vmax, 1e-12))))
+            self.exp_spin.blockSignals(True)
+            self.exp_spin.setValue(k)
+            self.exp_spin.blockSignals(False)
 
         self.ax.set_title(getattr(self, "_current_title", ""), fontsize=11, pad=6)
         self.canvas.draw_idle()
 
-    
     def _redraw_with_current_settings(self):
         if self._data is None or self._im is None:
             return
@@ -930,6 +1104,8 @@ class GeoSpacRadAccess(QMainWindow):
 
     def _apply_exp_upper(self):
         """When k changes: set vmax = 10^k, keep vmin sane, redraw."""
+        if getattr(self, "_is_probability_map", False):
+            return
         if self._data is None or self._im is None:
             return
         import math
@@ -952,6 +1128,9 @@ class GeoSpacRadAccess(QMainWindow):
 
     def _auto_from_data_set_upper(self):
         """Pick k from the data (≈ceil(log10(98th percentile)))."""
+        if getattr(self, "_is_probability_map", False):
+            return
+        
         if self._data is None:
             return
         vals = self._data.compressed()
@@ -963,6 +1142,170 @@ class GeoSpacRadAccess(QMainWindow):
         k = int(math.ceil(math.log10(vmax)))
         # set spin (which will call _apply_exp_upper via signal)
         self.exp_spin.setValue(k)
+
+    def _rt_title_suffix(self, iso3: str, cancers: list[str],
+                     include_actual: bool, include_optimal: bool) -> str:
+        """
+        Build a short note for the title, mirroring the generator's logic:
+        - If 'actual' selected but actual CSV missing → fallback note.
+        - If 'actual' selected but some cancers missing in actual CSV → list them.
+        - If 'optimal' selected or incidence → no suffix.
+        """
+        try:
+            # Only relevant when user asked for "Treated by Radiotherapy"
+            if not include_actual or include_optimal:
+                return ""
+
+            # Load optimal map (for parity; we only need it to mirror conditions)
+            opt_map = _rt_load_csv(DEFAULT_OPTIMAL_RT_CSV)
+
+            # Load per-country actual (may be absent)
+            actual_path = os.path.join(DEFAULT_ACTUAL_RT_DIR, f"{iso3.upper()}.csv")
+            act_map = _rt_load_csv(actual_path) if os.path.exists(actual_path) else None
+
+            used_optimal = False
+            missing_actual_for: list[str] = []
+
+            if act_map is None:
+                # No actual file at all → full fallback
+                used_optimal = True
+                missing_actual_for = cancers[:]
+            else:
+                # Actual exists; check per-cancer coverage
+                for ct in cancers:
+                    if _rt_norm_key(ct) not in act_map:
+                        used_optimal = True
+                        missing_actual_for.append(ct)
+
+            if used_optimal:
+                # Match the generator’s wording
+                if missing_actual_for:
+                    return f"\n(fallback to optimal for some cancers) [no actual for: " + ", ".join(missing_actual_for) + "]"
+                else:
+                    return " (fallback to optimal for some cancers)"
+            return ""
+        except Exception as e:
+            # Non-fatal: if CSVs misbehave, just show no suffix and log a hint
+            self.update_status(f"Note: could not compute RT title suffix ({e}).")
+            return ""
+
+    def _is_access_map_text(self, text: str) -> bool:
+        # supports both the new labels and the legacy one
+        return text in (
+            ACCESS_PROB_DIST,
+            ACCESS_PROB_POPW,
+        )
+    
+    def _is_distance_map_text(self, text: str) -> bool:
+        return text == ACCESS_DIST_NEAREST
+
+    def _current_access_mode(self) -> str:
+        """
+        Return "nearest" or "multi" based on the access-mode combo.
+        """
+        if not hasattr(self, "mode_combo"):
+            return "nearest"
+        t = self.mode_combo.currentText().lower()
+        return "multi" if "multi" in t else "nearest"
+    
+    # ---- Lambda button functions ----
+
+    def _on_map_type_changed(self, _text: str):
+        """Show/hide λ control depending on whether an access map is selected."""
+        is_access = self._is_access_map_text(self.map_type_combo.currentText())
+        is_dist   = self._is_distance_map_text(self.map_type_combo.currentText())
+
+        self.lambda_label.setVisible(is_access)
+        self.lambda_spin.setVisible(is_access)
+        self.mode_label.setVisible(is_access)
+        self.mode_combo.setVisible(is_access)
+        if is_access:
+            # default λ to 20 when switching into access mode
+            try:
+                self.lambda_spin.blockSignals(True)
+                self.lambda_spin.setValue(float(20))
+            finally:
+                self.lambda_spin.blockSignals(False)
+
+    """def _on_resolution_changed(self, _text: str):
+        """"""Keep λ in sync with resolution by default when in access mode.""""""
+        if self._is_access_map_text(self.map_type_combo.currentText()):
+            try:
+                self.lambda_spin.blockSignals(True)
+                self.lambda_spin.setValue(float(self.resolution_combo.currentText()))
+            finally:
+                self.lambda_spin.blockSignals(False)
+"""
+    def _schedule_access_map_refresh(self, *_):
+        """Start/restart the debounce timer after λ or Mode changes."""
+        if not self._is_access_map_text(self.map_type_combo.currentText()):
+            return
+        # Restart the single-shot timer (debounce)
+        self._access_regen_timer.stop()
+        self._access_regen_timer.start()
+
+    def _refresh_access_map(self):
+        """
+        Debounced refresh: recompute access map with current λ and Mode.
+        Uses silent overwrite to avoid prompts during interactive tweaking.
+        """
+        if not self._is_access_map_text(self.map_type_combo.currentText()):
+            return
+
+        country = self.country_combo.currentText()
+        if not country:
+            return
+
+        try:
+            iso3_lower = countries.lookup(country).alpha_3.lower()
+            resolution = float(self.resolution_combo.currentText())
+            population_raster_path = f"a_population_density/resampled/{iso3_lower}_{resolution}km.tif"
+            if not os.path.exists(population_raster_path):
+                self.update_status("No resampled raster found; cannot refresh access map.")
+                return
+        except Exception as e:
+            self.update_status(f"λ/Mode change ignored (bad state): {e}")
+            return
+
+        # Access subtype and value_to_plot
+        mt = self.map_type_combo.currentText()
+        if self._is_access_map_text.__defaults__ is None:
+            # Nothing special, but make linters happy
+            pass
+        vtp = ("prob" if ("distance" in mt.lower()) else "pop_weighted")
+
+        lam = float(self.lambda_spin.value())
+        mode = self._current_access_mode()
+
+        output_dir = "c_probability_of_access/access_probability_maps"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Cancel any running worker
+        if self.map_thread is not None and self.map_thread.isRunning():
+            self.map_thread.quit()
+            self.map_thread.wait()
+
+        # Title (reflect λ)
+        if vtp == "prob":
+            self._current_title = f"{country} — Probability of treatment access (distance) (λ={lam:g} km)"
+        else:
+            self._current_title = f"{country} — Probability of treatment access (population-weighted) (λ={lam:g} km)"
+
+        # Silent refresh (overwrite) for interactive tweaks
+        self.map_thread = AccessMapThread(
+            country_code=iso3_lower,
+            resolution=resolution,
+            population_raster_path=population_raster_path,
+            output_dir=output_dir,
+            overwrite_existing=True,
+            lambda_km=lam,
+            cutoff_factor=5.0,
+            value_to_plot=vtp,
+            mode=mode,                      # <-- wire the chosen mode
+        )
+        self.map_thread.finished.connect(self.cancer_type_map_completed)
+        self.map_thread.error.connect(self.on_map_generation_error)
+        self.map_thread.start()
 
 
     # ---- HELPER METHODS for setup_ui(): re-ordered by appearance ----
@@ -1370,6 +1713,16 @@ class GeoSpacRadAccess(QMainWindow):
         self.processing_msgbox.setModal(False) # no buttons, so user can’t close it manually
         self.processing_msgbox.show()
 
+    def _expected_access_png(self, iso3_lower: str, resolution: float, value_to_plot: str) -> str:
+        tag = "access_prob_popw" if value_to_plot == "pop_weighted" else "access_prob_dist"
+        base = f"{iso3_lower}_{resolution}km_{tag}.png"
+        return os.path.join("c_probability_of_access", "access_probability_maps", base)
+
+    def _expected_distance_png(self, iso3_lower: str, resolution: float) -> str:
+        base = f"{iso3_lower}_{resolution}km_distance_to_linac.png"
+        return os.path.join("c_probability_of_access", "access_probability_maps", base)
+
+
     def initiate_cancer_type_map_generate(self):
         """
         UPDATE ME
@@ -1434,11 +1787,18 @@ class GeoSpacRadAccess(QMainWindow):
         """
         country = self.country_combo.currentText()
         map_type_text = self.map_type_combo.currentText()
-       
+        
+        is_access_map    = self._is_access_map_text(map_type_text)
+        is_distance_map  = self._is_distance_map_text(map_type_text)
+
+        self._is_probability_map = bool(is_access_map)
+        self._is_distance_map    = bool(is_distance_map)
 
 
-        if map_type_text in ["Population Density", "Effective Access (Population-Weighted)"]:
-            selected_cancer_types = []  # no cancer types
+
+
+        if map_type_text == "Population Density" or is_access_map:
+            selected_cancer_types = []
         else:
             selected_cancer_types = self.get_selected_cancer_types()
             if not selected_cancer_types:
@@ -1462,10 +1822,15 @@ class GeoSpacRadAccess(QMainWindow):
             output_subfolder = "a_population_density/population_density_maps"
             title = f"{country} — Population Density ({resolution} km)"
 
-        elif map_type_text == "Effective Access (Population-Weighted)": 
-            filename_prefix = "access_probability" 
+        elif map_type_text == ACCESS_PROB_DIST:
+            filename_prefix = "access_prob_distance"
             output_subfolder = "c_probability_of_access/access_probability_maps"
-            title = f"{country} — Effective Access (λ={resolution} km)"
+            title = f"{country} — Probability of treatment access (distance) (λ={resolution} km)"    #<- update me 
+
+        elif map_type_text == ACCESS_PROB_POPW:
+            filename_prefix = "access_prob_popweighted"
+            output_subfolder = "c_probability_of_access/access_probability_maps"
+            title = f"{country} — Probability of treatment access (population-weighted) (λ={resolution} km)"
         
         elif include_optimal_RT_utilisation:
             filename_prefix = "optimally_treated"
@@ -1476,12 +1841,30 @@ class GeoSpacRadAccess(QMainWindow):
             filename_prefix = "treated"
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
             title = f"{country} — {map_type_text}: {cancers} ({resolution} km)"
+
+        elif map_type_text == ACCESS_DIST_NEAREST:
+            filename_prefix = "distance_to_linac"
+            output_subfolder = "c_probability_of_access/access_probability_maps"
+            title = f"{country} — Distance to nearest LINAC (km)"
         
         else:
             filename_prefix = "incidence"
             output_subfolder = f"b_cancer_incidence/cancer_type_maps/{filename_prefix}_maps"
             title = f"{country} — {map_type_text}: {cancers} ({resolution} km)"
 
+        # We need ISO3 for the per-country CSV name:
+        iso3 = countries.lookup(country).alpha_3
+
+        # Build a suffix that mirrors the generator's "fallback" logic
+        suffix = self._rt_title_suffix(
+            iso3=iso3,
+            cancers=selected_cancer_types,
+            include_actual=include_RT_utilisation,
+            include_optimal=include_optimal_RT_utilisation
+        )
+
+        # Append and expose to the plotting code
+        title = title + suffix
         self._current_title = title  
 
 
@@ -1491,20 +1874,26 @@ class GeoSpacRadAccess(QMainWindow):
             country_code = countries.lookup(country).alpha_3.lower()
             population_raster_path = f"a_population_density/resampled/{country_code}_{resolution}km.tif"
 
-            # NOW construct the correct target file path
-            target_file = f"{output_subfolder}/{country_code}_{safe_label}_{resolution}km_{filename_prefix}_density.png"
+            if is_access_map:
+                vtp = "pop_weighted" if map_type_text == ACCESS_PROB_POPW else "prob"
+                target_file = self._expected_access_png(country_code, resolution, vtp)
+            elif is_distance_map:
+                target_file = self._expected_distance_png(country_code, resolution)    
+            else:
+                # existing naming for population/cancer maps:
+                safe_label = "_".join(ct.replace(" ", "_") for ct in selected_cancer_types) if selected_cancer_types else "All cancers"
+                target_file = f"{output_subfolder}/{country_code}_{safe_label}_{resolution}km_{filename_prefix}_density.png"
 
-            # THEN check for overwrite
+            """# THEN check for overwrite
             if os.path.exists(target_file):
                 reply = QMessageBox.question(
-                    self,
-                    "Overwrite?",
-                    f"{target_file} exists. Overwrite?",
-                    QMessageBox.Yes | QMessageBox.No
+                    self, "Overwrite?", f"{target_file} exists. Overwrite?", QMessageBox.Yes | QMessageBox.No
                 )
                 overwrite = reply == QMessageBox.Yes
             else:
-                overwrite = False
+                overwrite = False"""
+            overwrite = True
+
 
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -1528,14 +1917,51 @@ class GeoSpacRadAccess(QMainWindow):
                 overwrite_existing=overwrite
             )
 
+        elif is_distance_map:
+            # Distance doesn’t use λ or multi-LINAC “mode” — always nearest
+            self._current_title = title
+            self.map_thread = AccessMapThread(
+                country_code=country_code,
+                resolution=resolution,
+                population_raster_path=population_raster_path,
+                output_dir=output_subfolder,
+                overwrite_existing=True,
+                lambda_km=None,          # ignored by generator for distance
+                cutoff_factor=5.0,       # ignored for distance
+                value_to_plot="distance_km",  # <— KEY
+                mode="nearest",          # <— force nearest
+            )
         
-        elif map_type_text == "Effective Access (Population-Weighted)": 
-            self.map_thread = AccessMapThread(country_code=country_code,
+        elif is_access_map: 
+            """self.map_thread = AccessMapThread(country_code=country_code,
             resolution=resolution,
             population_raster_path=population_raster_path,
             output_dir=output_subfolder,
             overwrite_existing=overwrite
-        )
+        )"""
+            vtp = "pop_weighted" if map_type_text == ACCESS_PROB_POPW else "prob"
+            mode = self._current_access_mode()
+
+            lam = float(self.lambda_spin.value()) if self.lambda_spin.isVisible() else float(self.resolution_combo.currentText())
+            # Update title with λ
+            if vtp == "prob":
+                title = f"{country} — {ACCESS_PROB_DIST} (λ={lam:g} km)"
+            else:
+                title = f"{country} — {ACCESS_PROB_POPW} (λ={lam:g} km)"
+            self._current_title = title
+
+            # keep your existing arguments; add optional lambda if you expose a control for it
+            self.map_thread = AccessMapThread(
+                country_code=country_code,                 # e.g. "gbr"
+                resolution=resolution,                     # km (also default λ if you like)
+                population_raster_path=population_raster_path,
+                output_dir=output_subfolder,
+                overwrite_existing=True,
+                lambda_km=lam,
+                cutoff_factor=5.0,                         # same behaviour as before
+                value_to_plot=vtp,                    
+                mode=mode,                            # or "multi" for independence-product
+            )
 
         else:
             # Call thread for cancer maps
