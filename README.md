@@ -122,6 +122,20 @@ Thorough UK Analysis:
 - [] Speak / present to Sarah Quinlan (Radiotherapy UK)
 
 <!-- ROADMAP -->
+
+## Implementing H3
+
+
+https://h3geo.org/
+- H3 is a discrete global grid system for indexing geographies into a hexagonal grid, developed at Uber.
+- Coordinates can be indexed to cell IDs that each represent a unique cell.
+- Indexed data can be quickly joined across disparate datasets and aggregated at different levels of precision.
+- H3 enables a range of algorithms and optimizations based on the grid, including nearest neighbors, shortest path, gradient smoothing, and more."
+- Its Github here: https://github.com/uber/h3?tab=readme-ov-file
+
+Kontur have population density maps at 3 different H3 resolutions (400m, 3km , 22km)
+- https://data.humdata.org/dataset/kontur-population-dataset
+
 ## Bugs
 
 - [] Fix select all cancer types ticking all cancers and then erroring cos filename is too long
