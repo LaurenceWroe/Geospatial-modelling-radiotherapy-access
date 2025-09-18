@@ -286,7 +286,16 @@ To Do (29/08/2025)
 
 
 
-- code for probability access plots i think takes too long to compute or soemthing is wrong with the code that geenrates the plots in the GUI but i (sophia) cant work it out 
+- code for probability access plots i think takes too long to compute or soemthing is wrong with the code that geenrates the plots in the GUI but i (sophia) cant work it out
+
+
+
+LIST OF PYTHON FILES THAT ARE BEING USED: 
+(i want to clear out all the redundant files to neaten things up)
+- download_worldpop.py (legacy model) 
+- resample_population.py 
+- generate_cancer_type_map_v2.py 
+- generate_access_map_v2.py
 
 
 
