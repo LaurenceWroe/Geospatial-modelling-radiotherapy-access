@@ -36,7 +36,6 @@ import xarray as xr
 DEFAULT_OPTIMAL_RT_CSV = "b_cancer_incidence/optimal_rt_utilisations.csv"
 DEFAULT_ACTUAL_RT_DIR  = "b_cancer_incidence/actual_data"
 DEFAULT_XARRAY_PATH    = "b_cancer_incidence/globocan_xarray.nc"
-N_LINAC_CALC_PATH = "c_probability_of_access/linac" 
 
 
 # ----------------- Utilities ----------------------------
@@ -67,7 +66,7 @@ def get_n_liancs_from_excel(country_code: str) -> int:
     determining the number of linacs in each country by reading 
     the the number rof coulmns in the excel file
     """
-    excel_path = f"N_LINAC_CALC_PATH/{country_code}_DIRAC.xlsx"
+    excel_path = f"c_probability_of_access/linac/{country_code}_DIRAC.xlsx"
     df = pd.read_excel(excel_path) 
 
     n_linacs = df.shape[1] -1 
@@ -412,6 +411,8 @@ def generate_cancer_type_map(
     
     # ----- Linac capacity handling ----- 
     total_capacity = None 
+    # --- adding n_linac definition here as well as in GUI --- 
+    n_linacs = get_n_liancs_from_excel(country_code) 
     if include_capacity_weighted: 
         if linac_capacity is None: 
             raise ValueError("When include_capacity_weighted is True, you must provide linac_capacity") 
@@ -560,10 +561,10 @@ def generate_cancer_type_map(
     # --- updating suffix block to include capacity-weighted maps --- 
     
     if include_optimal_RT_utilisation:
-        suffix = "optimally_treated_capacity" if include_capacity_weighted else "optimally_treated"
+        suffix = f"optimally_treated_capacity_{linac_capacity}" if include_capacity_weighted else "optimally_treated"
     
     elif include_RT_utilisation:
-        suffix = "treated_capacity" if include_capacity_weighted else "treated"
+        suffix = f"treated_capacity_{linac_capacity}" if include_capacity_weighted else "treated"
     else:
         suffix = "incidence"
 
