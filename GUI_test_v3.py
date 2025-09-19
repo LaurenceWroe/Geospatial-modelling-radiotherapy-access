@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (
     QSplitter, QCheckBox, QScrollArea, QTextEdit, 
     QListWidget, QListWidgetItem, QTreeWidget, 
     QTreeWidgetItem, QHeaderView, QSpinBox,
-    QDoubleSpinBox, QLineEdit,
+    QDoubleSpinBox, QSlider
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
@@ -658,10 +658,35 @@ class GeoSpacRadAccess(QMainWindow):
 
         # --- adding new widgets to generate capacity-weighted maps ---
         self.capacity_weighted_checkbox = QCheckBox("Enable capacity-weighted maps") 
-        self.capacity_weighted_checkbox.setChecked(False) 
+        self.capacity_weighted_checkbox.setChecked(False)
+        self.capacity_weighted_checkbox.setVisible(False) 
+
         self.linac_capacity_label = QLabel("Linac capacity (patients/year):") 
-        self.linac_capacity_input = QLineEdit() 
-        self.linac_capacity_input.setPlaceholderText("e.g. 100") 
+        self.linac_capacity_label.setVisible(False) 
+
+        # Horizontal layout to hold slider + spinbox 
+        self.linac_capacity_layout = QHBoxLayout() 
+
+        # Slider
+        self.linac_capacity_slider = QSlider(Qt.Horizontal)
+        self.linac_capacity_slider.setRange(100, 700)
+        self.linac_capacity_slider.setTickInterval(50)
+        self.linac_capacity_slider.setTickPosition(QSlider.TicksBelow)
+        self.linac_capacity_slider.setVisible(False)
+
+        # Spinbox for precise adjustment
+        self.linac_capacity_spin = QSpinBox()
+        self.linac_capacity_spin.setRange(100, 700)
+        self.linac_capacity_spin.setSingleStep(10)
+        self.linac_capacity_spin.setVisible(False)
+
+        # Keep them synced
+        self.linac_capacity_slider.valueChanged.connect(self.linac_capacity_spin.setValue)
+        self.linac_capacity_spin.valueChanged.connect(self.linac_capacity_slider.setValue)
+
+        # Add to layout
+        self.linac_capacity_layout.addWidget(self.linac_capacity_slider)
+        self.linac_capacity_layout.addWidget(self.linac_capacity_spin)
 
         map_layout.addWidget(self.cancer_label)
 
@@ -672,7 +697,7 @@ class GeoSpacRadAccess(QMainWindow):
         map_layout.addWidget(self.map_type_combo)
         map_layout.addWidget(self.capacity_weighted_checkbox)
         map_layout.addWidget(self.linac_capacity_label) 
-        map_layout.addWidget(self.linac_capacity_input)
+        map_layout.addLayout(self.linac_capacity_layout)
         map_layout.addWidget(self.generate_map_btn)
 
 
@@ -788,7 +813,8 @@ class GeoSpacRadAccess(QMainWindow):
         # update λ visibility & behavior when map-type or resolution changes
         self.map_type_combo.currentTextChanged.connect(self._on_map_type_changed)
         #self.resolution_combo.currentTextChanged.connect(self._on_resolution_changed)
-
+        
+        self.map_type_combo.currentTextChanged.connect(self._on_map_type_changed_capacity_controls)
 
         # Debounce timer for access-map refreshes
         self._access_regen_timer = QTimer(self)
@@ -1741,6 +1767,18 @@ class GeoSpacRadAccess(QMainWindow):
         self.processing_msgbox.setModal(False) # no buttons, so user can’t close it manually
         self.processing_msgbox.show()
 
+    def _on_map_type_changed_capacity_controls(self,text): 
+        if text in ["Treated by Radiotherapy", "Optimally Treated by Radiotherapy"]: 
+            self.capacity_weighted_checkbox.setVisible(True) 
+            self.linac_capacity_label.setVisible(True)
+            self.linac_capacity_slider.setVisible(True)
+            self.linac_capacity_spin.setVisible(True) 
+        else:
+            self.capacity_weighted_checkbox.setVisible(False) 
+            self.linac_capacity_label.setVisible(False)
+            self.linac_capacity_slider.setVisible(False)
+            self.linac_capacity_spin.setVisible(False)  
+
     def _expected_access_png(self, iso3_lower: str, resolution: float, value_to_plot: str) -> str:
         tag = "access_prob_popw" if value_to_plot == "pop_weighted" else "access_prob_dist"
         base = f"{iso3_lower}_{resolution}km_{tag}.png"
@@ -1849,7 +1887,7 @@ class GeoSpacRadAccess(QMainWindow):
         include_capacity_weighted = self.capacity_weighted_checkbox.isChecked() 
 
         #Getting linac capacity and number of linacs from user inputs: 
-        linac_capacity = float(self.linac_capacity_input.text()) if self.linac_capacity_input.text() else None 
+        linac_capacity = float(self.linac_capacity_spin.value()) if self.capacity_weighted_checkbox.isChecked() else None 
         country_code = countries.lookup(country).alpha_3.lower()
         n_linacs = get_n_liancs_from_excel(country_code) 
 
