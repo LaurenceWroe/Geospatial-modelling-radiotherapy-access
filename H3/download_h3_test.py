@@ -1,6 +1,31 @@
 """
-Downloading data from Kontur population as a compressed Geopackage, which means 
-that the population is already hex-binned. 
+(21/09/25)  
+Downloads a compressed geopackage (.gpkg.gz) containing population counts in hexagonal cells
+for a given country. 
+
+donwload_H3_population_density_zipped 
+Inputs: 
+country_name: the country name 
+output_dir: where to save the file 
+progress_callback: optional function that reports download progress 
+overwrite_download: whether to redownload the file if it alreadye exists. 
+
+Process: 
+1. Gets the ISO alpha-2 country code (e.g. IT for Italy) 
+2. Builds the download url from Kontur's S3 bucket 
+3. Defines the output file name
+
+Returns: 
+(True/False, message) depending on success of download 
+
+load_h3_population 
+Reads the compressed geopackage file directly 
+
+Returns: 
+gdf: the full GeoDataFrame, including hexagon polygons 
+df: just a Pandas DataFrame with a "h3" index and "population" (useful if
+geometry isnt needed)
+
 
 Once downloaded, the hex population can be loaded into python. 
 
@@ -9,6 +34,7 @@ Once downloaded, the hex population can be loaded into python.
 
 from pycountry import countries
 import os
+import h3
 from pathlib import Path
 import geopandas as gpd
 import pandas as pd
