@@ -1,29 +1,43 @@
+# H3_GUI_polygon_only.py
 import sys
 from pathlib import Path
-import re
 import pycountry
 import xarray as xr
 from PyQt5 import QtWidgets, QtCore, QtGui
 
-from H3.download_h3_test import download_H3_population_density_zipped
+from H3.download_h3_test import load_h3_population, download_H3_population_density_zipped
 from H3.resample_h3_population_test import generate_population_density_map_only_h3
-from H3.generate_cancer_type_map_H3_test import generate_cancer_type_map_h3
+from H3.generate_cancer_type_map_H3_test import generate_cancer_type_map_h3_polygons
 
 # ---------- Helpers ----------
+def safe_lookup_country(name_or_code: str):
+    """Return pycountry.Country object from a name or ISO code."""
+    try:
+        return pycountry.countries.lookup(name_or_code)
+    except LookupError:
+        for c in pycountry.countries:
+            if c.name.lower() == name_or_code.lower():
+                return c
+        raise ValueError(f"Could not resolve country: {name_or_code}")
+
 def get_available_countries():
-    """Return list of all ISO-recognized country names."""
+    """Return sorted list of all ISO-recognized country names."""
     return sorted([c.name for c in pycountry.countries])
 
 def get_cancer_types_from_tensor(xarray_path="b_cancer_incidence/globocan_xarray.nc"):
+    """Return list of cancer type names from xarray DataArray."""
     da = xr.open_dataarray(xarray_path)
     if "Cancer" not in da.coords:
         raise ValueError("Tensor missing 'Cancer' coordinate.")
     return list(da.coords["Cancer"].values)
 
 def get_country_gpkg_path(country_name, input_dir="H3_zipped_pop_density_maps"):
-    alpha2 = pycountry.countries.lookup(country_name).alpha_2.upper()
-    fname = f"{alpha2}_population_density.gpkg.gz"
+    """Return path to gzipped H3 GeoPackage for the country."""
+    country_obj = safe_lookup_country(country_name)
+    alpha2 = country_obj.alpha_2.upper()
+    fname = f"{alpha2}_H3_population_density_map.gpkg.gz"
     return Path(input_dir) / fname
+
 
 # ---------- Worker Thread ----------
 class MapWorker(QtCore.QThread):
@@ -34,122 +48,173 @@ class MapWorker(QtCore.QThread):
     def __init__(self, country, cancers, linac_capacity, map_type):
         super().__init__()
         self.country = country
-        self.cancers = cancers
+        self.cancers = cancers or []
         self.linac_capacity = linac_capacity
         self.map_type = map_type
 
     def run(self):
         try:
+            country_obj = safe_lookup_country(self.country)
             gpkg_path = get_country_gpkg_path(self.country)
-            alpha2 = pycountry.countries.lookup(self.country).alpha_2
 
-            # Download if missing
+            # Download population data if missing
             if not gpkg_path.exists():
                 self.log_signal.emit(f"🌍 Downloading population data for {self.country}...")
-                download_H3_population_density_zipped(alpha2)
-                self.log_signal.emit("✅ Download complete.")
-            else:
-                self.log_signal.emit(f"Population data exists, using cached file.")
+                success, msg = download_H3_population_density_zipped(self.country)
+                self.log_signal.emit(msg)
+                if not success:
+                    raise RuntimeError(f"Failed to download H3 population data for {self.country}")
 
-            # Generate population map if requested
+            # Population density map
             if self.map_type == "Population Density":
                 self.log_signal.emit(f"▶ Generating population density map for {self.country}...")
-                pop_gpkg, pop_png = generate_population_density_map_only_h3(self.country)
-                with open(pop_png, "rb") as f:
-                    self.image_signal.emit(f.read())
-                self.finished_signal.emit(pop_png)
-                return
+                result = generate_population_density_map_only_h3(
+                    country_name=self.country,
+                    input_dir=str(gpkg_path.parent),
+                    output_dir="h3_population_maps",
+                    overwrite_existing=False,
+                    return_image=True,
+                    h3_gpkg_path=gpkg_path
+                )
 
-            # Otherwise generate cancer map
-            self.log_signal.emit(f"▶ Generating cancer map for {self.country} ({self.map_type})...")
-            da = xr.open_dataarray("b_cancer_incidence/globocan_xarray.nc")
-            result = generate_cancer_type_map_h3(
-                country_iso3=pycountry.countries.lookup(self.country).alpha_3,
-                cancer_types=self.cancers,
-                da=da,
-                include_RT_utilisation=True,
-                include_optimal_RT_utilisation=True,
-                include_capacity_weighted="capacity-weighted" in self.map_type.lower(),
-                linac_capacity=self.linac_capacity,
-                n_linacs=5,
-            )
-            # Send image bytes
-            self.image_signal.emit(result["image_bytes"])
-            self.finished_signal.emit(result["gpkg_path"])
+            # Cancer map
+            else:
+                if not self.cancers:
+                    self.log_signal.emit("⚠️ No cancer types selected; aborting.")
+                    return
+
+                self.log_signal.emit(f"▶ Generating cancer map for {self.country} ({self.map_type})...")
+                da = xr.open_dataarray("b_cancer_incidence/globocan_xarray.nc")
+
+                include_optimal = "optim" in self.map_type.lower()
+                include_actual = "treated" in self.map_type.lower() and not include_optimal
+                include_capacity_weighted = "capacity" in self.map_type.lower()
+
+                result = generate_cancer_type_map_h3_polygons(
+                    country_iso3=country_obj.alpha_3,
+                    h3_gpkg_path=gpkg_path,
+                    da=da,
+                    cancer_types=self.cancers,
+                    include_RT_utilisation=include_actual,
+                    include_optimal_RT_utilisation=include_optimal,
+                    include_capacity_weighted=include_capacity_weighted,
+                    linac_capacity=self.linac_capacity,
+                    n_linacs=5,
+                    output_dir="cancer_type_maps_h3",
+                    return_image=True,
+                    overwrite=False
+                )
+
+            # Display image
+            img = result.get("image_bytes")
+            if img:
+                self.image_signal.emit(img)
+            else:
+                self.log_signal.emit("⚠️ No image preview available.")
+
+            # Return GeoPackage path
+            gpkg_out = result.get("gpkg_path") or result.get("gpkg")
+            if gpkg_out:
+                self.finished_signal.emit(str(gpkg_out))
+            else:
+                self.log_signal.emit("⚠️ GeoPackage path not returned by generator.")
+
         except Exception as e:
-            self.log_signal.emit(f"❌ Error: {e}")
+            self.log_signal.emit(f"❌ Error: {type(e).__name__}: {e}")
+
 
 # ---------- GUI ----------
 class CancerMapGUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cancer Map Generator (H3)")
-        self.resize(800, 700)
+        self.setWindowTitle("Cancer Map Generator (H3) — Polygon-only")
+        self.resize(900, 800)
 
-        self.countries = get_available_countries()
-        self.cancers = get_cancer_types_from_tensor()
+        # Load countries and cancer types safely
+        try:
+            self.countries = get_available_countries()
+        except Exception:
+            self.countries = ["United States", "United Kingdom"]
+
+        try:
+            self.cancers = get_cancer_types_from_tensor()
+        except Exception:
+            self.cancers = ["All cancers"]
 
         layout = QtWidgets.QVBoxLayout(self)
 
-        # Country dropdown
+        # Controls grid
+        controls = QtWidgets.QGridLayout()
+        row = 0
+
+        controls.addWidget(QtWidgets.QLabel("Select country:"), row, 0)
         self.country_combo = QtWidgets.QComboBox()
         self.country_combo.addItems(self.countries)
-        layout.addWidget(QtWidgets.QLabel("Select country:"))
-        layout.addWidget(self.country_combo)
+        controls.addWidget(self.country_combo, row, 1)
+        row += 1
 
-        # Cancer checklist
-        layout.addWidget(QtWidgets.QLabel("Select cancer types:"))
+        controls.addWidget(QtWidgets.QLabel("Select cancer types:"), row, 0)
         self.cancer_list = QtWidgets.QListWidget()
         self.cancer_list.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         for c in self.cancers:
-            item = QtWidgets.QListWidgetItem(c)
+            item = QtWidgets.QListWidgetItem(str(c))
             item.setCheckState(QtCore.Qt.Unchecked)
             self.cancer_list.addItem(item)
-        layout.addWidget(self.cancer_list)
+        controls.addWidget(self.cancer_list, row, 1)
+        row += 1
 
-        # Linac capacity slider + spinbox
-        layout.addWidget(QtWidgets.QLabel("Linac capacity (patients/year):"))
+        controls.addWidget(QtWidgets.QLabel("Linac capacity (patients/year):"), row, 0)
+        hbox_capacity = QtWidgets.QHBoxLayout()
         self.capacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.capacity_slider.setRange(50, 1000)
         self.capacity_slider.setValue(250)
         self.capacity_spin = QtWidgets.QSpinBox()
         self.capacity_spin.setRange(50, 1000)
         self.capacity_spin.setValue(250)
-
-        cap_layout = QtWidgets.QHBoxLayout()
-        cap_layout.addWidget(self.capacity_slider)
-        cap_layout.addWidget(self.capacity_spin)
-        layout.addLayout(cap_layout)
-
         self.capacity_slider.valueChanged.connect(self.capacity_spin.setValue)
         self.capacity_spin.valueChanged.connect(self.capacity_slider.setValue)
+        hbox_capacity.addWidget(self.capacity_slider)
+        hbox_capacity.addWidget(self.capacity_spin)
+        controls.addLayout(hbox_capacity, row, 1)
+        row += 1
 
-        # Map type dropdown
-        layout.addWidget(QtWidgets.QLabel("Select map to generate:"))
+        controls.addWidget(QtWidgets.QLabel("Select map to generate:"), row, 0)
         self.map_type_combo = QtWidgets.QComboBox()
         self.map_type_combo.addItems([
-            "Cancer Incidence", "Treated by Radiotherapy",
-            "Optimally Treated by Radiotherapy", "Population Density"
+            "Cancer Incidence",
+            "Treated by Radiotherapy",
+            "Optimally Treated by Radiotherapy",
+            "Population Density"
         ])
-        layout.addWidget(self.map_type_combo)
+        controls.addWidget(self.map_type_combo, row, 1)
+        row += 1
+
+        layout.addLayout(controls)
 
         # Generate button
         self.run_btn = QtWidgets.QPushButton("Generate Map")
+        self.run_btn.clicked.connect(self.run_maps)
         layout.addWidget(self.run_btn)
 
-        # Map display
+        # Map display & log
+        content = QtWidgets.QHBoxLayout()
+
+        left = QtWidgets.QVBoxLayout()
         self.map_label = QtWidgets.QLabel()
         self.map_label.setFixedSize(700, 500)
         self.map_label.setScaledContents(True)
-        layout.addWidget(self.map_label)
+        left.addWidget(self.map_label)
+        content.addLayout(left)
 
-        # Log
+        right = QtWidgets.QVBoxLayout()
+        right.addWidget(QtWidgets.QLabel("Log:"))
         self.log = QtWidgets.QTextEdit()
         self.log.setReadOnly(True)
-        layout.addWidget(QtWidgets.QLabel("Log:"))
-        layout.addWidget(self.log)
+        right.addWidget(self.log)
+        content.addLayout(right)
 
-        self.run_btn.clicked.connect(self.run_maps)
+        layout.addLayout(content)
+        self.worker = None
 
     def run_maps(self):
         country = self.country_combo.currentText()
@@ -165,6 +230,8 @@ class CancerMapGUI(QtWidgets.QWidget):
             self.log.append("⚠️ Please select at least one cancer type.")
             return
 
+        self.log.append(f"▶ Starting generation: {country} — {map_type}")
+
         self.worker = MapWorker(country, cancers, linac_capacity, map_type)
         self.worker.log_signal.connect(self._append_log)
         self.worker.image_signal.connect(self._display_image)
@@ -175,12 +242,16 @@ class CancerMapGUI(QtWidgets.QWidget):
         self.log.append(msg)
 
     def _display_image(self, image_bytes):
+        if not image_bytes:
+            self.log.append("⚠️ No image bytes to display.")
+            return
         pixmap = QtGui.QPixmap()
         pixmap.loadFromData(image_bytes)
         self.map_label.setPixmap(pixmap)
 
     def _finished(self, path):
         self.log.append(f"✅ Map saved: {path}")
+
 
 # ---------- Run ----------
 if __name__ == "__main__":

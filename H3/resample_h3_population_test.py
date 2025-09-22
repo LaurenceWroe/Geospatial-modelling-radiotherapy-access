@@ -39,16 +39,19 @@ dict
       - resampled_population (float): sum of populations in output
 """
 
-from pathlib import Path
+
 import h3
 from pycountry import countries
-import geopandas as gpd
 import h3.api.basic_int as h3  # h3-py library
-import pandas as pd
+from H3.download_h3_test import load_h3_population
 import numpy as np
-import matplotlib.cm as cm
+import pandas as pd
+import geopandas as gpd
+from pathlib import Path
+from typing import Dict, Optional
+from matplotlib import pyplot as plt, cm
 from matplotlib.colors import LogNorm, ListedColormap
-import matplotlib.pyplot as plt
+from io import BytesIO
 
 from H3.download_h3_test import load_h3_population
 
@@ -146,44 +149,71 @@ def resample_h3_population(country_name,
     except Exception as e:
         return {"success": False, "message": f"Resampling failed: {str(e)}"}
 
-def generate_population_density_map_only_h3(country_name: str,
-                                            input_dir="H3_zipped_pop_density_maps",
-                                            output_dir="h3_population_maps",
-                                            resolution: int = None,
-                                            overwrite_existing: bool = False):
-    """Generate and save a raw population density hex map (GeoPackage + PNG)."""
-    gdf, df = load_h3_population(country_name, input_dir=input_dir)
+
+def generate_population_density_map_only_h3(
+    country_name: str,
+    input_dir="H3_zipped_pop_density_maps",
+    output_dir="h3_population_maps",
+    resolution: int = None,  # optional placeholder
+    overwrite_existing: bool = False,
+    return_image: bool = True,
+    h3_gpkg_path: Path = None
+):
+    """
+    Generate a polygon-only population density map (GeoPackage + PNG preview bytes).
+    
+    Returns:
+        dict: {"gpkg_path": Path to saved GeoPackage, "image_bytes": PNG bytes}
+    """
+    # Determine gpkg path
+    if h3_gpkg_path is None:
+        gdf, df = load_h3_population(country_name, input_dir=input_dir)
+    else:
+        gdf, df = load_h3_population(country_name, input_dir=str(h3_gpkg_path.parent))
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     output_gpkg = Path(output_dir) / f"{country_name}_population_density.gpkg"
     output_png = Path(output_dir) / f"{country_name}_population_density.png"
 
+    # Save GeoPackage
     if not output_gpkg.exists() or overwrite_existing:
         gdf.to_file(output_gpkg, driver="GPKG")
 
-    # Plot PNG
-    pop = gdf["population"]
-    pop = np.where(pop > 0, pop, np.nan)
+    image_bytes = None
+    if return_image:
+        # Prepare population values
+        pop = gdf["population"].to_numpy()
+        pop = np.where(pop > 0, pop, np.nan)
 
-    cmap = cm.get_cmap("viridis", 256)
-    new_colors = cmap(np.linspace(0, 1, 256))
-    dark_blue = np.array([0, 0, 139 / 255, 1.0])
-    new_colors[0] = dark_blue
-    custom_cmap = ListedColormap(new_colors)
-    custom_cmap.set_under(dark_blue)
+        # Custom colormap (viridis with dark blue for zero)
+        cmap = cm.get_cmap("viridis", 256)
+        new_colors = cmap(np.linspace(0, 1, 256))
+        dark_blue = np.array([0, 0, 139 / 255, 1.0])
+        new_colors[0] = dark_blue
+        custom_cmap = ListedColormap(new_colors)
+        custom_cmap.set_under(dark_blue)
 
-    fig, ax = plt.subplots(figsize=(10, 8))
-    gdf.plot(column="population", cmap=custom_cmap,
-             norm=LogNorm(vmin=1, vmax=np.nanmax(pop)),
-             linewidth=0, ax=ax)
+        # Plot
+        fig, ax = plt.subplots(figsize=(10, 8))
+        gdf.plot(column="population", cmap=custom_cmap,
+                 norm=LogNorm(vmin=1, vmax=np.nanmax(pop)),
+                 linewidth=0, ax=ax)
 
-    cbar = plt.colorbar(cm.ScalarMappable(norm=LogNorm(vmin=1, vmax=np.nanmax(pop)),
-                                          cmap=custom_cmap), ax=ax)
-    cbar.set_label("Population density (people per hex)")
-    ax.set_title(f"{country_name} — Population Density (H3)")
-    plt.tight_layout()
-    plt.savefig(output_png, dpi=300)
-    plt.close()
+        cbar = plt.colorbar(cm.ScalarMappable(norm=LogNorm(vmin=1, vmax=np.nanmax(pop)),
+                                              cmap=custom_cmap), ax=ax)
+        cbar.set_label("Population density (people per hex)")
+        ax.set_title(f"{country_name} — Population Density (H3)")
+        ax.axis("off")
+        plt.tight_layout()
 
-    return str(output_gpkg), str(output_png)
+        # Save PNG bytes to memory
+        buf = BytesIO()
+        plt.savefig(buf, format="png", dpi=150)
+        plt.close(fig)
+        buf.seek(0)
+        image_bytes = buf.getvalue()
+
+    return {"gpkg_path": output_gpkg, "image_bytes": image_bytes}
+
+
 
