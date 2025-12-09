@@ -1,0 +1,21 @@
+# need some version control in here
+numpy
+pandas
+scipy
+matplotlib
+xarray
+pycountry
+rioxarray
+rasterio
+
+
+
+
+
+
+
+
+
+# Optional extras:
+
+
