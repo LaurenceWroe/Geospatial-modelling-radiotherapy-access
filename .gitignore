@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Data files (large / downloaded)
+a_population_density/raw_from_worldpop/*.tif
+a_population_density/resampled/*.tif
+H3_pop_density_maps/*.gpkg
+H3_zipped_pop_density_maps/*.gpkg.gz
+h3_population_maps/
+h3_accessibility_maps/
+cancer_type_maps_h3/
+
+# Generated outputs (reproducible from inputs)
+b_cancer_incidence/cancer_type_maps/incidence_maps/
+b_cancer_incidence/cancer_type_maps/treated_maps/
+b_cancer_incidence/cancer_type_maps/optimally_treated/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Claude Code session data
+.claude/
+
+# Test/scratch outputs
+/tmp/

@@ -1,0 +1,266 @@
+row,country,city,operator,reason,old_lat,old_lon,new_lat,new_lon,method
+195,Australia,Southport,Genesis Cancer Care-Southport,missing,,,-27.9687807,153.4066696,city+country
+252,Belgium,Antwerpen,Iridium kankernetwerk - Campus GZA Sint-Augustinus,"outside bbox (was 23.0227,72.5073)",23.0226706,72.5073082,51.2211097,4.3997081,city+country
+255,Belgium,Brasschaat,Iridium Kankernetwerk - Campus KLINA,"outside bbox (was 42.6189,20.5762)",42.6188946,20.5762363,51.2900693,4.4917295,city+country
+259,Belgium,Brussels,Cliniques de l'Europe/Europaziekenhuizen - Campus Ste-Elisabeth,"outside bbox (was 46.0955,-73.3515)",46.0955075,-73.3515107,50.8467372,4.352493,city+country
+265,Belgium,Genk,Limburgs Oncologisch Centrum (LOC) - Campus Sint-Jan,"outside bbox (was 25.4455,81.8449)",25.4455338,81.8448929,50.9654864,5.5001456,city+country
+268,Belgium,Haine-Saint-Paul,Centre Hospitalier Jolimont,"outside bbox (was 20.9320,77.7523)",20.9319821,77.7523039,50.4638005,4.1962644,city+country
+281,Belgium,Ottignies,UCL - Cliniques Universitaires Saint-Luc - Campus Clinique Saint-Pierre,"outside bbox (was 12.9605,77.5928)",12.9604809,77.5928035,50.666357,4.5690502,city+country
+382,Brazil,Franca,Fundação Civil Casa de Misericórdia de Franca,"outside bbox (was 46.2276,2.2137)",46.227638,2.213749,-20.5381768,-47.4009795,city+country
+793,Egypt,Alexandria,Alexandria Ayadi Al-Mostokbal Oncology Centre (AAAOC),"outside bbox (was 33.7740,-85.8855)",33.7739892,-85.885523,31.1991806,29.8951716,city+country
+795,Egypt,Alexandria,Kabary Hospital,"outside bbox (was 38.2266,48.2529)",38.2266025,48.2528949,31.1991806,29.8951716,city+country
+803,Egypt,Cairo,EI-Hussein University Hospital. Al-Azhar University. Faculty of Medicine,"outside bbox (was 36.8437,54.4017)",36.8436539,54.4016982,30.0443879,31.2357257,city+country
+806,Egypt,Cairo,Ahmed Maher Education Hospital,"outside bbox (was 32.6106,51.6184)",32.6106226,51.6184222,30.0443879,31.2357257,city+country
+807,Egypt,Cairo,International Medical Center (IMC),"outside bbox (was 43.2471,76.9153)",43.2471195,76.9153066,30.0443879,31.2357257,city+country
+810,Egypt,Cairo,Atomic Energy Authority (AEA) Radiotherapy Department,"outside bbox (was 30.2839,57.0834)",30.2839379,57.0833628,30.0443879,31.2357257,city+country
+812,Egypt,Cairo,Asalam International Hospital,"outside bbox (was 30.2915,57.0277)",30.2914715,57.0277132,30.0443879,31.2357257,city+country
+816,Egypt,Cairo,Gamma Knife Center Mahd Nasr Hospital,"outside bbox (was 36.2465,59.5949)",36.2465336,59.5949079,30.0443879,31.2357257,city+country
+818,Egypt,Cairo,Nasser Institute Hospital,"outside bbox (was 36.2972,59.6067)",36.2972006,59.60669,30.0966991,31.2400325,name+city+country
+821,Egypt,Cairo,El Doaa Hospital,"outside bbox (was 36.3551,59.5482)",36.3550923,59.5482048,30.0443879,31.2357257,city+country
+823,Egypt,Cairo,El Sweedy Charity Cancer Center,"outside bbox (was 37.2713,49.5921)",37.2712671,49.5920736,30.0443879,31.2357257,city+country
+826,Egypt,Cairo,Osama Ghanam Oncology Center,"outside bbox (was 37.2713,49.5921)",37.2712671,49.5920736,30.0443879,31.2357257,city+country
+836,Egypt,Giza,Bahia Charity Center,"outside bbox (was 35.7219,51.3347)",35.7218583,51.3346954,29.9870753,31.2118063,city+country
+842,Egypt,Luxor,Shiffa El Orman,"outside bbox (was 35.6801,51.4907)",35.6801058,51.4906751,25.702096,32.647186,city+country
+848,Egypt,Minya,El Menia Military Oncology center,"outside bbox (was 30.5833,2.8837)",30.5833161,2.8836701,28.2125404,30.9123741,city+country
+849,Egypt,Port Said,Al Soltman Hospital,"outside bbox (was 35.7345,51.3279)",35.7345076,51.3279493,31.263235,32.305505,city+country
+851,Egypt,Shebeen El Koum,Shebeen El Koum Military Oncology Center,"outside bbox (was 35.1500,38.8167)",35.15,38.8166667,,,FAILED
+860,Egypt,Zagazek,Zagazek Military Oncology Center,"outside bbox (was 35.7450,51.4121)",35.7450317,51.4120684,,,FAILED
+873,Finland,Helsinki,Docrates Klinikka,"outside bbox (was 36.7039,48.5185)",36.7039052,48.518466,60.1666204,24.9435408,city+country
+1683,India,Lucknow,ApolloMedics International life sciences limited,missing,,,26.8381,80.9346001,city+country
+1689,India,Madurai,Dhevaki Diagnostic Private Limited,missing,,,9.9261153,78.1140983,city+country
+1694,India,Mandya,Peripheral Cancer Centre,missing,,,12.6368939,76.7275477,city+country
+1702,India,Manipur,Regional Medical College,missing,,,24.7208818,93.9229386,city+country
+1703,India,Mathura,Shankar Institute of Cancer Therapy & Research,missing,,,27.4955539,77.6855554,city+country
+1705,India,Meerut,Lala Lajpatrai Memorial Medical College,missing,,,29.0018557,77.7679671,city+country
+1706,India,Meerut,Valentis Cancer Care Hospital Pvt. Ltd.,missing,,,29.0018557,77.7679671,city+country
+1707,India,Mehsana,Shankus Hospitals Private Limited,missing,,,23.6012628,72.3741516,city+country
+1709,India,Miraj,Shri Siddhi Vinayak Ganapati Cancer Hospital,missing,,,16.8585161,74.7108947,city+country
+1710,India,Miraj,Community Cancer Care,"outside bbox (was 47.5089,-79.6719)",47.5089229,-79.671882,16.8585161,74.7108947,city+country
+1715,India,Mohali,Behgal Institute of IT and Radiation Technology,missing,,,30.7041168,76.7176885,city+country
+1722,India,Mumbai,P. D. Hinduja National Hospital,missing,,,19.054999,72.8692035,city+country
+1730,India,Mumbai,APEX HCG ONCOLOGY HOSPITALS LLP,missing,,,19.054999,72.8692035,city+country
+1732,India,"Mylapore, Chennai",KMC HCG Curie Centre of Oncology,missing,,,13.0316473,80.2700166,city+country
+1737,India,Mysore,Narayana Hrudayalaya Surgical Hospital Pvt Ltd,missing,,,12.3051828,76.6553609,city+country
+1738,India,Nagpur,Rashtra Sant Tukdoji Cancer Hospital  & Research. Centre,missing,,,21.1498134,79.0820556,city+country
+1740,India,Nagpur,National Cancer Institute,missing,,,21.1498134,79.0820556,city+country
+1741,India,Nagpur,HCG NCHRI Cancer Centre,missing,,,21.1781655,79.1233803,name+city+country
+1748,India,Nashik,Namco Charitable Trusts Smt. S.G.S. Cancer Hospital - Udhav Memorial Cancer Hospital,missing,,,20.0112475,73.7902364,city+country
+1750,India,Nashik,Regional Referral Hospital,"outside bbox (was 34.5710,-86.9781)",34.5709621,-86.9780697,20.0112475,73.7902364,city+country
+1751,India,Nashik,Dr.Babasaheb Ambedkar Vaidyakiya Prathisthan’s Shri Guruji Rugnalaya,missing,,,20.0112475,73.7902364,city+country
+1758,India,New Dehli,SUPER SPECIALITY VETERANS HOSPITAL,missing,,,28.6138954,77.2090057,city+country
+1762,India,New Delhi,Army Hospital R & R,missing,,,28.6138954,77.2090057,city+country
+1769,India,New Delhi,Dr. B L Kapur Memorial Hospital,missing,,,28.6138954,77.2090057,city+country
+1772,India,New Delhi,Anand Health Care Research Centre,missing,,,28.6138954,77.2090057,city+country
+1781,India,New Delhi,Manipal Hospitals,missing,,,28.6138954,77.2090057,city+country
+1784,India,New Delhi,Vievekanand Nursing Home Pvt. Ltd.,missing,,,28.6138954,77.2090057,city+country
+1789,India,Panipat,LHDM & Dr Prem Hospital Pvt. LTD,missing,,,29.3912753,76.9771675,city+country
+1790,India,Pathanamthitta,St.Gregorios International Cancer Care and Multi-Speciality Center,missing,,,9.2780841,76.9737443,city+country
+1793,India,Patna,Indira Gandhi Institute of Medical Sciences,missing,,,25.6107234,85.0886408,name+city+country
+1816,India,Ranchi,Curie Abdur Razzaque Ansari Cancer Institute,missing,,,23.3700501,85.3250387,city+country
+1819,India,Rewari District,Dr S S Yadav Ram Bhagwan Charitable Institute of Cancer Management and Research,missing,,,28.2180521,76.5816859,city+country
+1821,India,Salem,Salem Cancer Institute,"outside bbox (was 29.7093,-95.4019)",29.7092691,-95.401868,11.6770178,78.1531844,name+city+country
+1824,India,SAMBALPUR,RADIANT HOSPITAL SERVICES PVT. LTD.,missing,,,21.5570606,84.1528515,city+country
+1825,India,Sangli,General Hospital,missing,,,16.829912,74.643088,name+city+country
+1827,India,Satara,Onco Life Cancer Centre PVT Ltd.,missing,,,17.6361289,74.2982781,city+country
+1831,India,Secunderabad,BHAVANI HEALTHCARE SERVICES PVT LTD,missing,,,17.4337246,78.5006827,city+country
+1844,India,Surat,"Samast Patidar Aarogya Foundation's, Kiran Super Multispeciality Hospital",missing,,,21.2094892,72.8317058,city+country
+1846,India,Thane,Bethany Trust-Bethany Hospital,missing,,,19.3653598,73.3685437,city+country
+1848,India,Thane,"Shirodkar Hospital Trust, Asian Institute of Medical Sciences",missing,,,19.3653598,73.3685437,city+country
+1858,India,Tiruchirappalli,GVN Cancer Cure Centre Trust,missing,,,10.8071144,78.6880939,city+country
+1859,India,Tirupati,S U R R   Gout General Hospital,missing,,,13.6316368,79.4231711,city+country
+1864,India,Trichy,Harshamitra Oncology Private Limited,missing,,,10.8071144,78.6880939,city+country
+1866,India,Trivandrum,Kims Healthcare Management Ltd,missing,,,8.4882267,76.947551,city+country
+1868,India,Vadodara,Shri Sayaji General Hospital,missing,,,22.2973142,73.1942567,city+country
+1872,India,Varanasi,Indian Railway Cancer Institute and Research Centre,missing,,,25.3356491,83.0076292,city+country
+1882,India,Visakhapatnam,King George Hospital,"outside bbox (was 51.5806,0.1121)",51.5805615,0.1120638,17.7081534,83.305631,name+city+country
+1883,India,Visakhapatnam,Lions Cancer Tretment & Reserch Centre,missing,,,17.6935526,83.2921297,city+country
+1884,India,Visakhapatnam,HCG Cancer Centre (A Unit of Health Care Global Enterprises Limited). HCG Pinnacle Oncology Private Limited,missing,,,17.6935526,83.2921297,city+country
+1888,India,Warangal,St Ann's Hospital,"outside bbox (was 40.1147,-82.9461)",40.1147248,-82.946132,17.980871,79.526069,name+city+country
+1912,Indonesia,KABUPATEN SEMARANG,Ken Saras Hospital,missing,,,-7.2027437,110.4223435,name+city+country
+1938,Indonesia,Surabaya,Dr. Soetomo General Academic Hospital,missing,,,-7.2462836,112.7377674,city+country
+1951,Iraq,Baghdad,Al-Safeer Private Hospital,missing,,,33.3061701,44.3872213,city+country
+1952,Iraq,Baghdad,Al-Andalus Oncology Hospital,missing,,,33.3061701,44.3872213,city+country
+1955,Iraq,Basra,Al Sadir Teaching Hospital,missing,,,30.4952371,47.8090981,city+country
+1961,Iraq,Hilla,Babylon Oncology Center,missing,,,32.482245,44.4328131,city+country
+1963,Iraq,"Hillah, Babylon",Al Imam Jaafar al-Sadeq hospital,missing,,,32.482245,44.4328131,city+country
+1965,Iraq,Karbala,Turkish Hospital,"outside bbox (was 25.2671,51.5148)",25.2671499,51.5147796,32.5984057,44.0157931,city+country
+1971,Iraq,Najaf,German Oncology Centre,"outside bbox (was 34.7298,33.0609)",34.7297972,33.0608625,32.0010227,44.3299926,city+country
+1972,Iraq,Najaf,Al-Forat Al-Awsat Teaching Hospital,missing,,,32.0010227,44.3299926,city+country
+1976,Iran,Ahwaz,"Golestan Hospital, Jundi Shapur University of Medical Sciences",missing,,,31.3230637,48.67932,city+country
+1977,Iran,Arak,Khansari Hospital,missing,,,34.0862719,49.6893884,city+country
+1980,Iran,Babolsar,Shahid Rajaee Oncology Hospital,missing,,,36.7008777,52.6481047,city+country
+1981,Iran,Bandar Abbas,Omid,missing,,,27.1901938,56.2842212,city+country
+1984,Iran,Dezful,Imam Hassan Mojtaba Hospital,missing,,,32.3780257,48.4032064,city+country
+1994,Iran,Kerman,Afzalipour,missing,,,30.2539864,57.0974316,name+city+country
+1997,Iran,Khoram Abad,Baran Center,"outside bbox (was 39.9710,32.7469)",39.9709517,32.7468686,36.1574185,58.8790071,city+country
+1999,Iran,Mashhad,Ghaem,missing,,,36.2942821,59.5787958,name+city+country
+2000,Iran,Mashhad,OMID University hospital,missing,,,36.2974945,59.6059232,city+country
+2001,Iran,Mashhad,Salehi (Private Clinic),missing,,,36.2974945,59.6059232,city+country
+2005,Iran,Qom,Sadra Radiotrapy parto Center,missing,,,34.6422939,50.8801184,city+country
+2006,Iran,Rasht,Gilan Radiotarpy Ankology Clinic,"outside bbox (was 42.4635,21.4694)",42.4634821,21.4694162,37.2697578,49.5894854,city+country
+2008,Iran,Rasht,Golsar Center,"outside bbox (was 28.1518,74.5464)",28.1518068,74.5463785,37.3032018,49.5877258,name+city+country
+2009,Iran,Rasht,Ghaem,missing,,,37.2745155,49.5334301,name+city+country
+2012,Iran,Sari,Dr. Shafiei Center,missing,,,36.5537458,53.0602761,city+country
+2014,Iran,Shiraz,Namazi Hospital,missing,,,29.6309873,52.5164629,name+city+country
+2016,Iran,Tabriz,International Hospital,missing,,,38.0738612,46.2978789,city+country
+2017,Iran,Tehran,Jorjani Medical Centre,missing,,,35.6892523,51.3896004,city+country
+2019,Iran,Tehran,Mary Curie (Private Clinic),missing,,,35.6892523,51.3896004,city+country
+2022,Iran,Tehran,Cancer Institute/ I Kahmeni Hospital,"outside bbox (was 13.0068,80.2398)",13.0067654,80.2398008,35.6892523,51.3896004,city+country
+2023,Iran,Tehran,Asia Tehran Hospital,missing,,,35.6892523,51.3896004,city+country
+2024,Iran,Tehran,Besat Hospital (Air Force Hospital),missing,,,35.6892523,51.3896004,city+country
+2026,Iran,Tehran,Gamma Knife Center,"outside bbox (was 30.0525,31.1957)",30.0524654,31.1956653,35.6892523,51.3896004,city+country
+2031,Iran,Tehran,Pars (Private Clinic),missing,,,35.6892523,51.3896004,city+country
+2040,Iran,Tehran,Kamrani Center,missing,,,35.6892523,51.3896004,city+country
+2043,Iran,Tehran,Gaandi Hospital,"outside bbox (was 14.0595,78.7488)",14.0594545,78.7488349,35.6892523,51.3896004,city+country
+2047,Iran,Tehran,Moheb Yas Hosp.,"outside bbox (was 37.2727,-79.9439)",37.272737,-79.9439165,35.6892523,51.3896004,city+country
+2048,Iran,Tehran,Omid Pars Center,missing,,,35.6892523,51.3896004,city+country
+2050,Iran,Urmia,Imam Khomeini,missing,,,37.5472976,45.0690639,name+city+country
+2051,Iran,Urmia,Dr. Ranjkeshzadeh Center,missing,,,37.548341,45.0667111,city+country
+2052,Iran,Urmia,Omid Center,"outside bbox (was 42.3676,-71.2931)",42.3676334,-71.2931101,37.548341,45.0667111,city+country
+2053,Iran,Yazd,RamezanZadeh Center,missing,,,32.0406164,54.6657189,city+country
+2059,Israel,Haifa,The Italian Hospital,"outside bbox (was 51.5210,-0.1217)",51.5209984,-0.1216606,32.8191218,34.9983856,city+country
+2082,Italy,Bagheria,U.O di radioterapia oncologica. villa Santa Teresa 'Diagnostica per immagine srl',missing,,,38.079351,13.509349,city+country
+2088,Italy,Barletta,"U.O.C. Radioterapia Oncologica. Ospedale ""R. Dimiccoli""",missing,,,41.3214976,16.2868696,city+country
+2099,Italy,Brindisi,P.O. A. Perrino,missing,,,40.6358599,17.6884975,city+country
+2100,Italy,Busto Arsizio,Unità Operativa di Radioterapia. Azienda Ospedaliera,missing,,,45.611932,8.8518269,city+country
+2108,Italy,Carrara,U.O. Radioterapia. Ospedale Civico- Azienda USL Nord Ovest,missing,,,44.0771026,10.096726,city+country
+2109,Italy,Casalpusterlengo,ASST Lodi - UOC Radioterapia,missing,,,45.1793292,9.6483958,city+country
+2114,Italy,CATANIA,UOSD RADIOTERAPIA ONCOLOGICA. AOU POLICLINICO RODOLICO,missing,,,37.5023612,15.0873718,city+country
+2132,Italy,Foggia,S.C. Radioterapia Oncologica. Az Ospedaliero-universitaria,missing,,,41.5028106,15.4528939,city+country
+2140,Italy,La spezia,Centro di Radioterapia Ingegner Alfredo Perioli. ASL5 -ospedalee Fettino,missing,,,44.238366,9.6912326,city+country
+2157,Italy,Milano,Centro Diagnostico Italiano,missing,,,45.4586757,9.1206169,name+city+country
+2167,Italy,Napoli,Radioterapia Oncologica PO Ascalesi. I.R.C.C.S. INT FONDAZIONE G.PASCALE,missing,,,40.8358846,14.2487679,city+country
+2185,Italy,Pavia,UOC Radioterapia Oncologica. Fondazione IRCCS Policlinico S. Matteo,missing,,,45.0368547,9.1378251,city+country
+2190,Italy,Piacenza,U.O.C Radioterapia. Ospedale Civile G.da Saliceto,missing,,,44.8476352,9.6665313,city+country
+2199,Italy,Reggio Calabria,U.O. di Radioterapia Oncologica. Azienda Ospedaliera,missing,,,38.1035389,15.6397556,city+country
+2200,Italy,Reggio Emilia,Radioterapia Oncologica. Arcispedale S. Maria Nuova - IRCCS,missing,,,44.6086674,10.5940667,city+country
+2203,Italy,Rionero in Vulture,U.O. di Radioterapia. Centro di Riferimento Oncologico Regionale- I.R.C.C.S.,missing,,,40.9261881,15.6694407,city+country
+2207,Italy,Roma,C.I.RAD. S.r.l. Villa Benedetta,missing,,,41.8933203,12.4829321,city+country
+2209,Italy,Roma,Centro Di Radiotherapia Ars Medica,"outside bbox (was 44.8119,20.4627)",44.8118734,20.462697,41.8933203,12.4829321,city+country
+2210,Italy,Roma,UO di Radioterapia Oncologica. Ist. di Radiologia - Università La Sapienza - Policlinico Umberto,missing,,,41.8933203,12.4829321,city+country
+2219,Italy,Roma,Unità Operativa di Radioterapia Oncologica. Casa di Cura Marco Polo,missing,,,41.8933203,12.4829321,city+country
+2221,Italy,Rovigo,UOC Radioterapia Oncologica. Ospedale Santa Maria della Misericordia,missing,,,44.9777098,12.2726835,city+country
+2222,Italy,Rovigo,AULSS 5 POLESANA - Ospedale S. Maria Misericordia - UOC Radioterapia,missing,,,44.9777098,12.2726835,city+country
+2224,Italy,salerno,U.O di radioterapia. Azienda ospedaliera universitaria san Giovanni di Dio e Ruggi D'aragona,missing,,,40.4194417,15.3106085,city+country
+2228,Italy,San Fermo della Battaglia,U.O. RADIOTERAPIA. OSPEDALE,missing,,,45.8084245,9.048551,city+country
+2233,Italy,Savona,S.C. Radioterapia. Ospedale S. Paolo,missing,,,44.2334238,8.2525727,city+country
+2242,Italy,Taranto,Stab. S. G. Moscati,missing,,,40.5488156,17.0805801,city+country
+2244,Italy,Teramo,U.O.C. di Radioterapia. P.O.MAZZINI,"outside bbox (was 41.4065,2.1945)",41.4065493,2.1945038,42.658118,13.6978746,city+country
+2250,Italy,Torino,Villa Maria Pia hospital,missing,,,45.0693958,7.7434467,name+city+country
+2254,Italy,Trento,Agenzia Provinciale Per la Protonterapia (ATreP),missing,,,46.0664228,11.1257601,city+country
+2257,Italy,Trieste,S. C. di Radioterapia Oncologica. Azienda Ospedaliero - Universitaria,missing,,,45.6496485,13.7772781,city+country
+2278,Japan,Adachi-ku,Sonoda-kai Radiation Oncology Clinic,missing,,,35.7746029,139.8045163,city+country
+2310,Japan,Beppu-shi,Noguchi Thyroid Clinic and Hospital,missing,,,33.2845752,131.4913063,city+country
+2331,Japan,Chosei-gun,Fukushima Takanori Memorial Clinic,"outside bbox (was 35.8526,-78.6433)",35.8525683,-78.6433091,35.4000235,140.4808679,city+country
+2336,Japan,Chuo-ku,Kobe Proton Center,missing,,,33.5892504,130.3927565,city+country
+2389,Japan,Hachioji-shi,Yaentoge Neurosurgical Hospital,"outside bbox (was 22.3024,73.1999)",22.3023889,73.1998668,35.6663595,139.3163653,city+country
+2445,Japan,Ibaraki-shi,Saito Yukouka Hospital,missing,,,34.8161302,135.5685528,city+country
+2446,Japan,Ibusuki-shi,Medipolis Proton Therapy and Research Center (MPRTC),"outside bbox (was 24.1761,72.4067)",24.1761085,72.4067222,31.2527953,130.6333097,city+country
+2450,Japan,Ichikawa-shi,Ichikawa General Hospital Tokyo Dental College,missing,,,35.721634,139.9309444,city+country
+2463,Japan,Ise-shi,Ise Municipal Hospital,missing,,,34.4875944,136.7092334,city+country
+2464,Japan,Ise-shi,Yamada Red Cross Hospital,missing,,,34.4875944,136.7092334,city+country
+2489,Japan,Kagoshima-shi,Hakuaikai Sagara Hospital,missing,,,31.596793,130.5571949,city+country
+2503,Japan,Kanagawa,Shonan Kamakura Advanced Medical Center,"outside bbox (was -37.8202,144.9564)",-37.8201637,144.9564074,35.4342935,139.374753,city+country
+2547,Japan,Kitamoto-shi,Kitasato University Kitasato Institute Medical Center Hospital,missing,,,36.0268711,139.5301389,city+country
+2550,Japan,Kobe-shi,Kobe 100 Years Memorial Hospital,missing,,,34.6932379,135.1943764,city+country
+2594,Japan,Kure-shi,Kure Medical Center Chugoku Cancer Center,missing,,,34.2484488,132.5652498,city+country
+2601,Japan,Kurume-shi,St. Mary's Hospital,"outside bbox (was 43.4369,-80.5031)",43.4368681,-80.503106,33.3196545,130.5080625,city+country
+2623,Japan,Makurazaki-shi,Southern Region Hospital,"outside bbox (was 33.5794,-84.3895)",33.5794457,-84.3895388,31.2728756,130.2970739,city+country
+2637,Japan,Mazara del Vallo,U.O: Radioterapia Oncologica. P.O: Abele Ajello,"outside bbox (was 44.9199,9.7186)",44.919889417927,9.7185829741041,,,FAILED
+2657,Japan,Miyakonojo-shi,Fujimoto Hayasuzu Hospital,missing,,,31.7196106,131.0612029,city+country
+3404,Pakistan,Swat,Swat Institute of Nuclear Medicine Oncology & Radiotherapy (SINOR),"outside bbox (was 21.9137,73.3384)",21.9137074,73.3384471,35.232475,72.511635,city+country
+3585,China,Changyi,Changyi City People's Hospital,"outside bbox (was 1.3450,103.9832)",1.3450101,103.9832089,36.8394346,119.4013261,city+country
+3697,China,Daqing City,Daqing Oil Field General Hospital,missing,,,46.3240228,124.5598093,city+country
+3741,China,Erdos City,Erdos Guangsha Hospital,missing,,,,,FAILED
+3742,China,Erdos City,Erdos Central Hospital,missing,,,,,FAILED
+3785,China,Gaoyi County,Gaoyi Hospital,"outside bbox (was 1.1081,104.0754)",1.1080531,104.0754058,37.6022271,114.6021396,name+city+country
+3793,China,Guangyao County,Guangyao People's Hospital,missing,,,,,FAILED
+3808,China,Guangzhou City,"Zhujiang Hospital, Nanfang Medical University",missing,,,23.1288454,113.2590064,city+country
+3835,China,Guiyang City,PLA 44 Hospital,missing,,,26.5878031,106.7086936,city+country
+3839,China,Hai'an,Hai'an Cancer Hospital,"outside bbox (was 44.8732,-0.6779)",44.873167,-0.677914,32.5348763,120.4629239,city+country
+3842,China,Haikou,Hainan Hospital of PLA General Hospital,missing,,,20.0462328,110.1956502,city+country
+3848,China,Haimen City,The People's Hospital in Haimen City,missing,,,23.1845063,116.6141798,city+country
+3868,China,Hangzhou City,Zhejiang Cancer Hospital,missing,,,30.2489634,120.2052342,city+country
+3886,China,Harbin City,The 962 Hospital of the Joint Logistics Support Force,missing,,,40.0223104,119.7441192,city+country
+3911,China,Hengqu,The Hengqu County Cancer Hospital,missing,,,34.1957209,107.964034,city+country
+3918,China,Hengyang City,"Nanhua Hospital, Nanhua University (Industrial Nuclear 415 Hospital)",missing,,,26.8971308,112.5666191,city+country
+3936,China,Huadian,Huadian City People's Hospital,missing,,,42.9715617,126.74443,city+country
+3942,China,Huaibei,Wanbei Rehabilitation Hospital,missing,,,33.9566098,116.7928916,city+country
+3952,China,Huaiyin City,PLA 82 Hospital,missing,,,38.6442929,113.1236668,city+country
+3956,China,Huangshan,PLA 9601 Troop Hospital,missing,,,29.7172627,118.3324811,city+country
+3974,China,Jiamusi,Jiansanjiang People's Hospital,missing,,,47.2676018,132.6232039,name+city+country
+3990,China,Jiangyin City,63680 Army Hospital,"outside bbox (was 45.5115,2.7298)",45.5115438,2.7297903,31.9215518,120.2808847,city+country
+3992,China,Jiangyou City,The People's Hospital in Jiangyou City,missing,,,31.9525495,104.9347205,city+country
+3994,China,Jiaonan City,Jiaonan People's Hospital,missing,,,26.6499069,119.5294805,city+country
+3995,China,Jiaozhou City,PLA 135 Hospital,missing,,,36.2640866,120.0284928,city+country
+4000,China,Jiaxing,Armed Police Marine Police Corps Hospital,missing,,,30.7474425,120.7510971,city+country
+4001,China,Jiaxing City,Jiaoxing First People's Hospital,missing,,,30.5079213,120.6886844,city+country
+4009,China,Jilin City,"Jihua Group General Hospital (The second Affiliated Hospital, Beihua University)",missing,,,43.8349669,126.5438702,city+country
+4010,China,Jimo City,The People's Hospital in Jimo City,missing,,,,,FAILED
+4028,China,Jinan City,PLA 456 Hospital,missing,,,31.7517806,116.534208,city+country
+4029,China,Jinan City,PLA 960 Hospital,missing,,,31.7517806,116.534208,city+country
+4043,China,Jingxian (Jing County),The People's Hospital in Jing County,"outside bbox (was 47.5480,-121.9836)",47.5480339,-121.9836029,37.6871443,116.2598113,city+country
+4048,China,"Jinhu Town, Jianhu County",The People's Hospital in Jianhu City,missing,,,,,FAILED
+4072,China,Jiyuan City,Zhicheng People's Hospital (Zhicheng Township Health Center),missing,,,26.0487882,119.2396966,city+country
+4075,China,Junxian (Jun County),Junxian People's Hospital,missing,,,,,FAILED
+4088,China,Kaiyuan City,PLA 59 Center Hospital,missing,,,23.7106875,103.378104,city+country
+4117,China,Lanzhou City,Joint Logistics Support Force 940 Hospital,missing,,,36.0879287,103.8607818,city+country
+4140,China,Liaoyang City,"People's Liberation Army Army 79th Group Military Hospital,(PLA 201 Hospital)",missing,,,41.2742898,123.1695757,city+country
+4148,China,Linfen,PLA 289 Hospital,missing,,,36.229963,111.381767,city+country
+4182,China,Liuzhou City,The Workers Hospital in Liuzhou City,missing,,,25.0009993,109.3414252,city+country
+4188,China,Longhua,Joint Logistics Support Force 928 Hospital,missing,,,41.4859307,117.615428,city+country
+4195,China,Lu'an,Lu'an Second People's Hospital,missing,,,31.7383487,116.5142252,city+country
+4218,China,Luoyang City,PLA 534 Hospital,missing,,,24.9577926,118.6785484,city+country
+4222,China,Luyi County,Luyi Cancer Hospital,missing,,,33.890833,115.380556,city+country
+4223,China,Luyi County,Luyi People's Hospital,missing,,,33.890833,115.380556,city+country
+4224,China,Luzhou,Affiliated Chinese Medicine Hospital of Southwest Medical University,missing,,,28.8744722,105.4385063,city+country
+4232,China,Matou Zhouzhou,Yizhou International Cancer Hospital,missing,,,,,FAILED
+4246,China,Mudanjiang City,Hongqi Hospital Affiliated to Mudanjiang Medical College,missing,,,44.5790216,129.6113766,city+country
+4263,China,Nangong City,The People's hospital in Nangong City,missing,,,37.3560772,115.3920309,city+country
+4264,China,Nangong City,Nangong Red Cross Cancer Hospital,missing,,,37.3560772,115.3920309,city+country
+4281,China,Nanjing City,Eastern Theater General Hospital,missing,,,32.0438284,118.7788631,city+country
+4287,China,Nanning,The First Affiliated Hospital of Guangxi University of Traditional Chinese Medicine,missing,,,22.8157737,108.318024,city+country
+4297,China,Nanping City,PLA 907 Hospital,missing,,,27.3856975,118.0753196,city+country
+4305,China,Nanyang,Nanyang Nanshi Hospital,missing,,,33.0010496,112.5292693,city+country
+4314,China,Nanyang City,Nanyang Cancer Hospital,missing,,,33.4361016,120.2288831,city+country
+4318,China,Nanyang City,Tanghe People's Hospital,missing,,,33.4361016,120.2288831,city+country
+4328,China,Ningbo,Joint Logistics Support Force No. Jiulu Zero Hospital,missing,,,29.8622194,121.6203873,city+country
+4342,China,Panjin City,The 2nd Hospital of Oil Field Liaolte,missing,,,41.1796147,122.0524321,city+country
+4345,China,Panzhihua City,Pangang Group Staff General Hospital,missing,,,26.4841623,101.7458469,city+country
+4352,China,Pingdingshan City,PLA 152 Hospital,missing,,,33.7657683,113.183549,city+country
+4374,China,Qianguoerluosi,Qianguoerluosi County Hospital,missing,,,45.1119049,124.8506532,city+country
+4411,China,Qiqihaer City,The People's Liberation Army Joint Logistic Support Force 961 Hospital ( PLA 203 Hospital),missing,,,47.4176281,123.7476806,city+country
+4415,China,Qixian (Qi County),Qixian People's Hospital,missing,,,35.6221477,114.2145109,name+city+country
+4517,China,ShenYang,The Second Affiliated Hospital of Air Force Military Medical University,missing,,,41.8026095,123.4279105,city+country
+4518,China,ShenYang,986th Air Force Hospital,missing,,,41.8026095,123.4279105,city+country
+4525,China,Shenyang City,The 4th Hospital Attached to Chinese Medical University,missing,,,41.8026095,123.4279105,city+country
+4562,China,Shule County,PLA 947 Hospital(oLD NAME:PLA 12 Hospital),missing,,,39.1437544,76.3442229,city+country
+4570,China,Siping City,The 1st People's Hospital in Siping City,missing,,,43.1669821,124.364739,city+country
+4810,China,Xinyang City,Xinyang Vocational and Technical College Hospital (Xinyang Second People's Hospital),"outside bbox (was 33.8844,-118.1029)",33.8843703,-118.1029183,32.1461721,114.0852134,city+country
+5183,Portugal,Funchal,Joaquim Chaves Saúde - Clinica Radioncologica da Madeira,"outside bbox (was 32.6506,-16.9082)",32.6506129,-16.9082357,,,FAILED
+5190,Portugal,Ponta Delgada,Joaquim Chaves Saúde: Clinica de Radioncologia Madalena Paiva,"outside bbox (was 37.7506,-25.6781)",37.750614,-25.6780937,,,FAILED
+5674,Spain,La Laguna,Hospital Universitario de Canarias (HUC),"outside bbox (was 28.4565,-16.2919)",28.4565493,-16.2919278,,,FAILED
+5675,Spain,Las Palmas de Gran Canari,Clinica San Roque,"outside bbox (was 28.0986,-15.4129)",28.0986224,-15.4128869,,,FAILED
+5676,Spain,Las Palmas de Gran Canari,University Hospital of Gran Canaria Dr. Negrin,"outside bbox (was 28.1205,-15.4445)",28.1205225,-15.4444643,,,FAILED
+5719,Spain,Santa Cruz de Tenerife,Hospital Nuestra Senora de Candelaria,"outside bbox (was 28.4484,-16.2850)",28.4484193,-16.2850297,,,FAILED
+5976,Turkey,Adana,Acibadem Saglik Hizmetleri Özel Acibadem Adana Hastanesi,missing,,,36.9863599,35.3252861,city+country
+6676,USA,Columbia,Boone Hospital Center,"outside bbox (was 4.5709,-74.2973)",4.570868,-74.297333,38.9489112,-92.3157216,name+city+country
+6863,USA,Elizabeth,The Cancer Center of Hawaii - Pali Momi,"outside bbox (was 21.3835,-157.9395)",21.3835285,-157.9395316,40.6639916,-74.2107006,city+country
+7128,USA,Hilo,Hawaii Pacific Oncology Center,"outside bbox (was 19.7169,-155.1133)",19.7169057,-155.1133489,,,FAILED
+7138,USA,Honolulu,Kuakini Medical Center,"outside bbox (was 21.3218,-157.8573)",21.3218321,-157.857335,,,FAILED
+7139,USA,Honolulu,The Queen's Medical Center,"outside bbox (was 21.3215,-157.8544)",21.3214998,-157.854417,,,FAILED
+7141,USA,Honolulu,Tripler Army Medical Center,"outside bbox (was 21.3602,-157.8895)",21.36022,-157.8894993,,,FAILED
+7142,USA,Honolulu,Gamma Knife Center of the Pacific,"outside bbox (was 21.3288,-157.8521)",21.3287567,-157.8520883,,,FAILED
+7256,USA,Kealakeku,Kona Community Hospital,"outside bbox (was 19.5205,-155.9175)",19.5204957,-155.9174671,,,FAILED
+7347,USA,Lebanon,Cancer Institute,"outside bbox (was 33.8547,35.8623)",33.854721,35.862285,40.375713,-76.4626118,city+country
+7349,USA,Lebanon,Volm Cancer Center - Aspirus Langlade Hospital,"outside bbox (was 33.8547,35.8623)",33.854721,35.862285,40.375713,-76.4626118,city+country
+7474,USA,Mayaguez,RTCI Mayaguez,"outside bbox (was 18.1808,-67.1530)",18.180774,-67.1529525,,,FAILED
+7552,USA,Minot,The Cancer Center of Hawaii-Liliha,"outside bbox (was 21.3370,-157.8540)",21.3369945,-157.8539978,48.23251,-101.296273,city+country
+7720,USA,Ocean Pines,Richard A Henson Cancer Institute Berlin,"outside bbox (was 52.5200,13.4050)",52.5200066,13.404954,38.3839135,-75.1430787,city+country
+7805,USA,Paris,Cancer Care Center-Paris,"outside bbox (was 48.8575,2.3514)",48.8575475,2.3513765,33.6617962,-95.555513,city+country
+8187,USA,South Hill,Solari Radiation Therapy Center,missing,,,47.1171095,-122.2901624,city+country
+8254,USA,Supply,South Atlantic Radiation Oncology,missing,,,34.0176717,-78.267499,city+country
+8376,USA,Wailuku,Pacific Cancer Institute,"outside bbox (was 20.8843,-156.4900)",20.8843186,-156.4900097,,,FAILED
+8494,Uruguay,Montevideo,Clinica Dres. Leborgne - Hospital Italiano,"outside bbox (was -34.9084,-56.1909)",-34.9084295,-56.1908849,,,FAILED
+8497,Uruguay,MONTEVIDEO,CLINICA DRES. LEBORGNE,"outside bbox (was -34.9084,-56.1909)",-34.9084295,-56.1908849,,,FAILED
+8500,Uruguay,Montevideo,NEXT VENTURE SAS,"outside bbox (was -34.9055,-56.1851)",-34.9055016,-56.1851147,,,FAILED
