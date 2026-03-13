@@ -30,6 +30,8 @@ Vulva, 0.35
 Kaposi sarcoma, 0.5 
 Vagina, 0.35 
 Mesothelioma, 0.5 
-All cancers, 0.52 
-All cancers excl. NMSC, 0.52 
+All cancers, 0.52
+All cancers excl. NMSC, 0.52
 Penis, 0.5
+NMSC, 0.0
+Other cancers, 0.5

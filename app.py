@@ -7,7 +7,7 @@ Run with:
 Map types
 ---------
 Population Density        — Kontur H3 population per hexagon (log scale)
-Cancer Incidence          — Estimated cases per hexagon (proportional to pop)
+Annual New Cancer Cases          — Estimated cases per hexagon (proportional to pop)
 Optimal RT Treatment      — Cases that should receive RT (optimal fractions)
 Actual RT Treatment       — Cases that are receiving RT (actual fractions)
 Radiotherapy Access       — P(patient can access a LINAC) per hexagon
@@ -25,15 +25,20 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import pydeck as pdk
 import pycountry
 import streamlit as st
 
 from data.population import load_population_at_resolution
 from data.linacs import load_linacs_from_dirac_db
-from data.cancer import get_cancer_types, apportion_cancer_to_h3, has_globocan_data
+from data.cancer import (
+    get_cancer_types, apportion_cancer_to_h3, has_globocan_data,
+    get_national_cases, get_optimal_rt_fractions, DERIVED_CANCER_TYPES,
+)
 from analysis.accessibility import compute_accessibility
 
 
@@ -99,7 +104,7 @@ COLORMAPS = {
 
 _DEFAULT_CMAP = {
     "Population Density": "Purple → Yellow (Viridis)",
-    "Cancer Incidence": "Purple → Yellow (Viridis)",
+    "Annual New Cancer Cases": "Purple → Yellow (Viridis)",
     "Cancer cases requiring RT": "Purple → Yellow (Viridis)",
     "Radiotherapy Access": "Green → Red",
     "Nearest LINAC Distance": "Green → Red",
@@ -130,6 +135,7 @@ def _colorbar_fig(
     label: str,
     log_scale: bool = False,
     text_color: str = "black",
+    clamp: bool = False,
 ) -> plt.Figure:
     n = 256
     colors_01 = [[c / 255.0 for c in cmap_fn(i / n)] for i in range(n + 1)]
@@ -145,8 +151,24 @@ def _colorbar_fig(
     sm.set_array([])
     fig, ax = plt.subplots(figsize=(0.9, 4.0))
     cbar = fig.colorbar(sm, cax=ax)
-    cbar.set_label(label, fontsize=8, color=text_color)
-    cbar.ax.tick_params(labelsize=7, labelcolor=text_color, color=text_color)
+    cbar.set_label(label, fontsize=11, color=text_color)
+    cbar.ax.tick_params(labelsize=10, labelcolor=text_color, color=text_color)
+    if not log_scale and safe_vmax >= 10_000:
+        import math as _math
+        exp = _math.floor(_math.log10(safe_vmax))
+        scale = 10 ** exp
+        cbar.formatter = matplotlib.ticker.FuncFormatter(lambda x, _: f"{x / scale:.1f}")
+        cbar.update_ticks()
+        cbar.ax.set_title(f"×10$^{{{exp}}}$", fontsize=10, color=text_color, pad=4)
+    if clamp:
+        fig.canvas.draw()
+        texts = [t.get_text() for t in cbar.ax.get_yticklabels()]
+        if len(texts) >= 2:
+            if texts[0] and float(vmin) != 0.0:
+                texts[0] = "< " + texts[0]
+            if texts[-1]:
+                texts[-1] = "> " + texts[-1]
+            cbar.ax.set_yticklabels(texts, color=text_color, fontsize=10)
     for spine in cbar.ax.spines.values():
         spine.set_edgecolor(text_color)
     fig.patch.set_alpha(0.0)
@@ -185,19 +207,32 @@ def _compute_access(
 ):
     gdf = _load_pop(country, h3_res)
 
-    # Build RT demand per hex from cancer data (all cancer types)
+    # Build RT demand per hex from cancer data
     demand = None
+    total_cancer_excl_nmsc = None
     try:
-        all_cancers = get_cancer_types()
-        cancer_gdf = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False)
         if rt_method == "optimal":
-            cols = [c for c in cancer_gdf.columns if c.endswith("_optimal_rt")]
-        else:  # proportional
-            cols = [c for c in cancer_gdf.columns if c.endswith("_incidence")]
-        if cols:
-            demand = cancer_gdf[cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
-            if rt_method == "proportional":
-                demand = demand * rt_fraction
+            # Load all individual sites + derived types; multiply each by its own RT fraction
+            all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
+            cancer_gdf = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False)
+            excl_col = "All cancers excl. NMSC_incidence"
+            if excl_col in cancer_gdf.columns:
+                total_cancer_excl_nmsc = float(cancer_gdf[excl_col].clip(lower=0).sum())
+            rt_cols = [
+                c for c in cancer_gdf.columns
+                if c.endswith("_optimal_rt")
+                and c[:-len("_optimal_rt")].strip().lower() not in _AGGREGATE_CANCER_KEYS
+            ]
+            if rt_cols:
+                demand = cancer_gdf[rt_cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
+        else:  # proportional — use All cancers excl. NMSC × rt_fraction
+            cancer_gdf = apportion_cancer_to_h3(
+                gdf, iso3, ["All cancers excl. NMSC"], use_actual_rt=False
+            )
+            col = "All cancers excl. NMSC_incidence"
+            if col in cancer_gdf.columns:
+                total_cancer_excl_nmsc = float(cancer_gdf[col].clip(lower=0).sum())
+                demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
     except Exception:
         pass  # fallback: compute_accessibility uses raw population
 
@@ -210,6 +245,7 @@ def _compute_access(
         capacity_per_machine_per_year=capacity_per_machine_per_year,
         demand=demand,
     )
+    stats["total_cancer_excl_nmsc"] = total_cancer_excl_nmsc
     return gdf_out, stats
 
 
@@ -219,6 +255,61 @@ def _load_dirac(country: str):
         return load_linacs_from_dirac_db(country)
     except (ValueError, FileNotFoundError) as e:
         return None, str(e)
+
+
+_AGGREGATE_CANCER_KEYS = {"all cancers", "all cancers excl. nmsc", "all cancers excl nmsc"}
+
+
+@st.cache_data(show_spinner=False)
+def _data_tab_cancer(iso3: str) -> pd.DataFrame:
+    """Cancer incidence table for the Data tab: one row per cancer type.
+
+    Returns all types including aggregates. Callers should separate out aggregate
+    rows (where Cancer type normalised is in _AGGREGATE_CANCER_KEYS) for display.
+    """
+    all_cancer_types = get_cancer_types()
+    all_with_derived = all_cancer_types + DERIVED_CANCER_TYPES
+    cases = get_national_cases(iso3, all_with_derived)
+    # Use "All cancers" figure as denominator for % of total
+    all_cancers_total = next(
+        (v for k, v in cases.items() if k.strip().lower() == "all cancers"),
+        sum(cases.values()),
+    )
+    rows = []
+    for cancer in sorted(all_with_derived, key=lambda c: -cases.get(c, 0.0)):
+        n = cases.get(cancer, 0.0)
+        rows.append({
+            "Cancer type": cancer,
+            "New cases": int(round(n)),
+            "% of All Cancers": round(100 * n / all_cancers_total, 1) if all_cancers_total > 0 else 0.0,
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(show_spinner=False)
+def _data_tab_rt_need(iso3: str) -> dict:
+    """Compute country-level RT need from optimal utilisations × incidence."""
+    all_cancer_types = get_cancer_types() + DERIVED_CANCER_TYPES
+    cases = get_national_cases(iso3, all_cancer_types)
+    opt = get_optimal_rt_fractions()
+    opt_norm = {k.strip().lower(): v for k, v in opt.items()}
+    total_rt = 0.0
+    for cancer, n in cases.items():
+        if cancer.strip().lower() in _AGGREGATE_CANCER_KEYS:
+            continue
+        frac = opt_norm.get(cancer.strip().lower(), 0.0)
+        total_rt += n * frac
+    return {"total_rt_cases": total_rt}
+
+
+@st.cache_data(show_spinner=False)
+def _data_tab_optimal_rt() -> pd.DataFrame:
+    """Optimal RT utilisations table for the Data tab."""
+    opt = get_optimal_rt_fractions()
+    return pd.DataFrame([
+        {"Cancer type": k, "Optimal RT fraction": v, "Optimal RT %": f"{v:.0%}"}
+        for k, v in sorted(opt.items(), key=lambda x: -x[1])
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +353,8 @@ def _build_linac_columns(
                          tower with proportional segments per centre.
     style="individual" — one column per facility at its own lat/lon.
     """
+    if facilities_df.empty:
+        return []
     hex_area_km2 = h3.average_hexagon_area(h3_res, unit="km^2")
     hex_radius_km = math.sqrt(hex_area_km2 / math.pi)
     col_radius_m = int(hex_radius_km * 1000 * 0.45)
@@ -344,6 +437,30 @@ def _build_linac_columns(
     return layers
 
 
+def _fmt_sigfig(value: float, sig: int = 3) -> str:
+    """Format a number to *sig* significant figures with k/M suffix."""
+    if value is None:
+        return "N/A"
+    value = float(value)
+    if value == 0:
+        return "0"
+    if abs(value) >= 1_000_000:
+        scaled = value / 1_000_000
+        rounded = float(f"{scaled:.{sig}g}")
+        return f"{rounded:g} M"
+    if abs(value) >= 1_000:
+        scaled = value / 1_000
+        rounded = float(f"{scaled:.{sig}g}")
+        return f"{rounded:g} k"
+    rounded = float(f"{value:.{sig}g}")
+    return f"{rounded:g}"
+
+
+def _hex_areas_km2(gdf) -> np.ndarray:
+    """Return exact H3 cell area in km² for each row (varies with latitude)."""
+    return np.array([h3.cell_area(str(cell), unit="km^2") for cell in gdf["h3"]])
+
+
 def _scale_caption(gdf) -> str:
     """Return a human-readable scale string for the initial map view."""
     geom = gdf.geometry
@@ -384,6 +501,7 @@ def _render_with_colorbar(
     cb_label: str,
     log_scale: bool = False,
     dark: bool = False,
+    clamp: bool = False,
 ) -> None:
     if not isinstance(layers, list):
         layers = [layers]
@@ -397,7 +515,7 @@ def _render_with_colorbar(
     with col_map:
         st.pydeck_chart(deck, use_container_width=True)
     with col_cb:
-        fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white")
+        fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white", clamp=clamp)
         st.pyplot(fig, use_container_width=True)
 
 
@@ -419,7 +537,7 @@ def _h3_caption(gdf) -> str:
 
 MAP_TYPES = [
     "Population Density",
-    "Cancer Incidence",
+    "Annual New Cancer Cases",
     "Cancer cases requiring RT",
     "Radiotherapy Access",
     "Nearest LINAC Distance",
@@ -447,7 +565,7 @@ with st.sidebar:
     )
 
     is_rt_demand_map = map_type == "Cancer cases requiring RT"
-    is_cancer = map_type in ("Cancer Incidence", "Cancer cases requiring RT")
+    is_cancer = map_type in ("Annual New Cancer Cases", "Cancer cases requiring RT")
     is_access = map_type == "Radiotherapy Access"
     is_nearest = map_type == "Nearest LINAC Distance"
     needs_linac = is_access or is_nearest
@@ -462,15 +580,36 @@ with st.sidebar:
 
     if is_cancer:
         all_cancers = get_cancer_types()
-        default_cancers = [
-            c for c in all_cancers
+        # Non-aggregate individual site names
+        _site_cancers = [c for c in all_cancers if c.strip().lower() not in _AGGREGATE_CANCER_KEYS]
+        _site_cancers_no_nmsc = [
+            c for c in _site_cancers
             if "non-melanoma" not in c.lower() and "nmsc" not in c.lower()
         ]
-        selected_cancers = st.multiselect(
-            "Cancer types",
-            options=all_cancers,
-            default=default_cancers,
+
+        _rt_scope_options = (
+            ["All cancers", "Specific cancer site(s)"]
+            if is_rt_demand_map
+            else ["All cancers", "All cancers excl. NMSC", "Specific cancer site(s)"]
         )
+        _map_cancer_view = st.radio(
+            "Cancer scope",
+            _rt_scope_options,
+            index=0,
+            horizontal=False,
+            key="map_cancer_view",
+        )
+        if _map_cancer_view == "All cancers":
+            selected_cancers = ["All cancers"]
+        elif _map_cancer_view == "All cancers excl. NMSC":
+            selected_cancers = ["All cancers excl. NMSC"]
+        else:
+            selected_cancers = st.multiselect(
+                "Cancer site(s)",
+                options=_site_cancers,
+                default=[_site_cancers[0]] if _site_cancers else [],
+                key="map_cancer_sites",
+            )
         if is_rt_demand_map:
             _rt_label = st.radio(
                 "RT demand method",
@@ -516,10 +655,10 @@ with st.sidebar:
         access_display_metric = st.selectbox(
             "Display metric",
             [
-                "Capacity-limited population untreated",
-                "Probability based on distance",
-                "Capacity-limited probability",
-                "Capacity-limited population treated",
+                "Modelled Untreated",
+                "Modelled Treated",
+                "Modelled Access Probability",
+                "Geographic Access Probability",
             ],
             index=0,
         )
@@ -545,7 +684,7 @@ with st.sidebar:
     show_linac_markers: bool = False
     tower_height_scale: float = 1.0
     linac_tower_style: str = "stacked"
-    _default_log = map_type in ("Population Density", "Cancer Incidence")
+    _default_log = map_type in ("Population Density", "Annual New Cancer Cases")
 
     with st.expander("⚙️ Plot settings"):
         dark_mode = st.checkbox("Dark map", value=False)
@@ -573,6 +712,25 @@ with st.sidebar:
         )
         cb_cmap_fn = COLORMAPS[cb_cmap_name]
         cb_log = st.checkbox("Log scale", value=_default_log)
+
+        _count_maps = {
+            "Population Density", "Annual New Cancer Cases", "Cancer cases requiring RT",
+        }
+        _count_access_metrics = {
+            "Modelled Treated", "Modelled Untreated",
+        }
+        _supports_per_km2 = (
+            map_type in _count_maps
+            or (is_access and access_display_metric in _count_access_metrics)
+        )
+        density_per_km2: bool = False
+        if _supports_per_km2:
+            _density_radio = st.radio(
+                "Colour scale normalisation", ["Per hexagon", "Per 10 km²"],
+                index=1, horizontal=True,
+            )
+            density_per_km2 = _density_radio == "Per 10 km²"
+
         cb_auto = st.checkbox("Auto range", value=True)
         cb_vmin_user: Optional[float] = None
         cb_vmax_user: Optional[float] = None
@@ -601,310 +759,685 @@ def _color_values(values: np.ndarray, cmap_fn, auto_vmin: float, auto_vmax: floa
 # Main panel
 # ---------------------------------------------------------------------------
 
-st.header(f"{map_type} — {country}")
-
-if not generate:
-    st.info("Configure options in the sidebar and click **Generate Map**.")
-    st.stop()
-
 try:
     iso3 = pycountry.countries.lookup(country).alpha_3
 except LookupError:
     st.error(f"Could not resolve country: {country!r}")
     st.stop()
 
-# Load LINAC data (needed for access and nearest-distance maps)
-locs: Optional[List[Tuple[float, float, float]]] = None
-facilities_df: Optional[pd.DataFrame] = None
-if needs_linac:
-    with st.spinner("Loading LINAC data from DIRAC database…"):
-        result = _load_dirac(country)
-    if result[0] is None:
-        st.error(f"LINAC data unavailable: {result[1]}")
-        st.stop()
-    locs, facilities_df = result
-
+tab_map, tab_data, tab_model = st.tabs(["🗺️ Modelling", "📊 Data", "📐 Probability Models"])
 
 # ---------------------------------------------------------------------------
-# Population Density
+# Data tab — always available, no Generate button required
 # ---------------------------------------------------------------------------
 
-if map_type == "Population Density":
+with tab_data:
+    st.header(f"Data — {country}")
+
+    # ---- Population --------------------------------------------------------
+    st.subheader(f"Population — {country}")
     with st.spinner("Loading population data…"):
-        gdf = _load_pop(country, h3_resolution)
-
-    pop = gdf["population"].to_numpy(dtype=np.float64)
-    auto_vmin = float(max(pop.min(), 1))
-    auto_vmax = float(pop.max())
-    colors, vmin, vmax = _color_values(pop, cb_cmap_fn, auto_vmin, auto_vmax)
-
-    gdf = gdf.copy()
-    gdf["color"] = colors
-    gdf["tip"] = (
-        "<b>" + gdf["h3"].astype(str) + "</b><br/>"
-        "People per hexagon: " + gdf["population"].round(0).astype(int).astype(str)
+        _pop_gdf = _load_pop(country, 5)
+    _total_pop = int(_pop_gdf["population"].sum())
+    st.metric("Total population", f"{_total_pop:,}")
+    st.caption(
+        "Source: [Kontur Population Dataset 2023](https://data.humdata.org/dataset/kontur-population-dataset) "
+        "— population modelled at 400 m H3 resolution from GHSL, OSM, and census data."
     )
 
-    df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
-    _render_with_colorbar(
-        [_build_hex_layer(df)],
-        _make_view(gdf),
-        cb_cmap_fn, vmin, vmax, "People per hexagon", log_scale=cb_log, dark=dark_mode,
-    )
-    st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
-    col1, col2 = st.columns(2)
-    col1.metric("Total population", f"{int(gdf['population'].sum()):,}")
-    col2.metric("H3 hexagons", f"{len(gdf):,}")
+    st.divider()
 
-
-# ---------------------------------------------------------------------------
-# Cancer maps
-# ---------------------------------------------------------------------------
-
-elif is_cancer:
-    if not selected_cancers:
-        st.warning("Please select at least one cancer type.")
-        st.stop()
-
+    # ---- Annual cancer incidence -------------------------------------------
+    st.subheader(f"Annual New Cancer Cases — {country}")
     if not has_globocan_data(iso3):
-        st.warning(
-            f"**{country}** (ISO3: {iso3}) is not present in this GLOBOCAN dataset. "
-            "Cancer case counts will be zero. The population map is still available."
-        )
-
-    with st.spinner("Apportioning cancer incidence to H3 grid…"):
-        gdf = _load_cancer(country, iso3, tuple(selected_cancers), use_actual, h3_resolution)
-
-    if map_type == "Cancer cases requiring RT":
-        suffix = "_optimal_rt" if rt_method == "optimal" else "_incidence"
+        st.warning(f"**{country}** (ISO3: {iso3}) is not present in the GLOBOCAN dataset.")
     else:
-        suffix = "_incidence"
+        with st.spinner("Loading cancer data…"):
+            _cancer_df = _data_tab_cancer(iso3)
 
-    cols_of_interest = [c + suffix for c in selected_cancers if (c + suffix) in gdf.columns]
-    if not cols_of_interest:
-        st.error("No matching columns found in data.")
-        st.stop()
+        # Extract aggregate rows for headline metrics
+        _agg_mask = _cancer_df["Cancer type"].str.strip().str.lower().isin(_AGGREGATE_CANCER_KEYS)
+        _agg_rows = _cancer_df[_agg_mask].set_index(_cancer_df[_agg_mask]["Cancer type"].str.strip().str.lower())
+        _site_df = _cancer_df[~_agg_mask].copy()
 
-    combined = gdf[cols_of_interest].sum(axis=1).to_numpy(dtype=np.float64)
+        _all_cancers_n = int(_agg_rows.loc["all cancers", "New cases"]) if "all cancers" in _agg_rows.index else _site_df["New cases"].sum()
+        _nmsc_n = int(_agg_rows.loc["all cancers excl. nmsc", "New cases"]) if "all cancers excl. nmsc" in _agg_rows.index else None
 
-    # Scale for proportional RT method
-    if map_type == "Cancer cases requiring RT" and rt_method == "proportional":
-        combined = combined * rt_fraction
-
-    auto_vmin = float(max(combined.min(), 0.001))
-    auto_vmax = float(combined.max())
-    colors, vmin, vmax = _color_values(combined, cb_cmap_fn, auto_vmin, auto_vmax)
-
-    gdf = gdf.copy()
-    gdf["color"] = colors
-
-    if map_type == "Cancer cases requiring RT":
-        method_str = "Optimal RT" if rt_method == "optimal" else f"Proportional RT ({rt_fraction:.0%})"
-        label = f"Cancer cases requiring RT ({method_str})"
-    else:
-        label = "Cancer incidence"
-
-    s_combined = pd.Series(combined, index=gdf.index).round(2).astype(str)
-    gdf["tip"] = "<b>" + gdf["h3"].astype(str) + "</b><br/>" + label + ": " + s_combined
-
-    df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
-    _render_with_colorbar(
-        [_build_hex_layer(df)],
-        _make_view(gdf),
-        cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode,
-    )
-    st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
-    if map_type == "Cancer cases requiring RT":
-        incidence_cols = [c + "_incidence" for c in selected_cancers if (c + "_incidence") in gdf.columns]
-        total_incidence = float(gdf[incidence_cols].sum(axis=1).sum()) if incidence_cols else 0.0
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total cancer cases requiring RT", f"{combined.sum():,.0f}")
-        col2.metric("Total cancer cases", f"{total_incidence:,.0f}")
-        col3.metric("H3 hexagons", f"{len(gdf):,}")
-    else:
-        total_pop = float(gdf["population"].sum())
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total cancer cases", f"{combined.sum():,.0f}")
-        col2.metric("Country population", f"{int(total_pop):,}")
-        col3.metric("H3 hexagons", f"{len(gdf):,}")
-
-
-# ---------------------------------------------------------------------------
-# Radiotherapy Access / Nearest LINAC Distance
-# ---------------------------------------------------------------------------
-
-elif is_access or is_nearest:
-    linac_locs_tuple = tuple(locs)
-
-    with st.spinner("Computing accessibility…"):
-        gdf_out, stats = _compute_access(
-            country,
-            iso3,
-            linac_locs_tuple,
-            float(lambda_km),
-            access_model,
-            float(max_distance_km),
-            capacity_per_machine_per_year,
-            access_rt_method,
-            access_rt_fraction,
-            h3_resolution,
+        _cancer_view = st.radio(
+            "View",
+            ["All cancers", "All cancers excl. NMSC", "Specific cancer site(s)"],
+            index=0,
+            horizontal=True,
+            key="data_cancer_view",
         )
 
-    pitch = 30.0 if show_linac_markers else 0.0
-
-    # Country span for scaling LINAC column heights
-    _geom = gdf_out.geometry
-    _lat_span = float(_geom.bounds["maxy"].max() - _geom.bounds["miny"].min())
-    _lon_span = float(_geom.bounds["maxx"].max() - _geom.bounds["minx"].min())
-    _lat_mid = float((_geom.bounds["maxy"].max() + _geom.bounds["miny"].min()) / 2)
-    country_span_km = max(
-        _lat_span * 111.32,
-        _lon_span * 111.32 * math.cos(math.radians(_lat_mid)),
-    )
-
-    # ---- Nearest LINAC Distance ------------------------------------------
-    if is_nearest:
-        dist_km = gdf_out["nearest_linac_km"].to_numpy(dtype=np.float64)
-        valid = np.isfinite(dist_km)
-        auto_vmin = 0.0
-        auto_vmax = float(np.nanpercentile(dist_km[valid], 95)) if valid.any() else 500.0
-        colors, vmin, vmax = _color_values(dist_km, cb_cmap_fn, auto_vmin, auto_vmax)
-
-        gdf_out = gdf_out.copy()
-        gdf_out["color"] = colors
-        gdf_out["tip"] = (
-            "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
-            "Nearest LINAC: " + dist_km.round(1).astype(str) + " km"
-        )
-
-        layers = [_build_hex_layer(
-            pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
-        )]
-        if show_linac_markers:
-            layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, style=linac_tower_style))
-        pass  # scale info shown in caption
-
-        _render_with_colorbar(
-            layers, _make_view(gdf_out, pitch=pitch),
-            cb_cmap_fn, vmin, vmax, "Distance (km)",
-            log_scale=cb_log, dark=dark_mode,
-        )
-        st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total LINACs", stats["total_machines"])
-        col2.metric("Median distance", f"{float(np.nanmedian(dist_km)):.1f} km")
-        col3.metric("95th-pct distance", f"{auto_vmax:.1f} km")
-
-    # ---- Radiotherapy Access ----------------------------------------
-    else:
-        prob = gdf_out["access_probability"].to_numpy(dtype=np.float64)
-        cap_prob = gdf_out["capacity_limited_probability"].to_numpy(dtype=np.float64)
-        raw_pop = gdf_out["population"].to_numpy(dtype=np.float64)
-
-        # Build tip strings using pandas Series to avoid numpy dtype mismatches
-        s_h3 = gdf_out["h3"].astype(str)
-        s_prob = (gdf_out["access_probability"] * 100).round(1).astype(str)
-        s_cap = (gdf_out["capacity_limited_probability"] * 100).round(1).astype(str)
-        s_pop = gdf_out["population"].round(0).astype(int).astype(str)
-
-        if access_display_metric == "Capacity-limited population untreated":
-            display_vals = gdf_out["rt_untreated"].to_numpy(dtype=np.float64)
-            cb_label_access = "RT patients untreated per year (per hex)"
-            auto_vmin_a = 0.0
-            auto_vmax_a = float(np.nanmax(display_vals))
-            s_vals = pd.Series(display_vals, index=gdf_out.index).round(1).astype(str)
-            tip_series = (
-                "<b>" + s_h3 + "</b><br/>"
-                + "RT patients untreated/yr: " + s_vals + "<br/>"
-                + "Cap-limited probability: " + s_cap + "%"
-            )
-            metric_cmap_fn = _rdylgn_reversed_rgb  # green→red: 0=green, many=red
-
-        elif access_display_metric == "Probability based on distance":
-            display_vals = prob
-            cb_label_access = "Access probability (distance-based)"
-            auto_vmin_a, auto_vmax_a = 0.0, 1.0
-            tip_series = (
-                "<b>" + s_h3 + "</b><br/>"
-                + "Access probability: " + s_prob + "%<br/>"
-                + "People per hex: " + s_pop
-            )
-            metric_cmap_fn = _rdylgn_reversed_rgb  # green→red
-
-        elif access_display_metric == "Capacity-limited probability":
-            display_vals = cap_prob
-            cb_label_access = "Capacity-limited probability"
-            auto_vmin_a, auto_vmax_a = 0.0, 1.0
-            tip_series = (
-                "<b>" + s_h3 + "</b><br/>"
-                + "Cap-limited probability: " + s_cap + "%<br/>"
-                + "Distance-based probability: " + s_prob + "%"
-            )
-            metric_cmap_fn = _rdylgn_reversed_rgb  # green→red
-
-        else:  # Capacity-limited population treated
-            display_vals = gdf_out["rt_treated"].to_numpy(dtype=np.float64)
-            cb_label_access = "RT patients treated per year (per hex)"
-            auto_vmin_a = 0.0
-            auto_vmax_a = float(np.nanmax(display_vals))
-            s_vals = pd.Series(display_vals, index=gdf_out.index).round(1).astype(str)
-            tip_series = (
-                "<b>" + s_h3 + "</b><br/>"
-                + "RT patients treated/yr: " + s_vals + "<br/>"
-                + "Cap-limited probability: " + s_cap + "%"
-            )
-            metric_cmap_fn = _rdylgn_rgb  # red→green: 0=red, many treated=green
-
-        # Use the metric's natural colormap unless the user has manually picked one
-        # (detected by the sidebar selection differing from the map-type default)
-        _map_default_cmap = _DEFAULT_CMAP.get(map_type, "Green → Red")
-        active_cmap_fn = metric_cmap_fn if cb_cmap_name == _map_default_cmap else cb_cmap_fn
-        colors, vmin, vmax = _color_values(display_vals, active_cmap_fn, auto_vmin_a, auto_vmax_a)
-
-        gdf_out = gdf_out.copy()
-        gdf_out["color"] = colors
-        gdf_out["tip"] = tip_series.values
-
-        layers = [_build_hex_layer(
-            pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
-        )]
-        if show_linac_markers:
-            layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, style=linac_tower_style))
-        pass  # scale info shown in caption
-
-        if stats["total_rt_demand"] == 0:
-            st.warning(
-                f"RT demand is zero for **{country}** — this country may not be in the GLOBOCAN dataset. "
-                "Capacity allocation cannot be computed; geographic access probability is still valid."
-            )
-
-        _render_with_colorbar(
-            layers, _make_view(gdf_out, pitch=pitch),
-            active_cmap_fn, vmin, vmax, cb_label_access,
-            log_scale=cb_log, dark=dark_mode,
-        )
-        st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
-
-        if access_model == "exponential":
-            model_info = f"Exponential | λ = {lambda_km} km | cut-off = {stats['cutoff_km']:.0f} km"
-        elif access_model == "step":
-            model_info = f"Step function | max distance = {max_distance_km:.0f} km"
+        if _cancer_view == "All cancers":
+            _headline_n = _all_cancers_n
+            _headline_label = "Annual New Cancer Cases: All Sites"
+        elif _cancer_view == "All cancers excl. NMSC":
+            _headline_n = _nmsc_n if _nmsc_n is not None else _all_cancers_n
+            _headline_label = "Annual New Cancer Cases: All Cancers excl. NMSC"
         else:
-            model_info = "Uniform (no distance decay)"
+            _site_options = _site_df["Cancer type"].tolist()
+            _selected_sites = st.multiselect(
+                "Cancer site(s)",
+                options=_site_options,
+                default=[_site_options[0]] if _site_options else [],
+                key="data_cancer_sites",
+            )
+            _headline_n = int(_site_df[_site_df["Cancer type"].isin(_selected_sites)]["New cases"].sum())
+            _site_names = ", ".join(_selected_sites) if _selected_sites else "none selected"
+            _headline_label = f"Annual New Cancer Cases: {_site_names}"
 
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
-        col1.metric("Total LINACs", stats["total_machines"])
-        col2.metric("Total RT Capacity", f"{int(stats['total_national_capacity']):,}")
-        col3.metric("Estimated RT Need", f"{int(stats['total_rt_demand']):,}")
-        col4.metric("Total Patients Treated", f"{int(stats['total_rt_treated']):,}")
-        col5.metric("Mean geographic access", f"{stats['mean_access_probability']:.1%}")
-        col6.metric("Mean capacity-limited access", f"{stats['mean_capacity_limited_probability']:.1%}")
-        _demand_info = (
-            f"demand: optimal RT utilisations"
-            if access_rt_method == "optimal"
-            else f"demand: proportional RT ({access_rt_fraction:.0%} of cancer cases)"
+        col1, col2 = st.columns(2)
+        col1.metric(_headline_label, f"{_headline_n:,}")
+        col2.metric(
+            "% of population diagnosed annually",
+            f"{100 * _headline_n / _total_pop:.2f}%" if _total_pop > 0 else "N/A",
         )
+
+        st.markdown("**Cancer site breakdown**")
+        _site_display = _site_df[["Cancer type", "New cases", "% of All Cancers"]].copy()
+        _site_display["New cases"] = _site_display["New cases"].apply(lambda x: f"{x:,}")
+        st.dataframe(_site_display, use_container_width=True, hide_index=True)
         st.caption(
-            f"{model_info} | {int(capacity_per_machine_per_year)} pts/machine/yr | "
-            f"{_demand_info} | {stats['n_hexagons']:,} hexagons"
+            "Source: [GLOBOCAN 2022](https://gco.iarc.who.int/today/), International Agency for Research on Cancer (IARC). "
+            "Cases are the estimated number of new cancer diagnoses in 2022. "
+            "% of All Cancers uses the GLOBOCAN 'All cancers' aggregate as denominator."
         )
+
+    st.divider()
+
+    # ---- LINAC facilities --------------------------------------------------
+    st.subheader(f"LINAC Facilities — {country}")
+    _linac_result = _load_dirac(country)
+    if _linac_result[0] is None:
+        st.info(f"No LINAC data found for **{country}** in the DIRAC database.")
+    else:
+        _, _linac_df = _linac_result
+        _linac_display = _linac_df.rename(columns={
+            "name": "Facility name", "city": "City",
+            "lat": "Latitude", "lon": "Longitude", "n_linacs": "LINACs",
+        })
+        st.dataframe(_linac_display, use_container_width=True, hide_index=True)
+        st.caption(
+            f"**{int(_linac_df['n_linacs'].sum())} LINACs** across **{len(_linac_df)} facilities**.  \n"
+            "Source: [IAEA DIRAC Database](https://dirac.iaea.org/) — Directory of Radiotherapy Centres. "
+            "Data downloaded 2025. "
+            "Coordinates corrected via OpenStreetMap geocoding where missing or erroneous."
+        )
+
+    st.divider()
+
+    # ---- Optimal RT utilisations (global table) ----------------------------
+    st.subheader("Optimal Radiotherapy Utilisation Rates")
+    with st.spinner("Loading…"):
+        _opt_df = _data_tab_optimal_rt()
+
+    # Show "All cancers" as a headline metric outside the table
+    _all_cancers_row = _opt_df[_opt_df["Cancer type"] == "All cancers"]
+    if not _all_cancers_row.empty:
+        _all_cancers_pct = _all_cancers_row.iloc[0]["Optimal RT %"]
+        st.metric("All Cancers — Optimal RT Utilisation", _all_cancers_pct)
+
+    # Table: individual sites + NMSC + Other cancers; exclude aggregate rows
+    _AGGREGATE_RT_KEYS = {"all cancers", "all cancers excl. nmsc", "all cancers excl nmsc"}
+    _opt_table = _opt_df[
+        ~_opt_df["Cancer type"].str.strip().str.lower().isin(_AGGREGATE_RT_KEYS)
+    ][["Cancer type", "Optimal RT %"]].rename(
+        columns={"Optimal RT %": "Optimal RT fraction"}
+    )
+    st.dataframe(_opt_table, use_container_width=True, hide_index=True)
+    st.caption(
+        "Source: Delaney G, Jacob S, Featherstone C, Barton M. "
+        "*The role of radiotherapy in cancer treatment: estimating optimal utilization "
+        "from a review of evidence-based clinical guidelines.* "
+        "Cancer. 2005;104(6):1129–37. "
+        "[doi:10.1002/cncr.21324](https://doi.org/10.1002/cncr.21324)"
+    )
+
+    st.divider()
+
+    # ---- RT needs (country-specific) ---------------------------------------
+    st.subheader(f"Minimum RT Needs to Meet Capacity — {country}")
+    if not has_globocan_data(iso3):
+        st.warning(f"No GLOBOCAN data for **{country}** — RT need cannot be estimated.")
+    else:
+        with st.spinner("Computing RT need…"):
+            _rt_need = _data_tab_rt_need(iso3)
+        _total_rt_cases = _rt_need["total_rt_cases"]
+        _n_linacs = int(_linac_df["n_linacs"].sum()) if _linac_result[0] is not None else 0
+        _capacity_per_linac = 450
+
+        st.markdown("**Calculation based on annual cancer incidence and optimal RT utilisation**")
+        _linacs_required_incidence = _total_rt_cases / _capacity_per_linac
+        _linacs_required_incidence_ceil = math.ceil(_linacs_required_incidence)
+        _linac_gap_incidence = _linacs_required_incidence_ceil - _n_linacs
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Cancers requiring RT annually", f"{int(_total_rt_cases):,}")
+        col2.metric("LINACs (DIRAC)", f"{_n_linacs:,}")
+        col3.metric("LINACs required (450 pts/yr/LINAC)", f"{_linacs_required_incidence_ceil:,}")
+        _gap_inc_label = "LINAC shortage" if _linac_gap_incidence > 0 else "LINAC surplus"
+        _gap_inc_color = "red" if _linac_gap_incidence > 0 else "green"
+        col4.markdown(
+            f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_inc_label}</span>"
+            f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_inc_color}'>{abs(_linac_gap_incidence):,}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("**Calculation based on 5 machines per million of population**")
+        _linacs_required_pop = _total_pop / 1_000_000 * 5
+        _linacs_required_pop_ceil = math.ceil(_linacs_required_pop)
+        _linac_gap_pop = _linacs_required_pop_ceil - _n_linacs
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Population", f"{_total_pop:,}")
+        col2.metric("LINACs (DIRAC)", f"{_n_linacs:,}")
+        col3.metric("LINACs required (5 per million pop.)", f"{_linacs_required_pop_ceil:,}")
+        _gap_pop_label = "LINAC shortage" if _linac_gap_pop > 0 else "LINAC surplus"
+        _gap_pop_color = "red" if _linac_gap_pop > 0 else "green"
+        col4.markdown(
+            f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_pop_label}</span>"
+            f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_pop_color}'>{abs(_linac_gap_pop):,}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.caption(
+            "Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence by optimal RT utilisation rates "
+            "(Delaney et al. 2005) for each cancer site independently. "
+            "Aggregate cancer types (All cancers, All cancers excl. NMSC) are excluded to avoid double counting. "
+            f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
+            "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8)). "
+            "Population-based benchmark: 5 LINACs per million population ([IAEA DIRAC Database](https://dirac.iaea.org/))."
+        )
+
+# ---------------------------------------------------------------------------
+# Probability Model tab
+# ---------------------------------------------------------------------------
+
+with tab_model:
+    st.header("Probability Model")
+    st.markdown(
+        "This tab illustrates how the selected probability model translates "
+        "distance from a LINAC facility into a probability of treatment."
+    )
+
+    _pm_model = st.selectbox(
+        "Probability model",
+        ["Exponential decay", "Step function", "Uniform (no decay)"],
+        key="pm_model",
+    )
+
+    st.divider()
+
+    if _pm_model == "Exponential decay":
+        _pm_lambda = st.slider("Distance decay λ (km)", 5, 500, 30, step=5, key="pm_lambda")
+
+        st.markdown("### Formula")
+        st.latex(r"P(\text{treatment} \mid d) = e^{-d \,/\, \lambda}")
+        st.markdown(
+            "where $d$ is the distance to the nearest LINAC facility and "
+            r"$\lambda$ is the distance-decay constant (half-length). "
+            "When multiple facilities exist, contributions are combined as:"
+        )
+        st.latex(r"P_{\text{total}} = 1 - \prod_{i}\!\left(1 - e^{-d_i / \lambda}\right)^{w_i}")
+        st.markdown(
+            f"At the current setting ($\\lambda = {_pm_lambda}$ km), "
+            f"a patient **{_pm_lambda} km** from a facility has a treatment probability of "
+            f"**{np.exp(-1):.1%}** (i.e. $e^{{-1}} \\approx 37\\%$). "
+            f"At **{2*_pm_lambda} km** the probability falls to "
+            f"**{np.exp(-2):.1%}**."
+        )
+
+        _pm_dist = np.linspace(0, 1000, 500)
+        _pm_prob = np.exp(-_pm_dist / _pm_lambda)
+
+    elif _pm_model == "Step function":
+        _pm_cutoff = st.slider("Max treatment distance (km)", 10, 1000, 100, step=10, key="pm_cutoff")
+
+        st.markdown("### Formula")
+        st.latex(
+            r"P(\text{treatment} \mid d) = \begin{cases} 1 & d \leq d_{\max} \\ 0 & d > d_{\max} \end{cases}"
+        )
+        st.markdown(
+            f"Patients within **{_pm_cutoff} km** of a LINAC are assumed to have "
+            "100% probability of treatment; those beyond have 0%."
+        )
+
+        _pm_dist = np.linspace(0, 1000, 500)
+        _pm_prob = (_pm_dist <= _pm_cutoff).astype(float)
+
+    else:  # Uniform
+        st.markdown("### Formula")
+        st.latex(r"P(\text{treatment} \mid d) = 1 \quad \forall\, d")
+        st.markdown(
+            "Distance has no effect on access. All patients are assumed to have "
+            "equal probability of treatment regardless of their distance from a LINAC. "
+            "Capacity constraints still apply."
+        )
+
+        _pm_dist = np.linspace(0, 1000, 500)
+        _pm_prob = np.ones(500)
+
+    # ---- Plot ---------------------------------------------------------------
+    _fig_pm = go.Figure()
+    _fig_pm.add_trace(
+        go.Scatter(
+            x=_pm_dist,
+            y=_pm_prob * 100,
+            mode="lines",
+            line=dict(color="#1f77b4", width=2.5),
+            name="P(treatment)",
+        )
+    )
+
+    if _pm_model == "Step function":
+        _fig_pm.add_vline(
+            x=_pm_cutoff,
+            line_dash="dash",
+            line_color="red",
+            annotation_text=f"Cut-off: {_pm_cutoff} km",
+            annotation_position="top right",
+        )
+    elif _pm_model == "Exponential decay":
+        _fig_pm.add_vline(
+            x=_pm_lambda,
+            line_dash="dash",
+            line_color="orange",
+            annotation_text=f"λ = {_pm_lambda} km  (P ≈ 37%)",
+            annotation_position="top right",
+        )
+
+    _fig_pm.update_layout(
+        xaxis_title="Distance from nearest LINAC (km)",
+        xaxis=dict(range=[0, 1000]),
+        yaxis_title="Probability of treatment (%)",
+        yaxis=dict(range=[0, 105], ticksuffix="%"),
+        height=420,
+        margin=dict(l=60, r=30, t=30, b=60),
+        hovermode="x unified",
+    )
+    st.plotly_chart(_fig_pm, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Map tab
+# ---------------------------------------------------------------------------
+
+with tab_map:
+    st.header(f"{map_type} — {country}")
+
+    if not generate:
+        st.info("Configure options in the sidebar and click **Generate Map**.")
+    else:
+
+        # Load LINAC data (needed for access and nearest-distance maps)
+        locs: Optional[List[Tuple[float, float, float]]] = None
+        facilities_df: Optional[pd.DataFrame] = None
+        if needs_linac:
+            with st.spinner("Loading LINAC data from DIRAC database…"):
+                result = _load_dirac(country)
+            if result[0] is None:
+                st.info(f"No LINAC data found for **{country}** — showing 0 facilities.")
+                locs = []
+                facilities_df = pd.DataFrame()
+            else:
+                locs, facilities_df = result
+
+
+        _MAUP_NOTE = (
+            "Note: values are normalised to per 10 km² or per hexagon, but spatial density "
+            "estimates depend on H3 resolution and are affected by the "
+            "[Modifiable Areal Unit Problem (MAUP)](https://en.wikipedia.org/wiki/Modifiable_areal_unit_problem)."
+        )
+
+        # ---- Population Density -----------------------------------------------
+        if map_type == "Population Density":
+            with st.spinner("Loading population data…"):
+                gdf = _load_pop(country, h3_resolution)
+
+            pop = gdf["population"].to_numpy(dtype=np.float64)
+            _areas_pop = _hex_areas_km2(gdf)
+            if density_per_km2:
+                plot_vals = pop / (_areas_pop / 10)
+                pop_label = "People per 10 km²"
+            else:
+                plot_vals = pop
+                pop_label = "People per hexagon"
+            auto_vmin = float(max(plot_vals.min(), 1e-3))
+            auto_vmax = float(plot_vals.max())
+            colors, vmin, vmax = _color_values(plot_vals, cb_cmap_fn, auto_vmin, auto_vmax)
+
+            gdf = gdf.copy()
+            gdf["color"] = colors
+            _s_area_pop = pd.Series(_areas_pop, index=gdf.index).round(2).astype(str)
+            gdf["tip"] = (
+                "<b>" + gdf["h3"].astype(str) + "</b><br/>"
+                + pop_label + ": " + pd.Series(plot_vals, index=gdf.index).round(2).astype(str) + "<br/>"
+                + "Hex area: " + _s_area_pop + " km²"
+            )
+
+            df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
+            _render_with_colorbar(
+                [_build_hex_layer(df)],
+                _make_view(gdf),
+                cb_cmap_fn, vmin, vmax, pop_label, log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+            )
+            st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf) + "  \n" + _MAUP_NOTE)
+            col1, col2 = st.columns(2)
+            col1.metric("Total population", f"{int(gdf['population'].sum()):,}")
+            col2.metric("H3 hexagons", f"{len(gdf):,}")
+
+        # ---- Cancer maps -------------------------------------------------------
+        elif is_cancer:
+            if not selected_cancers:
+                st.warning("Please select at least one cancer type.")
+            else:
+                if not has_globocan_data(iso3):
+                    st.warning(
+                        f"**{country}** (ISO3: {iso3}) is not present in this GLOBOCAN dataset. "
+                        "Cancer case counts will be zero. The population map is still available."
+                    )
+
+                # For optimal RT calculation in aggregate views, expand to individual
+                # sites so each cancer type is weighted by its own RT fraction rather
+                # than a flat aggregate rate.
+                _all_individual = [
+                    c for c in get_cancer_types() + DERIVED_CANCER_TYPES
+                    if c.strip().lower() not in _AGGREGATE_CANCER_KEYS
+                ]
+                if map_type == "Cancer cases requiring RT" and rt_method == "optimal" and _map_cancer_view != "Specific cancer site(s)":
+                    if _map_cancer_view == "All cancers":
+                        _load_cancers = _all_individual
+                    else:  # All cancers excl. NMSC
+                        _load_cancers = [c for c in _all_individual if c.lower() != "nmsc"]
+                else:
+                    _load_cancers = selected_cancers
+
+                with st.spinner("Apportioning cancer incidence to H3 grid…"):
+                    gdf = _load_cancer(country, iso3, tuple(_load_cancers), use_actual, h3_resolution)
+
+                if map_type == "Cancer cases requiring RT":
+                    suffix = "_optimal_rt" if rt_method == "optimal" else "_incidence"
+                else:
+                    suffix = "_incidence"
+
+                cols_of_interest = [c + suffix for c in _load_cancers if (c + suffix) in gdf.columns]
+                if not cols_of_interest:
+                    st.error("No matching columns found in data.")
+                else:
+                    combined = gdf[cols_of_interest].sum(axis=1).to_numpy(dtype=np.float64)
+
+                    if map_type == "Cancer cases requiring RT" and rt_method == "proportional":
+                        combined = combined * rt_fraction
+
+                    _areas_cancer = _hex_areas_km2(gdf)
+                    if density_per_km2:
+                        plot_vals_c = combined / (_areas_cancer / 10)
+                        _per_suffix = " per 10 km²"
+                    else:
+                        plot_vals_c = combined
+                        _per_suffix = " per hexagon"
+
+                    auto_vmin = float(max(plot_vals_c.min(), 0.001))
+                    auto_vmax = float(plot_vals_c.max())
+                    colors, vmin, vmax = _color_values(plot_vals_c, cb_cmap_fn, auto_vmin, auto_vmax)
+
+                    gdf = gdf.copy()
+                    gdf["color"] = colors
+
+                    if map_type == "Cancer cases requiring RT":
+                        label = f"Cancer Cases Requiring RT{_per_suffix}"
+                    else:
+                        label = f"Annual New Cancer Cases{_per_suffix}"
+
+                    s_combined = pd.Series(plot_vals_c, index=gdf.index).round(2).astype(str)
+                    _s_area_c = pd.Series(_areas_cancer, index=gdf.index).round(2).astype(str)
+                    gdf["tip"] = (
+                        "<b>" + gdf["h3"].astype(str) + "</b><br/>"
+                        + label + ": " + s_combined + "<br/>"
+                        + "Hex area: " + _s_area_c + " km²"
+                    )
+
+                    df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
+                    _render_with_colorbar(
+                        [_build_hex_layer(df)],
+                        _make_view(gdf),
+                        cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                    )
+                    st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf) + "  \n" + _MAUP_NOTE)
+                    if map_type == "Cancer cases requiring RT":
+                        if rt_method == "optimal":
+                            _rt_method_text = (
+                                "Based on optimal RT utilisation rates (Delaney et al. 2005): "
+                                "each cancer site weighted by its evidence-based RT fraction."
+                            )
+                        else:
+                            _rt_method_text = (
+                                f"Based on proportional scaling: {rt_fraction:.0%} of all cancer cases assumed to require RT."
+                            )
+                        st.caption(_rt_method_text)
+                    if map_type == "Annual New Cancer Cases":
+                        if _map_cancer_view == "All cancers":
+                            _scope_text = "Showing: all cancer sites (GLOBOCAN — All cancers)"
+                        elif _map_cancer_view == "All cancers excl. NMSC":
+                            _scope_text = "Showing: all cancer sites excl. non-melanoma skin cancer (GLOBOCAN — All cancers excl. NMSC)"
+                        else:
+                            _site_str = ", ".join(selected_cancers) if selected_cancers else "none selected"
+                            _scope_text = f"Showing specific sites: {_site_str}"
+                        st.caption(_scope_text)
+                    if _map_cancer_view == "All cancers":
+                        _cases_label = "Annual New Cancer Cases: All Sites"
+                    elif _map_cancer_view == "All cancers excl. NMSC":
+                        _cases_label = "Annual New Cancer Cases: All Cancers excl. NMSC"
+                    else:
+                        _site_str = ", ".join(selected_cancers) if selected_cancers else "none"
+                        _cases_label = f"Annual New Cancer Cases: {_site_str}"
+
+                    if map_type == "Cancer cases requiring RT":
+                        incidence_cols = [c + "_incidence" for c in _load_cancers if (c + "_incidence") in gdf.columns]
+                        total_incidence = float(gdf[incidence_cols].sum(axis=1).sum()) if incidence_cols else 0.0
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric(_cases_label, f"{total_incidence:,.0f}")
+                        col2.metric("Corresponding Cases Requiring RT", f"{combined.sum():,.0f}")
+                        col3.metric("H3 hexagons", f"{len(gdf):,}")
+                    else:
+                        total_pop = float(gdf["population"].sum())
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric(_cases_label, f"{combined.sum():,.0f}")
+                        col2.metric("Country population", f"{int(total_pop):,}")
+                        col3.metric("H3 hexagons", f"{len(gdf):,}")
+
+        # ---- Radiotherapy Access / Nearest LINAC Distance ----------------------
+        elif is_access or is_nearest:
+            linac_locs_tuple = tuple(locs)
+
+            with st.spinner("Computing accessibility…"):
+                gdf_out, stats = _compute_access(
+                    country,
+                    iso3,
+                    linac_locs_tuple,
+                    float(lambda_km),
+                    access_model,
+                    float(max_distance_km),
+                    capacity_per_machine_per_year,
+                    access_rt_method,
+                    access_rt_fraction,
+                    h3_resolution,
+                )
+
+            pitch = 30.0 if show_linac_markers else 0.0
+
+            _geom = gdf_out.geometry
+            _lat_span = float(_geom.bounds["maxy"].max() - _geom.bounds["miny"].min())
+            _lon_span = float(_geom.bounds["maxx"].max() - _geom.bounds["minx"].min())
+            _lat_mid = float((_geom.bounds["maxy"].max() + _geom.bounds["miny"].min()) / 2)
+            country_span_km = max(
+                _lat_span * 111.32,
+                _lon_span * 111.32 * math.cos(math.radians(_lat_mid)),
+            )
+
+            if is_nearest:
+                dist_km = gdf_out["nearest_linac_km"].to_numpy(dtype=np.float64)
+                valid = np.isfinite(dist_km)
+                auto_vmin = 0.0
+                auto_vmax = float(np.nanpercentile(dist_km[valid], 95)) if valid.any() else 500.0
+                colors, vmin, vmax = _color_values(dist_km, cb_cmap_fn, auto_vmin, auto_vmax)
+
+                gdf_out = gdf_out.copy()
+                gdf_out["color"] = colors
+                gdf_out["tip"] = (
+                    "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
+                    "Nearest LINAC: " + dist_km.round(1).astype(str) + " km"
+                )
+
+                layers = [_build_hex_layer(
+                    pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
+                )]
+                if show_linac_markers:
+                    layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, style=linac_tower_style))
+
+                _render_with_colorbar(
+                    layers, _make_view(gdf_out, pitch=pitch),
+                    cb_cmap_fn, vmin, vmax, "Distance (km)",
+                    log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                )
+                st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Total LINACs", int(stats["total_machines"]))
+                col2.metric("Median distance", f"{float(np.nanmedian(dist_km)):.1f} km")
+                col3.metric("95th-pct distance", f"{auto_vmax:.1f} km")
+
+            else:  # Radiotherapy Access
+                prob = gdf_out["access_probability"].to_numpy(dtype=np.float64)
+                cap_prob = gdf_out["capacity_limited_probability"].to_numpy(dtype=np.float64)
+                raw_pop = gdf_out["population"].to_numpy(dtype=np.float64)
+
+                s_h3 = gdf_out["h3"].astype(str)
+                s_prob = (gdf_out["access_probability"] * 100).round(1).astype(str)
+                s_cap = (gdf_out["capacity_limited_probability"] * 100).round(1).astype(str)
+                s_pop = gdf_out["population"].round(0).astype(int).astype(str)
+
+                if access_display_metric == "Modelled Untreated":
+                    display_vals = gdf_out["rt_untreated"].to_numpy(dtype=np.float64)
+                    cb_label_access = "RT patients untreated/yr"
+                    auto_vmin_a = 0.0
+                    auto_vmax_a = float(np.nanmax(display_vals))
+                    _tip_prefix = "RT patients untreated/yr"
+                    metric_cmap_fn = _rdylgn_reversed_rgb
+
+                elif access_display_metric == "Modelled Treated":
+                    display_vals = gdf_out["rt_treated"].to_numpy(dtype=np.float64)
+                    cb_label_access = "RT patients treated/yr"
+                    auto_vmin_a = 0.0
+                    auto_vmax_a = float(np.nanmax(display_vals))
+                    _tip_prefix = "RT patients treated/yr"
+                    metric_cmap_fn = _rdylgn_rgb
+
+                elif access_display_metric == "Modelled Access Probability":
+                    display_vals = cap_prob
+                    cb_label_access = "Modelled Access Probability"
+                    auto_vmin_a, auto_vmax_a = 0.0, 1.0
+                    tip_series = (
+                        "<b>" + s_h3 + "</b><br/>"
+                        + "Modelled access probability: " + s_cap + "%<br/>"
+                        + "Geographic access probability: " + s_prob + "%"
+                    )
+                    metric_cmap_fn = _rdylgn_rgb
+
+                else:  # Geographic Access Probability
+                    display_vals = prob
+                    cb_label_access = "Geographic Access Probability"
+                    auto_vmin_a, auto_vmax_a = 0.0, 1.0
+                    tip_series = (
+                        "<b>" + s_h3 + "</b><br/>"
+                        + "Geographic access probability: " + s_prob + "%<br/>"
+                        + "People per hex: " + s_pop
+                    )
+                    metric_cmap_fn = _rdylgn_rgb
+
+                # Apply per-km² normalisation for count-based access metrics
+                if access_display_metric in _count_access_metrics:
+                    _areas_acc = _hex_areas_km2(gdf_out)
+                    _s_area_acc = pd.Series(_areas_acc, index=gdf_out.index).round(2).astype(str)
+                    if density_per_km2:
+                        display_vals = display_vals / (_areas_acc / 10)
+                        auto_vmax_a = float(np.nanmax(display_vals))
+                        cb_label_access += " per 10 km²"
+                        s_vals = pd.Series(display_vals, index=gdf_out.index).round(3).astype(str)
+                        tip_series = (
+                            "<b>" + s_h3 + "</b><br/>"
+                            + _tip_prefix + " per 10 km²: " + s_vals + "<br/>"
+                            + "Cap-limited probability: " + s_cap + "%<br/>"
+                            + "Hex area: " + _s_area_acc + " km²"
+                        )
+                    else:
+                        cb_label_access += " per hexagon"
+                        s_vals = pd.Series(display_vals, index=gdf_out.index).round(1).astype(str)
+                        tip_series = (
+                            "<b>" + s_h3 + "</b><br/>"
+                            + _tip_prefix + ": " + s_vals + "<br/>"
+                            + "Cap-limited probability: " + s_cap + "%<br/>"
+                            + "Hex area: " + _s_area_acc + " km²"
+                        )
+
+                _map_default_cmap = _DEFAULT_CMAP.get(map_type, "Green → Red")
+                active_cmap_fn = metric_cmap_fn if cb_cmap_name == _map_default_cmap else cb_cmap_fn
+                colors, vmin, vmax = _color_values(display_vals, active_cmap_fn, auto_vmin_a, auto_vmax_a)
+
+                gdf_out = gdf_out.copy()
+                gdf_out["color"] = colors
+                gdf_out["tip"] = tip_series.values
+
+                layers = [_build_hex_layer(
+                    pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
+                )]
+                if show_linac_markers:
+                    layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, style=linac_tower_style))
+
+                if stats["total_rt_demand"] == 0:
+                    st.warning(
+                        f"RT demand is zero for **{country}** — this country may not be in the GLOBOCAN dataset. "
+                        "Capacity allocation cannot be computed; geographic access probability is still valid."
+                    )
+
+                _render_with_colorbar(
+                    layers, _make_view(gdf_out, pitch=pitch),
+                    active_cmap_fn, vmin, vmax, cb_label_access,
+                    log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                )
+                st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out) + "  \n" + _MAUP_NOTE)
+                if access_display_metric == "Modelled Access Probability":
+                    st.caption(
+                        "Modelled Access Probability gives the ratio of treated to untreated patients per hex."
+                    )
+                elif access_display_metric == "Geographic Access Probability":
+                    st.caption(
+                        "Geographic Access Probability shows the probability a patient in a given hex will "
+                        "have treatment, given there are no linac capacity constraints."
+                    )
+
+                if access_model == "exponential":
+                    model_info = f"Exponential | λ = {lambda_km} km | cut-off = {stats['cutoff_km']:.0f} km"
+                elif access_model == "step":
+                    model_info = f"Step function | max distance = {max_distance_km:.0f} km"
+                else:
+                    model_info = "Uniform (no distance decay)"
+
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                col1.metric("LINACs", int(stats["total_machines"]))
+                col2.metric("Total LINAC Capacity", _fmt_sigfig(stats['total_national_capacity']))
+                _globocan = stats.get("total_cancer_excl_nmsc")
+                col3.metric("Annual New Cancer Cases", _fmt_sigfig(_globocan) if _globocan is not None else "N/A")
+                col4.metric("Modelled RT Need", _fmt_sigfig(stats['total_rt_demand']))
+                col5.metric("Patients Treated", _fmt_sigfig(stats['total_rt_treated']))
+                _pct_treated = (stats['total_rt_treated'] / stats['total_rt_demand'] * 100) if stats['total_rt_demand'] > 0 else 0.0
+                col6.metric("% of Patients Treated", f"{_pct_treated:.1f}%")
+                # col7.metric("Mean Geographic Access", f"{stats['mean_access_probability']:.1%}")
+                _demand_info = (
+                    f"demand: optimal RT utilisations"
+                    if access_rt_method == "optimal"
+                    else f"demand: proportional RT ({access_rt_fraction:.0%} of cancer cases)"
+                )
+                st.caption(
+                    f"{model_info} | {int(capacity_per_machine_per_year)} patients/machine/yr | "
+                    f"{_demand_info} | {stats['n_hexagons']:,} hexagons"
+                )

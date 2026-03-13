@@ -9,6 +9,9 @@ Models
 **Step function**:
     P_total = 1 if any facility within max_distance_km, else 0
 
+**Uniform**:
+    P_total = 1 for all hexes (no distance barrier)
+
 where:
     d_i   geodesic distance (km) from centroid to facility i
     λ     distance-decay parameter (km)
@@ -97,7 +100,7 @@ def compute_accessibility(
     stats : dict
     """
     if cutoff_km is None:
-        cutoff_km = 5.0 * lambda_km
+        cutoff_km = 10.0 * lambda_km
 
     geod = Geod(ellps="WGS84")
     g = gdf.copy()
@@ -128,6 +131,11 @@ def compute_accessibility(
 
     # Capacity-limited allocation accumulator (RT patients/year)
     total_allocated = np.zeros(n, dtype=np.float64)
+    # Track unmet demand per hex so each facility only serves genuinely unmet need.
+    # Without this, multiple facilities each "see" the full demand of a nearby hex,
+    # wasting their capacity on already-served patients and leaving adjacent hexes
+    # with nothing.
+    remaining_demand = rt_demand.copy()
 
     for j, (lat_f, lon_f, w) in enumerate(linac_locations):
         _, _, dists_m = geod.inv(
@@ -151,19 +159,16 @@ def compute_accessibility(
         eff_w = (w * cap_factor) if use_weights else 1.0
         complement *= np.power(np.maximum(1.0 - p, 0.0), eff_w)
 
-        # --- greedy nearest-first capacity allocation (skip for uniform) ---
-        if model == "uniform":
-            continue  # handled post-loop with proportional global allocation
-
+        # --- greedy nearest-first capacity allocation ---
         cap_j = w * capacity_per_machine_per_year
         if cap_j <= 0:
             continue
 
         sorted_idx = np.argsort(dists_km)
         p_sorted = p[sorted_idx]                   # cutoff already applied
-        rt_demand_sorted = rt_demand[sorted_idx]
+        remaining_sorted = remaining_demand[sorted_idx]
 
-        demands_sorted = rt_demand_sorted * p_sorted
+        demands_sorted = remaining_sorted * p_sorted
 
         cum = np.cumsum(demands_sorted)
         prev_cum = np.empty_like(cum)
@@ -174,15 +179,7 @@ def compute_accessibility(
         allocated_sorted = np.minimum(demands_sorted, remaining_before)
 
         total_allocated[sorted_idx] += allocated_sorted
-
-    # For uniform model: no distance barriers → share capacity proportionally across
-    # all hexes.  When total capacity ≥ total demand every patient is treated.
-    if model == "uniform":
-        total_cap = float(raw_weights.sum() * capacity_per_machine_per_year)
-        total_dem = float(rt_demand.sum())
-        if total_dem > 0:
-            ratio = min(1.0, total_cap / total_dem)
-            total_allocated = rt_demand * ratio
+        remaining_demand[sorted_idx] -= allocated_sorted
 
     # --- assemble results ---
     prob = 1.0 - complement

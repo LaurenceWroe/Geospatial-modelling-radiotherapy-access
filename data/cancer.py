@@ -29,6 +29,10 @@ OPTIMAL_CSV = Path("b_cancer_incidence/optimal_rt_utilisations.csv")
 ACTUAL_DIR = Path("b_cancer_incidence/actual_data")
 NEW_CASES_METRIC = "New_Cases_Number"
 
+# Derived cancer types not directly in GLOBOCAN — computed from aggregates
+DERIVED_CANCER_TYPES: List[str] = ["NMSC", "Other cancers"]
+_GLOBOCAN_AGGREGATE_KEYS = {"all cancers", "all cancers excl. nmsc", "all cancers excl nmsc"}
+
 
 def _norm_key(s: str) -> str:
     """Normalise a cancer name to alphanumeric-only lowercase for robust matching."""
@@ -85,16 +89,71 @@ def _load_actual_fractions(iso3: str) -> Optional[Dict[str, float]]:
         return None
 
 
+def get_optimal_rt_fractions() -> Dict[str, float]:
+    """Return optimal RT utilisation fractions keyed by original cancer type name."""
+    fracs: Dict[str, float] = {}
+    try:
+        with open(OPTIMAL_CSV) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.rsplit(",", 1)
+                if len(parts) == 2:
+                    try:
+                        fracs[parts[0].strip()] = float(parts[1].strip())
+                    except ValueError:
+                        pass
+    except FileNotFoundError:
+        pass
+    return fracs
+
+
+def _compute_derived_cases(iso3: str, da) -> Dict[str, float]:
+    """Compute NMSC and Other cancers case counts from GLOBOCAN aggregates."""
+    def _get(cancer: str) -> float:
+        try:
+            v = float(da.sel(Cancer=cancer, Metric=NEW_CASES_METRIC, ISO3=iso3).values)
+            return v if np.isfinite(v) else 0.0
+        except (KeyError, ValueError):
+            return 0.0
+
+    all_total = _get("All cancers")
+    excl_nmsc = _get("All cancers excl. NMSC")
+    nmsc = max(0.0, all_total - excl_nmsc)
+
+    # Sum all individual (non-aggregate, non-derived) site cases
+    individual_sum = 0.0
+    for cancer in da.coords["Cancer"].values:
+        c = str(cancer)
+        if c.strip().lower() not in _GLOBOCAN_AGGREGATE_KEYS:
+            individual_sum += _get(c)
+
+    other = max(0.0, excl_nmsc - individual_sum)
+    return {"NMSC": nmsc, "Other cancers": other}
+
+
 def get_national_cases(iso3: str, cancer_types: List[str]) -> Dict[str, float]:
-    """Return national new-case counts for the given cancer types and ISO3."""
+    """Return national new-case counts for the given cancer types and ISO3.
+
+    Handles the two derived types ``"NMSC"`` and ``"Other cancers"`` which are
+    computed from GLOBOCAN aggregates rather than read directly.
+    """
     da = xr.open_dataarray(XARRAY_PATH)
+    derived: Dict[str, float] = {}
+    if any(c in ("NMSC", "Other cancers") for c in cancer_types):
+        derived = _compute_derived_cases(iso3, da)
+
     cases: Dict[str, float] = {}
     for cancer in cancer_types:
-        try:
-            val = float(da.sel(Cancer=cancer, Metric=NEW_CASES_METRIC, ISO3=iso3).values)
-            cases[cancer] = val if np.isfinite(val) else 0.0
-        except (KeyError, ValueError):
-            cases[cancer] = 0.0
+        if cancer in ("NMSC", "Other cancers"):
+            cases[cancer] = derived.get(cancer, 0.0)
+        else:
+            try:
+                val = float(da.sel(Cancer=cancer, Metric=NEW_CASES_METRIC, ISO3=iso3).values)
+                cases[cancer] = val if np.isfinite(val) else 0.0
+            except (KeyError, ValueError):
+                cases[cancer] = 0.0
     return cases
 
 

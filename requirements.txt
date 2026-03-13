@@ -15,6 +15,7 @@ openpyxl>=3.1.0    # reading .xlsx LINAC files
 
 # Visualisation
 matplotlib>=3.7.0
+plotly>=5.18.0     # interactive charts (probability model tab)
 pydeck>=0.8.0      # interactive H3 maps via Streamlit
 streamlit>=1.32.0  # web app framework
 
