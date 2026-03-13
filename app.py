@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker
 import numpy as np
 import pandas as pd
+import xarray as xr
 import plotly.graph_objects as go
 import pydeck as pdk
 import pycountry
@@ -38,6 +39,7 @@ from data.linacs import load_linacs_from_dirac_db
 from data.cancer import (
     get_cancer_types, apportion_cancer_to_h3, has_globocan_data,
     get_national_cases, get_optimal_rt_fractions, DERIVED_CANCER_TYPES,
+    XARRAY_PATH,
 )
 from analysis.accessibility import compute_accessibility
 
@@ -180,6 +182,20 @@ def _colorbar_fig(
 # ---------------------------------------------------------------------------
 # Cached data loaders
 # ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False)
+def _globocan_country_list() -> list[str]:
+    """Return pycountry display names for countries present in the GLOBOCAN .nc file."""
+    da = xr.open_dataarray(XARRAY_PATH)
+    iso3_set = {str(v) for v in da.coords["ISO3"].values}
+    names = []
+    for iso3 in iso3_set:
+        try:
+            names.append(pycountry.countries.get(alpha_3=iso3).name)
+        except AttributeError:
+            pass
+    return sorted(names)
+
 
 @st.cache_data(show_spinner=False)
 def _load_pop(country: str, h3_res: int = 8):
@@ -546,10 +562,11 @@ MAP_TYPES = [
 with st.sidebar:
     st.title("🏥 Radiotherapy Access")
 
+    _country_options = _globocan_country_list()
     country = st.selectbox(
         "Country",
-        options=sorted(c.name for c in pycountry.countries),
-        index=sorted(c.name for c in pycountry.countries).index("United Kingdom"),
+        options=_country_options,
+        index=_country_options.index("United Kingdom") if "United Kingdom" in _country_options else 0,
     )
 
     map_type = st.selectbox("Map type", MAP_TYPES)
