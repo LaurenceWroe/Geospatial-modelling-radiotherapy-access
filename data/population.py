@@ -14,9 +14,11 @@ import gzip
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Callable, Optional
 
 import geopandas as gpd
 import h3 as _h3
+import pandas as pd
 import pycountry
 import requests
 from shapely.geometry import Polygon as _Polygon
@@ -114,6 +116,67 @@ def load_population_at_resolution(
         lambda h: _Polygon([(lon, lat) for lat, lon in _h3.cell_to_boundary(h)])
     )
     return gpd.GeoDataFrame(df_agg, geometry="geometry", crs="EPSG:4326")
+
+
+def load_region_population(
+    region_name: str,
+    target_resolution: int = 3,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> gpd.GeoDataFrame:
+    """Merge per-country Kontur H3 files for a named region.
+
+    Downloads any missing country files automatically.  Population counts are
+    summed for any H3 cells that appear in more than one country file (border
+    artefacts).
+
+    Parameters
+    ----------
+    region_name : str
+        Must be a key in ``data.regions.REGION_DISPLAY_NAMES``.
+    target_resolution : int
+        H3 resolution for the merged output, capped at the region's
+        ``max_resolution`` (3 for most regions, 1 for World).
+    progress_callback : callable, optional
+        Called as ``progress_callback(loaded_count, total_count, alpha2)``
+        after each country file is processed.
+
+    Returns
+    -------
+    GeoDataFrame with columns ``h3``, ``population``, ``geometry``.
+    """
+    from data.regions import get_region  # avoid circular import at module level
+
+    reg = get_region(region_name)
+    effective_res = min(target_resolution, reg.max_resolution)
+
+    gdfs = []
+    alpha2_list = reg.member_alpha2
+    total = len(alpha2_list)
+
+    for i, alpha2 in enumerate(alpha2_list):
+        if progress_callback:
+            progress_callback(i, total, alpha2)
+        try:
+            country_obj = pycountry.countries.get(alpha_2=alpha2)
+            if country_obj is None:
+                continue
+            gdf_c = load_population_at_resolution(country_obj.name, effective_res)
+            gdfs.append(gdf_c[["h3", "population"]])
+        except Exception:
+            continue  # file not available — skip silently
+
+    if progress_callback:
+        progress_callback(total, total, "")
+
+    if not gdfs:
+        raise ValueError(f"No population data found for region {region_name!r}")
+
+    merged = pd.concat(gdfs, ignore_index=True)
+    merged = merged.groupby("h3", as_index=False)["population"].sum()
+    merged["geometry"] = merged["h3"].apply(
+        lambda h: _Polygon([(lon, lat) for lat, lon in _h3.cell_to_boundary(h)])
+    )
+    return gpd.GeoDataFrame(merged, geometry="geometry", crs="EPSG:4326")
 
 
 def _normalise(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:

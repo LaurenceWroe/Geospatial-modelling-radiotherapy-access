@@ -24,32 +24,42 @@ import xarray as xr
 # Paths
 # ---------------------------------------------------------------------------
 HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE.parent))  # allow importing data.regions from project root
 CSV_PATH  = HERE / "all_countries_cancer_statistics.csv"
 OUT_PATH  = HERE / "globocan_xarray.nc"
 
 # ---------------------------------------------------------------------------
-# Regional / aggregate rows to skip entirely (not real countries)
+# Region CSV names → synthetic ISO3 codes (these ARE included in the .nc)
 # ---------------------------------------------------------------------------
+from data.regions import REGIONS as _REGIONS  # noqa: E402
+REGION_CSV_TO_CODE: dict[str, str] = {
+    r.csv_name.strip().lower(): r.globocan_code for r in _REGIONS
+}
+
+# ---------------------------------------------------------------------------
+# Regional / aggregate rows to skip entirely (not real countries or regions)
+# ---------------------------------------------------------------------------
+# Top-level GLOBOCAN regions (world, africa, europe, …) are handled via
+# REGION_CSV_TO_CODE above.  Only sub-regional / income / hub rows are skipped.
 SKIP_NAMES = {
-    "africa", "asia", "caribbean", "caribbean hub", "central america",
-    "eastern africa", "eastern asia", "eastern europe", "europe",
+    "asia",                              # too broad — use sub-regions instead
+    "caribbean hub",
+    "eastern africa", "eastern europe",
     "european union 27", "high hdi", "high income",
     "latin america and the caribbean", "latin america hub",
     "low hdi", "low income", "lower middle income",
     "medium hdi", "medium hdi but india", "melanesia",
     "micronesia", "micronesiapolynesia", "middle africa",
     "northern africa", "northern africa central and western asia hub",
-    "northern america", "northern europe", "oceania",
+    "northern europe",
     "pacific islands hub", "polynesia",
-    "south america", "south central asia",
-    "south east and south eastern asia hub", "south eastern asia",
+    "south east and south eastern asia hub",
     "southern africa", "southern europe",
     "sub saharan africa", "sub saharan africa hub",
     "upper middle income", "very high hdi",
-    "western africa", "western asia", "western europe",
+    "western africa", "western europe",
     "who africa afro", "who americas paho", "who east mediterranean emro",
     "who europe euro", "who south east asia searo", "who western pacific wpro",
-    "world",
     # Artefact / overseas territories (no standalone H3 population file)
     "australianew zealand",
     "france guadeloupe", "france la reunion", "france martinique",
@@ -117,6 +127,9 @@ def _country_to_iso3(name: str) -> str | None:
     key = name.strip().lower()
     if key in SKIP_NAMES:
         return None
+    # Region rows → synthetic codes (checked before MANUAL / pycountry)
+    if key in REGION_CSV_TO_CODE:
+        return REGION_CSV_TO_CODE[key]
     if key in MANUAL:
         return MANUAL[key]
     # Try pycountry fuzzy search

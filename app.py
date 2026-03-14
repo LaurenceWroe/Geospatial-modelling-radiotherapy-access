@@ -34,8 +34,9 @@ import pydeck as pdk
 import pycountry
 import streamlit as st
 
-from data.population import load_population_at_resolution
-from data.linacs import load_linacs_from_dirac_db
+from data.population import load_population_at_resolution, load_region_population
+from data.linacs import load_linacs_from_dirac_db, load_linacs_for_region
+from data.regions import is_region, get_region, REGIONS, REGION_GLOBOCAN_CODES
 from data.cancer import (
     get_cancer_types, apportion_cancer_to_h3, has_globocan_data,
     get_national_cases, get_optimal_rt_fractions, DERIVED_CANCER_TYPES,
@@ -184,17 +185,24 @@ def _colorbar_fig(
 # ---------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def _globocan_country_list() -> list[str]:
-    """Return pycountry display names for countries present in the GLOBOCAN .nc file."""
+def _selection_options() -> list[str]:
+    """Return UI options: region display names first, then GLOBOCAN country names."""
     da = xr.open_dataarray(XARRAY_PATH)
     iso3_set = {str(v) for v in da.coords["ISO3"].values}
-    names = []
+    country_names = []
     for iso3 in iso3_set:
+        if iso3 in REGION_GLOBOCAN_CODES:
+            continue  # handled separately as region entries
         try:
-            names.append(pycountry.countries.get(alpha_3=iso3).name)
+            country_names.append(pycountry.countries.get(alpha_3=iso3).name)
         except AttributeError:
             pass
-    return sorted(names)
+    region_names = [r.display_name for r in REGIONS]
+    return region_names + sorted(country_names)
+
+
+# Keep old name as alias so cached calls referencing it still work
+_globocan_country_list = _selection_options
 
 
 @st.cache_data(show_spinner=False)
@@ -203,8 +211,14 @@ def _load_pop(country: str, h3_res: int = 8):
 
 
 @st.cache_data(show_spinner=False)
-def _load_cancer(country: str, iso3: str, cancers: tuple, use_actual: bool, h3_res: int = 8):
-    gdf = _load_pop(country, h3_res)
+def _load_pop_region(region_name: str, h3_res: int = 3):
+    return load_region_population(region_name, target_resolution=h3_res)
+
+
+@st.cache_data(show_spinner=False)
+def _load_cancer(country: str, iso3: str, cancers: tuple, use_actual: bool,
+                 h3_res: int = 8, region_flag: bool = False):
+    gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
     return apportion_cancer_to_h3(gdf, iso3, list(cancers), use_actual_rt=use_actual)
 
 
@@ -220,8 +234,9 @@ def _compute_access(
     rt_method: str = "optimal",
     rt_fraction: float = 0.25,
     h3_res: int = 8,
+    region_flag: bool = False,
 ):
-    gdf = _load_pop(country, h3_res)
+    gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
 
     # Build RT demand per hex from cancer data
     demand = None
@@ -268,6 +283,8 @@ def _compute_access(
 @st.cache_data(show_spinner=False)
 def _load_dirac(country: str):
     try:
+        if is_region(country):
+            return load_linacs_for_region(country)
         return load_linacs_from_dirac_db(country)
     except (ValueError, FileNotFoundError) as e:
         return None, str(e)
@@ -562,24 +579,38 @@ MAP_TYPES = [
 with st.sidebar:
     st.title("🏥 Radiotherapy Access")
 
-    _country_options = _globocan_country_list()
+    _all_options = _selection_options()
     country = st.selectbox(
-        "Country",
-        options=_country_options,
-        index=_country_options.index("United Kingdom") if "United Kingdom" in _country_options else 0,
+        "Country / Region",
+        options=_all_options,
+        index=_all_options.index("United Kingdom") if "United Kingdom" in _all_options else 0,
     )
+    _is_region = is_region(country)
 
     map_type = st.selectbox("Map type", MAP_TYPES)
 
-    h3_resolution = st.selectbox(
-        "H3 resolution",
-        options=[8, 7, 6, 5, 4, 3],
-        index=2,  # H6 default
-        format_func=lambda r: {
-            8: "H8 (~0.7 km²)", 7: "H7 (~5 km²)", 6: "H6 (~36 km²)",
-            5: "H5 (~253 km²)", 4: "H4 (~1,770 km²)", 3: "H3 (~12,400 km²)",
-        }[r],
-    )
+    if _is_region:
+        _reg_def = get_region(country)
+        _res_opts = [r for r in [1, 2, 3] if r <= _reg_def.max_resolution]
+        _res_labels = {
+            1: "H1 (~2.5M km²)", 2: "H2 (~87k km²)", 3: "H3 (~12,400 km²)",
+        }
+        h3_resolution = st.selectbox(
+            "H3 resolution",
+            options=_res_opts,
+            index=len(_res_opts) - 1,  # coarsest by default for World, finest otherwise
+            format_func=lambda r: _res_labels.get(r, str(r)),
+        )
+    else:
+        h3_resolution = st.selectbox(
+            "H3 resolution",
+            options=[8, 7, 6, 5, 4, 3],
+            index=2,  # H6 default
+            format_func=lambda r: {
+                8: "H8 (~0.7 km²)", 7: "H7 (~5 km²)", 6: "H6 (~36 km²)",
+                5: "H5 (~253 km²)", 4: "H4 (~1,770 km²)", 3: "H3 (~12,400 km²)",
+            }[r],
+        )
 
     is_rt_demand_map = map_type == "Cancer cases requiring RT"
     is_cancer = map_type in ("Annual New Cancer Cases", "Cancer cases requiring RT")
@@ -637,7 +668,7 @@ with st.sidebar:
             if rt_method == "proportional":
                 rt_fraction = st.slider(
                     "Fraction of cancer cases needing RT",
-                    min_value=0.05, max_value=1.0, value=0.25, step=0.05,
+                    min_value=0.01, max_value=1.0, value=0.25, step=0.01,
                     format="%.2f",
                 )
 
@@ -664,7 +695,7 @@ with st.sidebar:
         if access_rt_method == "proportional":
             access_rt_fraction = st.slider(
                 "Fraction of cancer cases needing RT",
-                min_value=0.05, max_value=1.0, value=0.25, step=0.05,
+                min_value=0.01, max_value=1.0, value=0.25, step=0.01,
                 format="%.2f",
                 key="access_rt_fraction",
             )
@@ -776,11 +807,14 @@ def _color_values(values: np.ndarray, cmap_fn, auto_vmin: float, auto_vmax: floa
 # Main panel
 # ---------------------------------------------------------------------------
 
-try:
-    iso3 = pycountry.countries.lookup(country).alpha_3
-except LookupError:
-    st.error(f"Could not resolve country: {country!r}")
-    st.stop()
+if _is_region:
+    iso3 = get_region(country).globocan_code
+else:
+    try:
+        iso3 = pycountry.countries.lookup(country).alpha_3
+    except LookupError:
+        st.error(f"Could not resolve country: {country!r}")
+        st.stop()
 
 tab_map, tab_data, tab_model = st.tabs(["🗺️ Modelling", "📊 Data", "📐 Probability Models"])
 
@@ -794,7 +828,7 @@ with tab_data:
     # ---- Population --------------------------------------------------------
     st.subheader(f"Population — {country}")
     with st.spinner("Loading population data…"):
-        _pop_gdf = _load_pop(country, 5)
+        _pop_gdf = _load_pop_region(country, 3) if _is_region else _load_pop(country, 5)
     _total_pop = int(_pop_gdf["population"].sum())
     st.metric("Total population", f"{_total_pop:,}")
     st.caption(
@@ -1109,7 +1143,7 @@ with tab_map:
         # ---- Population Density -----------------------------------------------
         if map_type == "Population Density":
             with st.spinner("Loading population data…"):
-                gdf = _load_pop(country, h3_resolution)
+                gdf = _load_pop_region(country, h3_resolution) if _is_region else _load_pop(country, h3_resolution)
 
             pop = gdf["population"].to_numpy(dtype=np.float64)
             _areas_pop = _hex_areas_km2(gdf)
@@ -1170,7 +1204,7 @@ with tab_map:
                     _load_cancers = selected_cancers
 
                 with st.spinner("Apportioning cancer incidence to H3 grid…"):
-                    gdf = _load_cancer(country, iso3, tuple(_load_cancers), use_actual, h3_resolution)
+                    gdf = _load_cancer(country, iso3, tuple(_load_cancers), use_actual, h3_resolution, region_flag=_is_region)
 
                 if map_type == "Cancer cases requiring RT":
                     suffix = "_optimal_rt" if rt_method == "optimal" else "_incidence"
@@ -1279,6 +1313,7 @@ with tab_map:
                     access_rt_method,
                     access_rt_fraction,
                     h3_resolution,
+                    _is_region,
                 )
 
             pitch = 30.0 if show_linac_markers else 0.0
@@ -1445,9 +1480,9 @@ with tab_map:
                 _globocan = stats.get("total_cancer_excl_nmsc")
                 col3.metric("Annual New Cancer Cases", _fmt_sigfig(_globocan) if _globocan is not None else "N/A")
                 col4.metric("Modelled RT Need", _fmt_sigfig(stats['total_rt_demand']))
-                col5.metric("Patients Treated", _fmt_sigfig(stats['total_rt_treated']))
+                col5.metric("Model: Patients Treated", _fmt_sigfig(stats['total_rt_treated']))
                 _pct_treated = (stats['total_rt_treated'] / stats['total_rt_demand'] * 100) if stats['total_rt_demand'] > 0 else 0.0
-                col6.metric("% of Patients Treated", f"{_pct_treated:.1f}%")
+                col6.metric("Model: % Patients Treated", f"{_pct_treated:.1f}%")
                 # col7.metric("Mean Geographic Access", f"{stats['mean_access_probability']:.1%}")
                 _demand_info = (
                     f"demand: optimal RT utilisations"

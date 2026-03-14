@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import pandas as pd
+import pycountry
 
 # Prefer the geocoding-corrected version if it exists, fall back to original
 _DIRAC_FIXED = Path("c_probability_of_access/linac/Database_DIRAC_fixed.csv")
@@ -272,3 +273,44 @@ def load_linacs_from_dirac_db(
         for _, row in facilities_df.iterrows()
     ]
     return locs, facilities_df
+
+
+def load_linacs_for_region(
+    region_name: str,
+) -> Tuple[List[Tuple[float, float, float]], pd.DataFrame]:
+    """Load all LINAC facilities for every country in a named region.
+
+    Parameters
+    ----------
+    region_name : str
+        Must be a key in ``data.regions.REGION_DISPLAY_NAMES``.
+
+    Returns
+    -------
+    locs : list of (lat, lon, n_linacs)
+    facilities_df : DataFrame with columns name, city, lat, lon, n_linacs
+    """
+    from data.regions import get_region  # avoid circular import at module level
+
+    reg = get_region(region_name)
+    all_dfs: List[pd.DataFrame] = []
+
+    for alpha2 in reg.member_alpha2:
+        country_obj = pycountry.countries.get(alpha_2=alpha2)
+        if country_obj is None:
+            continue
+        try:
+            _, df = load_linacs_from_dirac_db(country_obj.name)
+            all_dfs.append(df)
+        except (ValueError, FileNotFoundError):
+            continue  # no DIRAC data for this country — skip
+
+    if not all_dfs:
+        raise ValueError(f"No LINAC data found for region {region_name!r}")
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    locs = [
+        (row["lat"], row["lon"], row["n_linacs"])
+        for _, row in combined.iterrows()
+    ]
+    return locs, combined
