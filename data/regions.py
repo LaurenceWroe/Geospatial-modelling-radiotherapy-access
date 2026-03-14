@@ -90,7 +90,7 @@ _WORLD = sorted(set(
 # ---------------------------------------------------------------------------
 
 REGIONS: List[RegionDef] = [
-    RegionDef("World",               "WLD", "World",              _WORLD,               1),
+    RegionDef("World",               "WLD", "World",              _WORLD,               3),
     RegionDef("Africa",              "AFR", "Africa",             _AFRICA,              3),
     RegionDef("Europe",              "EUR", "Europe",             _EUROPE,              3),
     RegionDef("Northern America",    "NAM", "Northern America",   _NORTHERN_AMERICA,    3),

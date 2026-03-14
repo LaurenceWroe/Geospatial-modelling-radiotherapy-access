@@ -598,8 +598,9 @@ with st.sidebar:
         h3_resolution = st.selectbox(
             "H3 resolution",
             options=_res_opts,
-            index=len(_res_opts) - 1,  # coarsest by default for World, finest otherwise
+            index=0,  # default to H1 (coarsest) for regions
             format_func=lambda r: _res_labels.get(r, str(r)),
+            key="h3_res_region",
         )
     else:
         h3_resolution = st.selectbox(
@@ -610,6 +611,7 @@ with st.sidebar:
                 8: "H8 (~0.7 km²)", 7: "H7 (~5 km²)", 6: "H6 (~36 km²)",
                 5: "H5 (~253 km²)", 4: "H4 (~1,770 km²)", 3: "H3 (~12,400 km²)",
             }[r],
+            key="h3_res_country",
         )
 
     is_rt_demand_map = map_type == "Cancer cases requiring RT"
