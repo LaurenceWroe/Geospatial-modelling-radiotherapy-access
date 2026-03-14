@@ -118,6 +118,13 @@ def load_population_at_resolution(
     return gpd.GeoDataFrame(df_agg, geometry="geometry", crs="EPSG:4326")
 
 
+REGION_CACHE_DIR = Path("H3_region_cache")
+
+
+def _region_cache_path(globocan_code: str, resolution: int) -> Path:
+    return REGION_CACHE_DIR / f"{globocan_code}_res{resolution}.parquet"
+
+
 def load_region_population(
     region_name: str,
     target_resolution: int = 3,
@@ -125,9 +132,8 @@ def load_region_population(
 ) -> gpd.GeoDataFrame:
     """Merge per-country Kontur H3 files for a named region.
 
-    Downloads any missing country files automatically.  Population counts are
-    summed for any H3 cells that appear in more than one country file (border
-    artefacts).
+    Results are persisted to ``H3_region_cache/`` as parquet so subsequent
+    calls (including across Streamlit sessions) load instantly from disk.
 
     Parameters
     ----------
@@ -149,6 +155,13 @@ def load_region_population(
     reg = get_region(region_name)
     effective_res = min(target_resolution, reg.max_resolution)
 
+    # --- fast path: load from disk cache ---
+    cache_path = _region_cache_path(reg.globocan_code, effective_res)
+    if cache_path.exists():
+        gdf = gpd.read_parquet(cache_path)
+        return gdf
+
+    # --- slow path: merge all member countries ---
     gdfs = []
     alpha2_list = reg.member_alpha2
     total = len(alpha2_list)
@@ -176,7 +189,13 @@ def load_region_population(
     merged["geometry"] = merged["h3"].apply(
         lambda h: _Polygon([(lon, lat) for lat, lon in _h3.cell_to_boundary(h)])
     )
-    return gpd.GeoDataFrame(merged, geometry="geometry", crs="EPSG:4326")
+    result = gpd.GeoDataFrame(merged, geometry="geometry", crs="EPSG:4326")
+
+    # --- persist to disk cache ---
+    REGION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    result.to_parquet(cache_path)
+
+    return result
 
 
 def _normalise(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:

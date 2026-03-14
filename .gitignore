@@ -31,6 +31,7 @@ H3_zipped_pop_density_maps/*.gpkg.gz
 h3_population_maps/
 h3_accessibility_maps/
 cancer_type_maps_h3/
+H3_region_cache/
 
 # Generated outputs (reproducible from inputs)
 b_cancer_incidence/cancer_type_maps/incidence_maps/
