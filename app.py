@@ -106,9 +106,9 @@ COLORMAPS = {
 }
 
 _DEFAULT_CMAP = {
-    "Population Density": "Purple → Yellow (Viridis)",
-    "Annual New Cancer Cases": "Purple → Yellow (Viridis)",
-    "Cancer cases requiring RT": "Purple → Yellow (Viridis)",
+    "Population Density": "Green → Red",
+    "Annual New Cancer Cases": "Green → Red",
+    "Cancer cases requiring RT": "Green → Red",
     "Radiotherapy Access": "Green → Red",
     "Nearest LINAC Distance": "Green → Red",
 }
@@ -235,6 +235,7 @@ def _compute_access(
     rt_fraction: float = 0.25,
     h3_res: int = 8,
     region_flag: bool = False,
+    snap_linacs_to_hex: bool = False,
 ):
     gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
 
@@ -275,6 +276,8 @@ def _compute_access(
         max_distance_km=max_distance_km,
         capacity_per_machine_per_year=capacity_per_machine_per_year,
         demand=demand,
+        snap_linacs_to_hex=snap_linacs_to_hex,
+        h3_resolution=h3_res,
     )
     stats["total_cancer_excl_nmsc"] = total_cancer_excl_nmsc
     return gdf_out, stats
@@ -506,7 +509,7 @@ def _scale_caption(gdf) -> str:
         hex_diam = math.sqrt(hex_area / math.pi) * 2
     except Exception:
         hex_diam = None
-    parts = [f"Initial view width ≈ {width_km:,.0f} km"]
+    parts = []
     if hex_diam:
         parts.append(f"hex diameter ≈ {hex_diam:.1f} km")
     return " · ".join(parts)
@@ -734,6 +737,7 @@ with st.sidebar:
     show_linac_markers: bool = False
     tower_height_scale: float = 1.0
     linac_tower_style: str = "stacked"
+    snap_linacs_to_hex: bool = False
     _default_log = map_type in ("Population Density", "Annual New Cancer Cases")
 
     with st.expander("⚙️ Plot settings"):
@@ -742,6 +746,13 @@ with st.sidebar:
         if needs_linac:
             st.divider()
             show_linac_markers = st.checkbox("Show LINAC locations", value=True)
+            snap_linacs_to_hex = st.checkbox(
+                "Snap LINACs to hex centroid",
+                value=False,
+                help="When enabled, each LINAC is projected to the centroid of its H3 cell at "
+                     "the current resolution. Multiple LINACs in the same hex are merged. "
+                     "Distances are then measured hex-centroid to hex-centroid.",
+            )
             if show_linac_markers:
                 tower_height_scale = float(
                     st.slider("Tower height scale", min_value=0.05, max_value=5.0, value=1.0, step=0.05)
@@ -818,7 +829,7 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_map, tab_data, tab_model = st.tabs(["🗺️ Modelling", "📊 Data", "📐 Probability Models"])
+tab_map, tab_data, tab_model, tab_method, tab_assumptions, tab_toy = st.tabs(["🗺️ Modelling", "📊 Data", "📐 Probability Models", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example"])
 
 # ---------------------------------------------------------------------------
 # Data tab — always available, no Generate button required
@@ -1129,18 +1140,12 @@ with tab_map:
             with st.spinner("Loading LINAC data from DIRAC database…"):
                 result = _load_dirac(country)
             if result[0] is None:
-                st.info(f"No LINAC data found for **{country}** — showing 0 facilities.")
                 locs = []
                 facilities_df = pd.DataFrame()
             else:
                 locs, facilities_df = result
 
 
-        _MAUP_NOTE = (
-            "Note: values are normalised to per 10 km² or per hexagon, but spatial density "
-            "estimates depend on H3 resolution and are affected by the "
-            "[Modifiable Areal Unit Problem (MAUP)](https://en.wikipedia.org/wiki/Modifiable_areal_unit_problem)."
-        )
 
         # ---- Population Density -----------------------------------------------
         if map_type == "Population Density":
@@ -1174,7 +1179,7 @@ with tab_map:
                 _make_view(gdf),
                 cb_cmap_fn, vmin, vmax, pop_label, log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
             )
-            st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf) + "  \n" + _MAUP_NOTE)
+            st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
             col1, col2 = st.columns(2)
             col1.metric("Total population", f"{int(gdf['population'].sum()):,}")
             col2.metric("H3 hexagons", f"{len(gdf):,}")
@@ -1256,7 +1261,7 @@ with tab_map:
                         _make_view(gdf),
                         cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
                     )
-                    st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf) + "  \n" + _MAUP_NOTE)
+                    st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
                     if map_type == "Cancer cases requiring RT":
                         if rt_method == "optimal":
                             _rt_method_text = (
@@ -1316,6 +1321,7 @@ with tab_map:
                     access_rt_fraction,
                     h3_resolution,
                     _is_region,
+                    snap_linacs_to_hex,
                 )
 
             pitch = 30.0 if show_linac_markers else 0.0
@@ -1458,7 +1464,7 @@ with tab_map:
                     active_cmap_fn, vmin, vmax, cb_label_access,
                     log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
                 )
-                st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out) + "  \n" + _MAUP_NOTE)
+                st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
                 if access_display_metric == "Modelled Access Probability":
                     st.caption(
                         "Modelled Access Probability gives the ratio of treated to untreated patients per hex."
@@ -1495,3 +1501,284 @@ with tab_map:
                     f"{model_info} | {int(capacity_per_machine_per_year)} patients/machine/yr | "
                     f"{_demand_info} | {stats['n_hexagons']:,} hexagons"
                 )
+
+# ---------------------------------------------------------------------------
+# Method tab
+# ---------------------------------------------------------------------------
+
+with tab_method:
+    st.header("Method")
+
+    # ------------------------------------------------------------------
+    # Aim
+    # ------------------------------------------------------------------
+    st.subheader("Aim")
+    st.markdown(
+        """
+        This tool provides fast visualisation and analysis of access to radiotherapy (RT) at
+        the sub-national scale, within countries and regions. It is designed to illuminate
+        both the **problem landscape** — identifying which areas are underserved and whether
+        this is driven by a shortage of machines or their geographic distribution — and the
+        **solution landscape** — highlighting where new or relocated facilities would have
+        the greatest impact.
+        """
+    )
+
+    # ------------------------------------------------------------------
+    # Introduction
+    # ------------------------------------------------------------------
+    st.subheader("Introduction")
+    st.markdown(
+        """
+        Approximately half of all cancer cases require radiotherapy, yet worldwide access
+        to RT remains unacceptably low. This gap has been well characterised at the national,
+        regional, and global levels
+        ([Abdel-Wahab *et al.* 2025](https://doi.org/10.1016/S1470-2045(24)00678-8);
+        [Burnet *et al.* 2025](https://doi.org/10.1016/j.radonc.2025.111061);
+        [Atun *et al.* 2015](https://doi.org/10.1016/S1470-2045(15)00222-3)).
+
+        Access to RT is constrained by two principal factors:
+
+        - **Machine capacity** — the finite number of linear accelerators (linacs) within a
+          country limits the total number of patients that can be treated each year
+          ([Abdel-Wahab *et al.* 2025](https://doi.org/10.1016/S1470-2045(24)00678-8)).
+        - **Geographic access** — RT requires attendance over several weeks; patients who
+          live far from a facility are substantially less likely to complete treatment
+          ([Burnet *et al.* 2025](https://doi.org/10.1016/j.radonc.2025.111061)).
+
+        Previous work has addressed each of these factors independently. This model is a
+        first attempt to combine both constraints simultaneously, providing a unified view of
+        where patients are most at risk of not receiving treatment.
+        """
+    )
+
+    # ------------------------------------------------------------------
+    # Method / flowchart
+    # ------------------------------------------------------------------
+    st.subheader("Model Overview")
+
+    import os as _os
+    _flowchart_path = _os.path.join(_os.path.dirname(__file__), "FlowChart.png")
+    if _os.path.exists(_flowchart_path):
+        st.image(_flowchart_path, use_column_width=True)
+
+    st.markdown(
+        """
+        The model pipeline proceeds as follows:
+
+        1. **Population density** — sub-national population is sourced from the
+           [Kontur Population Dataset](https://www.kontur.io/portfolio/population-dataset/)
+           (aggregated H3 hexagonal grid, ~400 m resolution at level 8). Each hexagon
+           represents an area unit for all subsequent calculations.
+
+        2. **Cancer incidence** — national cancer incidence figures are taken from
+           [GLOBOCAN 2022](https://gco.iarc.fr/today/) (IARC). These are apportioned to
+           individual hexagons in proportion to their population, under the assumption of
+           spatially uniform cancer incidence rates (see Assumptions below).
+
+        3. **Radiotherapy demand** — the number of patients requiring RT in each hexagon is
+           estimated either by applying site-specific optimal RT utilisation fractions
+           (Delaney *et al.* 2005) to each cancer type, or by applying a user-specified
+           proportional rate to all cancers excluding non-melanoma skin cancer (NMSC, RT
+           utilisation ≈ 0%).
+
+        4. **Linac locations and capacity** — facility locations and machine counts are
+           sourced from the
+           [DIRAC database](https://dirac.iaea.org/) (IAEA). Each linac is assumed to treat
+           a fixed number of patients per year (default: 450), giving a total national
+           capacity.
+
+        5. **Geographic access probability** — for each hexagon, the probability that a
+           patient reaches *any* facility is computed as:
+
+           $$P_{\\text{geo}} = 1 - \\prod_{i} \\left(1 - p(d_i)\\right)$$
+
+           where $d_i$ is the straight-line distance to facility $i$ and $p(d_i)$ is the
+           probability model (exponential decay, step function, or uniform). This metric
+           is independent of capacity.
+
+        6. **Capacity-limited (modelled) access** — linac capacity is allocated using a
+           greedy nearest-first algorithm: for each facility, patient demand is fulfilled
+           starting from the nearest hexagon and moving outward until capacity is exhausted.
+           The resulting ratio of treated to total demand per hexagon gives the **Modelled
+           Access Probability**.
+        """
+    )
+
+
+# ---------------------------------------------------------------------------
+# Assumptions tab
+# ---------------------------------------------------------------------------
+
+with tab_assumptions:
+    st.header("Assumptions and Limitations")
+    st.markdown(
+        "The model contains a number of simplifying assumptions. "
+        "These are divided below by their likely impact on results."
+    )
+
+    import pandas as _pd
+
+    _more_significant = _pd.DataFrame([
+        {
+            "Assumption": "Uniform cancer incidence",
+            "Limitation": "Cancer incidence assumed proportional to population density; demographic and geographic variation not captured.",
+            "To Improve": "Incorporate sub-national cancer incidence data at H3 resolution where available.",
+        },
+        {
+            "Assumption": "Distance rather than travel time",
+            "Limitation": "Straight-line distance used as accessibility proxy. Travel time — accounting for roads, terrain, and transport — is the more meaningful barrier, especially in LMICs.",
+            "To Improve": "Replace Euclidean distance with travel-time estimates (e.g. OpenRouteService or Google Maps APIs).",
+        },
+        {
+            "Assumption": "Probability model for geographic access",
+            "Limitation": "The distance–RT uptake relationship is poorly characterised. No single model is universally accepted (Perez et al. 2016; Lin et al. 2015; Yap et al. 2023).",
+            "To Improve": "Incorporate empirically validated, country-specific probability models.",
+        },
+        {
+            "Assumption": "Optimal RT utilisation rates",
+            "Limitation": "Based on Delaney et al. (2005) evidence from Australia. May not reflect current practice or country-specific targets; does not account for hypofractionation.",
+            "To Improve": "Allow country-specific utilisation targets and fractionation corrections.",
+        },
+        {
+            "Assumption": "Greedy nearest-first allocation",
+            "Limitation": "Assumes each facility serves its nearest patients first. Real referral patterns depend on clinical pathways, waiting times, and patient choice.",
+            "To Improve": "Travel-time routing; incorporate referral pathway data where available.",
+        },
+        {
+            "Assumption": "No patient stratification",
+            "Limitation": "All cancer patients treated as equivalent. Access barriers differ by age, mobility, socioeconomic status, cancer stage, and RT modality required.",
+            "To Improve": "Stratify demand by cancer type, stage, and demographic; incorporate access modifiers where data permit.",
+        },
+    ])
+
+    _less_significant = _pd.DataFrame([
+        {
+            "Assumption": "Uniform linac capacity",
+            "Limitation": "All linacs assumed to treat the same number of patients per year. Throughput varies with machine type, staffing, and operating hours.",
+            "To Improve": "User can adjust global capacity; per-facility capacity could be incorporated if data are available.",
+        },
+        {
+            "Assumption": "Full machine availability",
+            "Limitation": "100% uptime assumed. Maintenance downtime and staffing shortages reduce effective capacity, particularly in LMICs.",
+            "To Improve": "Apply a utilisation factor to effective machine capacity based on reported or estimated uptime.",
+        },
+        {
+            "Assumption": "Incident (new) cancer cases only",
+            "Limitation": "Demand based on new cases per year. Prevalent cases requiring re-treatment or delayed RT are excluded, so demand may be underestimated.",
+            "To Improve": "Apply a correction factor based on the proportion of prevalent cases requiring RT.",
+        },
+        {
+            "Assumption": "Linacs only",
+            "Limitation": "Brachytherapy, orthovoltage, proton therapy, and other modalities excluded.",
+            "To Improve": "Linacs dominate external-beam RT; fractional corrections for other modalities could be added.",
+        },
+        {
+            "Assumption": "Equal weighting of facilities",
+            "Limitation": "All facilities within range weighted by distance only. Referral networks may make distant specialist centres effectively inaccessible.",
+            "To Improve": "Incorporate referral pathway data to weight facility accessibility.",
+        },
+        {
+            "Assumption": "Static snapshot",
+            "Limitation": "GLOBOCAN incidence and DIRAC machine counts are point-in-time. Population growth, ageing, and planned facilities are not modelled.",
+            "To Improve": "Allow temporal projection using demographic growth rates and infrastructure pipelines.",
+        },
+        {
+            "Assumption": "National boundaries as hard limits",
+            "Limitation": "Cross-border access not modelled. Patients in small countries or border regions may realistically travel abroad for treatment.",
+            "To Improve": "Allow cross-border facility access for hexagons within the distance cutoff of a foreign facility.",
+        },
+        {
+            "Assumption": "Private and public facilities treated equally",
+            "Limitation": "DIRAC includes private facilities, but access to private machines is not universal. Effective access may be lower than modelled.",
+            "To Improve": "Allow the user to flag or exclude private facilities based on healthcare system context.",
+        },
+        {
+            "Assumption": "Data quality",
+            "Limitation": "DIRAC machine locations may be out of date or contain coordinate errors. GLOBOCAN data unavailable for some countries (e.g. Mongolia).",
+            "To Improve": "Validate and correct data sources as errors are identified.",
+        },
+        {
+            "Assumption": "Modifiable Areal Unit Problem (MAUP)",
+            "Limitation": "All spatial estimates depend on the chosen H3 resolution. Aggregating data into larger hexagons smooths local variation and can change apparent patterns — a known issue in areal statistics.",
+            "To Improve": "Examine results at multiple resolutions; report sensitivity to resolution choice.",
+        },
+    ])
+
+    st.markdown("##### More Significant Assumptions")
+    st.dataframe(_more_significant, use_container_width=True, hide_index=True)
+
+    st.markdown("##### Less Significant Assumptions")
+    st.dataframe(_less_significant, use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# Toy Example tab
+# ---------------------------------------------------------------------------
+
+with tab_toy:
+    st.header("Toy Example")
+    st.markdown(
+        """
+        The following figures walk through each stage of the model pipeline using a
+        simplified toy scenario. This illustrates how the inputs are transformed into
+        the final access outputs step by step.
+        """
+    )
+
+    _toy_dir = _os.path.join(_os.path.dirname(__file__), "ToyExample")
+
+    _toy_figures = [
+        (
+            "PopulationDensity.png",
+            "Step 1 — Population Density",
+            "The spatial distribution of population across the region, sourced from the "
+            "Kontur H3 dataset. Each hexagon represents the number of people living within "
+            "that cell. This forms the base layer for all subsequent calculations.",
+        ),
+        (
+            "AnnualNewCancerDensity.png",
+            "Step 2 — Annual New Cancer Cases",
+            "National cancer incidence figures (GLOBOCAN) are apportioned to each hexagon "
+            "in proportion to its population. This gives an estimate of the number of new "
+            "cancer cases arising in each cell each year.",
+        ),
+        (
+            "CancerCasesRequiringRT.png",
+            "Step 3 — Cancer Cases Requiring Radiotherapy",
+            "Each cancer type is multiplied by its site-specific optimal radiotherapy "
+            "utilisation fraction (Delaney et al. 2005) and the results summed per hexagon. "
+            "This gives the estimated number of patients in each cell who require RT annually.",
+        ),
+        (
+            "GeographicProbability.png",
+            "Step 4 — Geographic Access Probability",
+            "For each hexagon, the probability that a patient can reach at least one facility "
+            "is computed using the selected distance-decay model, combining contributions from "
+            "all linacs. This is independent of machine capacity.",
+        ),
+        (
+            "LinacCapacity.png",
+            "Step 5 — Linac Capacity Allocation",
+            "Machine capacity is distributed using a greedy nearest-first algorithm. Each "
+            "linac fills its annual capacity by serving the nearest hexagons first, working "
+            "outward until capacity is exhausted. The proportion of demand met in each "
+            "hexagon gives the Modelled Access Probability.",
+        ),
+        (
+            "Untreated.png",
+            "Step 6 — Modelled Untreated Patients",
+            "The difference between RT demand and allocated capacity in each hexagon gives "
+            "the estimated number of patients who cannot access treatment. This highlights "
+            "which areas are most underserved, whether due to distance or capacity shortfall.",
+        ),
+    ]
+
+    for fname, heading, caption in _toy_figures:
+        fpath = _os.path.join(_toy_dir, fname)
+        st.subheader(heading)
+        if _os.path.exists(fpath):
+            st.image(fpath, use_column_width=True)
+        else:
+            st.warning(f"Image not found: {fname}")
+        st.caption(caption)
+        st.divider()

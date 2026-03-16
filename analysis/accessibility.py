@@ -61,6 +61,8 @@ def compute_accessibility(
     max_distance_km: float = 50.0,
     capacity_per_machine_per_year: float = _REFERENCE_CAPACITY,
     demand: Optional[np.ndarray] = None,
+    snap_linacs_to_hex: bool = False,
+    h3_resolution: int = 8,
 ) -> Tuple[gpd.GeoDataFrame, Dict]:
     """Compute radiotherapy access probability for each H3 cell.
 
@@ -101,6 +103,18 @@ def compute_accessibility(
     """
     if cutoff_km is None:
         cutoff_km = 10.0 * lambda_km
+
+    # Optionally snap each linac to the centroid of its H3 cell at the target resolution.
+    # Multiple linacs in the same hex are merged into a single entry with summed machine count.
+    if snap_linacs_to_hex:
+        snapped: dict[str, float] = {}
+        for lat_f, lon_f, w in linac_locations:
+            cell = h3.latlng_to_cell(lat_f, lon_f, h3_resolution)
+            snapped[cell] = snapped.get(cell, 0.0) + w
+        linac_locations = [
+            (h3.cell_to_latlng(cell)[0], h3.cell_to_latlng(cell)[1], w)
+            for cell, w in snapped.items()
+        ]
 
     geod = Geod(ellps="WGS84")
     g = gdf.copy()
