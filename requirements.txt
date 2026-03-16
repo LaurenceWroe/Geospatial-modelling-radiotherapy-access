@@ -4,7 +4,7 @@ h3>=4.0.0          # H3 hexagonal grid (use v4 API)
 shapely>=2.0.0
 pyproj>=3.5.0
 rasterio>=1.3.0
-fiona>=1.9.0       # geopandas file I/O backend
+pyogrio>=0.7.0     # geopandas file I/O backend (replaces fiona; ships with GDAL bundled)
 
 # Data processing
 numpy>=1.24.0
