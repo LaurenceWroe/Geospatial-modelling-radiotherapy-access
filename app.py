@@ -829,8 +829,8 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_map, tab_data, _tab_sep1, tab_intro, tab_model, tab_method, tab_assumptions, _tab_sep2, tab_toy = st.tabs([
-    "🗺️ Modelling", "📊 Data", "│", "💡 Introduction", "📐 Probability Models", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example",
+tab_map, tab_data, _tab_sep1, tab_intro, tab_method, tab_assumptions, _tab_sep2, tab_toy, tab_model = st.tabs([
+    "🗺️ Modelling", "📊 Data", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
 ])
 
 # ---------------------------------------------------------------------------
@@ -1557,10 +1557,10 @@ with tab_intro:
         |---|---|
         | **🗺️ Modelling** | Interactive H3 hexagon maps — population density, cancer burden, RT demand, geographic access probability, and capacity-limited access. Select a country or region in the sidebar and click **Generate Map**. |
         | **📊 Data** | Country-level data tables — cancer incidence by site (GLOBOCAN 2022), LINAC locations (DIRAC), and optimal RT utilisation rates. |
-        | **📐 Probability Models** | Explanation and visualisation of the three distance-decay models used to compute geographic access probability. |
         | **📖 Method** | Full pipeline description with flowchart, data sources, and step-by-step methodology. |
         | **⚠️ Assumptions** | Tabulated model assumptions and limitations, ranked by likely impact, with suggested improvements. |
         | **🧪 Toy Example** | Step-by-step worked example showing how each pipeline stage transforms inputs into access outputs. |
+        | **📐 Probability Models** | Explanation and visualisation of the three distance-decay models used to compute geographic access probability. |
         """
     )
 
