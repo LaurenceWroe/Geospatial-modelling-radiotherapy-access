@@ -56,6 +56,63 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+def _apply_app_dark_mode(enabled: bool) -> None:
+    """Inject CSS to switch the entire app to a dark background."""
+    if not enabled:
+        return
+    st.markdown(
+        """
+        <style>
+        /* Main content and sidebar backgrounds */
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
+            background-color: #0e1117 !important;
+            color: #fafafa !important;
+        }
+        [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+            background-color: #1a1d23 !important;
+            color: #fafafa !important;
+        }
+        /* Tabs */
+        [data-testid="stTabs"] button, .stTabs [data-baseweb="tab"] {
+            color: #fafafa !important;
+        }
+        /* Text, labels, captions */
+        p, span, label, div, h1, h2, h3, h4, h5, h6,
+        [data-testid="stMarkdownContainer"], .stCaption {
+            color: #fafafa !important;
+        }
+        /* Metric values and labels */
+        [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {
+            color: #fafafa !important;
+        }
+        /* Dataframe */
+        [data-testid="stDataFrame"] {
+            background-color: #1a1d23 !important;
+        }
+        /* White boxes with black text — must beat broad span/div rule above */
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+        [data-testid="stSelectbox"] [data-baseweb="select"] > div *,
+        [data-baseweb="input"] input,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stTextInput"] input,
+        textarea {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+        }
+        /* Expander */
+        [data-testid="stExpander"] {
+            background-color: #1a1d23 !important;
+            border-color: #3a3d47 !important;
+        }
+        /* Dividers */
+        hr { border-color: #3a3d47 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Colour helpers
 # ---------------------------------------------------------------------------
@@ -335,7 +392,8 @@ def _data_tab_rt_need(iso3: str) -> dict:
             continue
         frac = opt_norm.get(cancer.strip().lower(), 0.0)
         total_rt += n * frac
-    return {"total_rt_cases": total_rt}
+    total_cancer_excl_nmsc = cases.get("All cancers excl. NMSC", 0.0)
+    return {"total_rt_cases": total_rt, "total_cancer_excl_nmsc": total_cancer_excl_nmsc}
 
 
 @st.cache_data(show_spinner=False)
@@ -381,6 +439,7 @@ def _build_linac_columns(
     h3_res: int = 6,
     country_span_km: float = 1000.0,
     height_scale: float = 1.0,
+    radius_scale: float = 1.0,
     style: str = "stacked",
 ) -> List[pdk.Layer]:
     """Return ColumnLayers for LINAC towers.
@@ -393,7 +452,7 @@ def _build_linac_columns(
         return []
     hex_area_km2 = h3.average_hexagon_area(h3_res, unit="km^2")
     hex_radius_km = math.sqrt(hex_area_km2 / math.pi)
-    col_radius_m = int(hex_radius_km * 1000 * 0.45)
+    col_radius_m = int(hex_radius_km * 1000 * 0.45 * radius_scale)
     elevation_per_linac = (
         max(hex_radius_km * 1000 * 0.6, country_span_km * 1000 * 0.0008) * height_scale
     )
@@ -528,6 +587,27 @@ CARTO_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
 CARTO_DARK  = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
 
 
+def _linac_legend_fig(dark: bool = False) -> plt.Figure:
+    """Small cylinder icon with 'LINAC' label for map legend."""
+    text_color = "white" if dark else "black"
+    fig, ax = plt.subplots(figsize=(0.9, 0.9))
+    fig.patch.set_alpha(0.0)
+    ax.patch.set_alpha(0.0)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    from matplotlib.patches import Ellipse, FancyBboxPatch
+    # cylinder body
+    ax.add_patch(FancyBboxPatch((0.25, 0.25), 0.5, 0.45, boxstyle="round,pad=0.0",
+                                facecolor="#e05a2b", edgecolor="white", linewidth=0.8))
+    # top ellipse
+    ax.add_patch(Ellipse((0.5, 0.70), 0.5, 0.18, facecolor="#f08060", edgecolor="white", linewidth=0.8))
+    ax.text(0.5, 0.08, "LINAC", ha="center", va="bottom", fontsize=7,
+            color=text_color, fontweight="bold")
+    fig.tight_layout(pad=0.1)
+    return fig
+
+
 def _render_with_colorbar(
     layers,
     view: pdk.ViewState,
@@ -537,7 +617,9 @@ def _render_with_colorbar(
     cb_label: str,
     log_scale: bool = False,
     dark: bool = False,
+    dark_text: bool = False,
     clamp: bool = False,
+    show_linac_legend: bool = False,
 ) -> None:
     if not isinstance(layers, list):
         layers = [layers]
@@ -551,8 +633,10 @@ def _render_with_colorbar(
     with col_map:
         st.pydeck_chart(deck, use_container_width=True)
     with col_cb:
-        fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white" if dark else "black", clamp=clamp)
+        fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white" if (dark or dark_text) else "black", clamp=clamp)
         st.pyplot(fig, use_container_width=True)
+        # if show_linac_legend:
+        #     st.pyplot(_linac_legend_fig(dark=dark), use_container_width=True)
 
 
 def _h3_caption(gdf) -> str:
@@ -590,7 +674,7 @@ with st.sidebar:
     )
     _is_region = is_region(country)
 
-    map_type = st.selectbox("Map type", MAP_TYPES)
+    map_type = st.selectbox("Map type", MAP_TYPES, index=MAP_TYPES.index("Radiotherapy Access"))
 
     if _is_region:
         _reg_def = get_region(country)
@@ -609,7 +693,7 @@ with st.sidebar:
         h3_resolution = st.selectbox(
             "H3 resolution",
             options=[8, 7, 6, 5, 4, 3],
-            index=2,  # H6 default
+            index=3,  # H5 default
             format_func=lambda r: {
                 8: "H8 (~0.7 km²)", 7: "H7 (~5 km²)", 6: "H6 (~36 km²)",
                 5: "H5 (~253 km²)", 4: "H4 (~1,770 km²)", 3: "H3 (~12,400 km²)",
@@ -718,6 +802,7 @@ with st.sidebar:
         model_label = st.radio(
             "Access model",
             ["Exponential decay", "Step function", "Uniform (no decay)"],
+            index=1,
             horizontal=True,
         )
         access_model = {
@@ -734,37 +819,48 @@ with st.sidebar:
             )
 
     # ------ Plot settings (expander) ---------------------------------------
+    app_dark_mode: bool = False
+    dark_mode: bool = False
     show_linac_markers: bool = False
     tower_height_scale: float = 1.0
+    tower_radius_scale: float = 1.0
     linac_tower_style: str = "stacked"
     snap_linacs_to_hex: bool = False
     _default_log = map_type in ("Population Density", "Annual New Cancer Cases")
 
+    st.divider()
+    show_linac_markers = st.checkbox("Show LINAC locations", value=needs_linac)
+    if is_access:
+        _use_latlng = st.checkbox(
+            "Use LINAC lat/long coords",
+            value=True,
+            help="When enabled, the exact LINAC coordinates from DIRAC are used. "
+                 "When disabled, each LINAC is projected to its H3 hex centroid at the "
+                 "current resolution and co-located LINACs are merged.",
+        )
+        snap_linacs_to_hex = not _use_latlng
+
     with st.expander("⚙️ Plot settings"):
+        app_dark_mode = st.toggle("Dark background", value=False)
+        _apply_app_dark_mode(app_dark_mode)
         dark_mode = st.checkbox("Dark map", value=False)
 
-        if needs_linac:
+        if show_linac_markers:
             st.divider()
-            show_linac_markers = st.checkbox("Show LINAC locations", value=True)
-            snap_linacs_to_hex = st.checkbox(
-                "Snap LINACs to hex centroid",
-                value=False,
-                help="When enabled, each LINAC is projected to the centroid of its H3 cell at "
-                     "the current resolution. Multiple LINACs in the same hex are merged. "
-                     "Distances are then measured hex-centroid to hex-centroid.",
+            tower_height_scale = float(
+                st.slider("Tower height scale", min_value=0.05, max_value=5.0, value=1.0, step=0.05)
             )
-            if show_linac_markers:
-                tower_height_scale = float(
-                    st.slider("Tower height scale", min_value=0.05, max_value=5.0, value=1.0, step=0.05)
-                )
-                _tower_style_label = st.radio(
-                    "Tower style",
-                    ["Stacked (segmented per centre)", "Individual (one tower per centre)"],
-                    horizontal=False,
-                )
-                linac_tower_style = "stacked" if "Stacked" in _tower_style_label else "individual"
+            tower_radius_scale = float(
+                st.slider("Tower radius scale", min_value=0.1, max_value=5.0, value=1.0, step=0.1)
+            )
+            _tower_style_label = st.radio(
+                "Tower style",
+                ["Individual (one tower per centre)", "Stacked (segmented per centre)"],
+                horizontal=False,
+            )
+            linac_tower_style = "individual" if "Individual" in _tower_style_label else "stacked"
+            st.divider()
 
-        st.divider()
         _default_cmap_name = _DEFAULT_CMAP.get(map_type, "Purple → Yellow (Viridis)")
         cb_cmap_name = st.selectbox(
             "Colour scheme",
@@ -798,7 +894,9 @@ with st.sidebar:
         if not cb_auto:
             cb_vmin_user = st.number_input("Min value", value=0.0, format="%.4g")
             cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
-    generate = st.button("Generate Map", type="primary", use_container_width=True)
+    if st.button("Generate Map", type="primary", use_container_width=True):
+        st.session_state["_map_generated"] = True
+    generate = st.session_state.get("_map_generated", False)
 
 
 # ---------------------------------------------------------------------------
@@ -1082,10 +1180,11 @@ with tab_map:
         st.info("Configure options in the sidebar and click **Generate Map**.")
     else:
 
-        # Load LINAC data (needed for access and nearest-distance maps)
+        # Load LINAC data (needed for access/nearest maps or when markers are requested)
         locs: Optional[List[Tuple[float, float, float]]] = None
         facilities_df: Optional[pd.DataFrame] = None
-        if needs_linac:
+        country_span_km: float = 1000.0  # default; refined when gdf is available
+        if needs_linac or show_linac_markers:
             with st.spinner("Loading LINAC data from DIRAC database…"):
                 result = _load_dirac(country)
             if result[0] is None:
@@ -1122,11 +1221,23 @@ with tab_map:
                 + "Hex area: " + _s_area_pop + " km²"
             )
 
+            _geom_pop = gdf.geometry
+            _lat_span_pop = float(_geom_pop.bounds["maxy"].max() - _geom_pop.bounds["miny"].min())
+            _lon_span_pop = float(_geom_pop.bounds["maxx"].max() - _geom_pop.bounds["minx"].min())
+            _lat_mid_pop = float((_geom_pop.bounds["maxy"].max() + _geom_pop.bounds["miny"].min()) / 2)
+            country_span_km = max(_lat_span_pop * 111.32, _lon_span_pop * 111.32 * math.cos(math.radians(_lat_mid_pop)))
+
             df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
+            _pop_layers = [_build_hex_layer(df)]
+            _pop_pitch = 0.0
+            if show_linac_markers and facilities_df is not None and not facilities_df.empty:
+                _pop_layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style))
+                _pop_pitch = 30.0
             _render_with_colorbar(
-                [_build_hex_layer(df)],
-                _make_view(gdf),
-                cb_cmap_fn, vmin, vmax, pop_label, log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                _pop_layers,
+                _make_view(gdf, pitch=_pop_pitch),
+                cb_cmap_fn, vmin, vmax, pop_label, log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
             )
             st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
             col1, col2 = st.columns(2)
@@ -1204,11 +1315,23 @@ with tab_map:
                         + "Hex area: " + _s_area_c + " km²"
                     )
 
+                    _geom_c = gdf.geometry
+                    _lat_span_c = float(_geom_c.bounds["maxy"].max() - _geom_c.bounds["miny"].min())
+                    _lon_span_c = float(_geom_c.bounds["maxx"].max() - _geom_c.bounds["minx"].min())
+                    _lat_mid_c = float((_geom_c.bounds["maxy"].max() + _geom_c.bounds["miny"].min()) / 2)
+                    country_span_km = max(_lat_span_c * 111.32, _lon_span_c * 111.32 * math.cos(math.radians(_lat_mid_c)))
+
                     df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
+                    _cancer_layers = [_build_hex_layer(df)]
+                    _cancer_pitch = 0.0
+                    if show_linac_markers and facilities_df is not None and not facilities_df.empty:
+                        _cancer_layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style))
+                        _cancer_pitch = 30.0
                     _render_with_colorbar(
-                        [_build_hex_layer(df)],
-                        _make_view(gdf),
-                        cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                        _cancer_layers,
+                        _make_view(gdf, pitch=_cancer_pitch),
+                        cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                        show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
                     )
                     st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
                     if map_type == "Cancer cases requiring RT":
@@ -1302,12 +1425,13 @@ with tab_map:
                     pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
                 )]
                 if show_linac_markers:
-                    layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, style=linac_tower_style))
+                    layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style))
 
                 _render_with_colorbar(
                     layers, _make_view(gdf_out, pitch=pitch),
                     cb_cmap_fn, vmin, vmax, "Distance (km)",
-                    log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                    log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                    show_linac_legend=show_linac_markers,
                 )
                 st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
                 col1, col2, col3 = st.columns(3)
@@ -1400,7 +1524,7 @@ with tab_map:
                     pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
                 )]
                 if show_linac_markers:
-                    layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, style=linac_tower_style))
+                    layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style))
 
                 if stats["total_rt_demand"] == 0:
                     st.warning(
@@ -1411,7 +1535,8 @@ with tab_map:
                 _render_with_colorbar(
                     layers, _make_view(gdf_out, pitch=pitch),
                     active_cmap_fn, vmin, vmax, cb_label_access,
-                    log_scale=cb_log, dark=dark_mode, clamp=not cb_auto,
+                    log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                    show_linac_legend=show_linac_markers,
                 )
                 st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
                 if access_display_metric == "Modelled Access Probability":
@@ -1454,6 +1579,10 @@ with tab_map:
                 # ---- Minimum RT Needs to Meet Capacity ---------------------
                 st.divider()
                 st.subheader(f"Minimum RT Needs to Meet Capacity — {country}")
+                st.caption(
+                    "NOTE: These calculations do not include access considerations based on "
+                    "geographic access limitations, as modelled in the map above."
+                )
                 if not has_globocan_data(iso3):
                     st.warning(f"No GLOBOCAN data for **{country}** — RT need cannot be estimated.")
                 else:
@@ -1478,6 +1607,36 @@ with tab_map:
                         f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_inc_color}'>{abs(_linac_gap_incidence):,}</span></div>",
                         unsafe_allow_html=True,
                     )
+                    st.caption(
+                        "Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence by optimal RT utilisation rates "
+                        "(Delaney et al. 2005) for each cancer site independently. "
+                        f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
+                        "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8))."
+                    )
+
+                    st.markdown("**Calculation based on annual cancer incidence and proportional scaling**")
+                    _prop_fraction = access_rt_fraction if access_rt_method == "proportional" else 0.25
+                    _total_rt_cases_prop = _rt_need["total_cancer_excl_nmsc"] * _prop_fraction if "total_cancer_excl_nmsc" in _rt_need else _total_rt_cases
+                    _linacs_required_prop = _total_rt_cases_prop / _capacity_per_linac
+                    _linacs_required_prop_ceil = math.ceil(_linacs_required_prop)
+                    _linac_gap_prop = _linacs_required_prop_ceil - _n_linacs_need
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Cancers requiring RT annually", f"{int(_total_rt_cases_prop):,}")
+                    col2.metric("LINACs (DIRAC)", f"{_n_linacs_need:,}")
+                    col3.metric("LINACs required (450 pts/yr/LINAC)", f"{_linacs_required_prop_ceil:,}")
+                    _gap_prop_label = "LINAC shortage" if _linac_gap_prop > 0 else "LINAC surplus"
+                    _gap_prop_color = "red" if _linac_gap_prop > 0 else "green"
+                    col4.markdown(
+                        f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_prop_label}</span>"
+                        f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_prop_color}'>{abs(_linac_gap_prop):,}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        f"Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence (excl. NMSC) by a "
+                        f"proportional scaling factor of **{_prop_fraction:.2f}**. "
+                        f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
+                        "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8))."
+                    )
 
                     st.markdown("**Calculation based on 5 machines per million of population**")
                     _linacs_required_pop = _total_pop / 1_000_000 * 5
@@ -1495,12 +1654,8 @@ with tab_map:
                         unsafe_allow_html=True,
                     )
                     st.caption(
-                        "Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence by optimal RT utilisation rates "
-                        "(Delaney et al. 2005) for each cancer site independently. "
-                        "Aggregate cancer types (All cancers, All cancers excl. NMSC) are excluded to avoid double counting. "
-                        f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
-                        "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8)). "
-                        "Population-based benchmark: 5 LINACs per million population ([IAEA DIRAC Database](https://dirac.iaea.org/))."
+                        "Population-based benchmark: 5 LINACs per million population "
+                        "([IAEA DIRAC Database](https://dirac.iaea.org/))."
                     )
 
 # ---------------------------------------------------------------------------
@@ -1596,6 +1751,10 @@ with tab_intro:
 
 # ---------------------------------------------------------------------------
 # Method tab
+# ---------------------------------------------------------------------------
+
+with tab_method:
+    st.header("Method")
 
     # ------------------------------------------------------------------
     # Method / flowchart
