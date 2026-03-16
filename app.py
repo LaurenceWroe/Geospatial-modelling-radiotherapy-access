@@ -1852,8 +1852,11 @@ with tab_method:
            is independent of capacity.
 
         6. **Capacity-limited (modelled) access** — linac capacity is allocated using a
-           greedy nearest-first algorithm: for each facility, patient demand is fulfilled
-           starting from the nearest hexagon and moving outward until capacity is exhausted.
+           ring-based proportional algorithm: for each facility, hexagons are grouped into
+           concentric rings of equal distance. Each ring is served in full before moving
+           outward; if a ring would exhaust the facility's remaining capacity, that capacity
+           is distributed *proportionally* across all hexagons in the ring by their demand
+           weight. No hexagon receives more than its outstanding demand.
            The resulting ratio of treated to total demand per hexagon gives the **Modelled
            Access Probability**.
         """

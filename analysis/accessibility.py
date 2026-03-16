@@ -18,7 +18,7 @@ where:
     w_i   weight (≥ 1, scales with number of linacs at facility i)
 
 Distances are computed vectorised with pyproj.Geod for WGS-84 accuracy.
-Facilities beyond ``cutoff_km`` (default 5λ) are treated as zero probability
+Facilities beyond ``cutoff_km`` (default 10λ) are treated as zero probability
 in the exponential model.
 
 Two probability outputs
@@ -28,17 +28,25 @@ Two probability outputs
     ignoring capacity.
 
 ``capacity_limited_probability``
-    Greedy nearest-first allocation.  RT demand per hex is supplied by the
+    Ring-based proportional allocation.  RT demand per hex is supplied by the
     caller (typically summed Optimal RT cases from GLOBOCAN data).  For each
-    facility, hexes are processed in order of increasing distance; the demand
-    placed on facility j from hex i is ``rt_demand_i × p_ij``.  This is
-    subtracted from the facility's annual capacity until exhausted.
+    facility, hexes are grouped into concentric rings (quantised by the H3
+    centre-to-centre step distance).  Rings are processed from nearest to
+    farthest:
+
+    * If total weighted demand in the ring ≤ remaining capacity → the ring
+      is served in full.
+    * If the ring would exhaust capacity → remaining capacity is distributed
+      *proportionally* across all hexes in the ring by their demand weight.
+      No hex is over-served (allocation is capped at remaining demand).
+
     ``capacity_limited_probability = rt_treated_i / rt_demand_i``.
     If no demand array is provided, raw population is used as a fallback.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Literal, Optional, Tuple
 
 import geopandas as gpd
@@ -75,7 +83,7 @@ def compute_accessibility(
     lambda_km : float
         Distance-decay half-length in km (exponential model only).
     cutoff_km : float, optional
-        Hard cut-off distance; defaults to 5 × lambda_km.
+        Hard cut-off distance; defaults to 10 × lambda_km.
     use_weights : bool
         Scale facility contribution by machine count in the geographic model.
     model : "exponential" | "step"
@@ -146,10 +154,17 @@ def compute_accessibility(
     # Capacity-limited allocation accumulator (RT patients/year)
     total_allocated = np.zeros(n, dtype=np.float64)
     # Track unmet demand per hex so each facility only serves genuinely unmet need.
-    # Without this, multiple facilities each "see" the full demand of a nearby hex,
-    # wasting their capacity on already-served patients and leaving adjacent hexes
-    # with nothing.
     remaining_demand = rt_demand.copy()
+
+    # Centre-to-centre step between adjacent H3 cells at the target resolution.
+    # Ring k sits approximately k * _ring_step_km from the facility.
+    try:
+        _edge_km = h3.average_hexagon_edge_length(h3_resolution, unit="km")
+        _ring_step_km = _edge_km * math.sqrt(3)
+    except Exception:
+        # Fallback: derive from average hex area
+        _area_km2 = h3.average_hexagon_area(h3_resolution, unit="km^2")
+        _ring_step_km = math.sqrt(2.0 * _area_km2 / math.sqrt(3.0))
 
     for j, (lat_f, lon_f, w) in enumerate(linac_locations):
         _, _, dists_m = geod.inv(
@@ -173,27 +188,49 @@ def compute_accessibility(
         eff_w = (w * cap_factor) if use_weights else 1.0
         complement *= np.power(np.maximum(1.0 - p, 0.0), eff_w)
 
-        # --- greedy nearest-first capacity allocation ---
+        # --- ring-based proportional capacity allocation ---
         cap_j = w * capacity_per_machine_per_year
         if cap_j <= 0:
             continue
 
-        sorted_idx = np.argsort(dists_km)
-        p_sorted = p[sorted_idx]                   # cutoff already applied
-        remaining_sorted = remaining_demand[sorted_idx]
+        # Quantise each hex to the nearest H3 ring index from this facility.
+        # Hexes where p == 0 (beyond cutoff) are excluded from allocation.
+        in_range = p > 0.0
+        if not in_range.any():
+            continue
 
-        demands_sorted = remaining_sorted * p_sorted
+        ring_nums = np.round(dists_km / _ring_step_km).astype(np.int32)
+        unique_rings = np.unique(ring_nums[in_range])  # sorted ascending
 
-        cum = np.cumsum(demands_sorted)
-        prev_cum = np.empty_like(cum)
-        prev_cum[0] = 0.0
-        prev_cum[1:] = cum[:-1]
+        for ring_k in unique_rings:
+            if cap_j <= 0.0:
+                break
 
-        remaining_before = np.maximum(0.0, cap_j - prev_cum)
-        allocated_sorted = np.minimum(demands_sorted, remaining_before)
+            ring_idx = np.where(in_range & (ring_nums == ring_k))[0]
+            if ring_idx.size == 0:
+                continue
 
-        total_allocated[sorted_idx] += allocated_sorted
-        remaining_demand[sorted_idx] -= allocated_sorted
+            # Weighted demand this ring places on facility j
+            ring_demands = remaining_demand[ring_idx] * p[ring_idx]
+            total_ring_demand = float(ring_demands.sum())
+            if total_ring_demand <= 0.0:
+                continue
+
+            if total_ring_demand <= cap_j:
+                # Serve the entire ring in full
+                total_allocated[ring_idx] += ring_demands
+                remaining_demand[ring_idx] -= ring_demands
+                cap_j -= total_ring_demand
+            else:
+                # Capacity exhausted within this ring — distribute proportionally.
+                # Because ring_demands[i] = remaining_demand[i] * p[i] ≤ remaining_demand[i]
+                # and cap_j < total_ring_demand, each allocated[i] ≤ remaining_demand[i],
+                # so remaining_demand never goes negative.
+                fracs = ring_demands / total_ring_demand
+                allocated = cap_j * fracs
+                total_allocated[ring_idx] += allocated
+                remaining_demand[ring_idx] -= allocated
+                cap_j = 0.0
 
     # --- assemble results ---
     prob = 1.0 - complement
