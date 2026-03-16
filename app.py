@@ -293,6 +293,7 @@ def _compute_access(
     h3_res: int = 8,
     region_flag: bool = False,
     snap_linacs_to_hex: bool = False,
+    weibull_k: float = 2.0,
 ):
     gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
 
@@ -331,6 +332,7 @@ def _compute_access(
         lambda_km=lambda_km,
         model=model,
         max_distance_km=max_distance_km,
+        weibull_k=weibull_k,
         capacity_per_machine_per_year=capacity_per_machine_per_year,
         demand=demand,
         snap_linacs_to_hex=snap_linacs_to_hex,
@@ -764,6 +766,7 @@ with st.sidebar:
     # ------ Access model controls (outside expander — affect computation) -----
     lambda_km: float = 30.0
     max_distance_km: float = 100.0
+    weibull_k: float = 2.0
     access_model: str = "exponential"
     access_display_metric: str = "Capacity-limited population untreated"
     capacity_per_machine_per_year: float = 450.0
@@ -801,18 +804,22 @@ with st.sidebar:
         )
         model_label = st.radio(
             "Access model",
-            ["Exponential decay", "Step function", "Uniform (no decay)"],
-            index=1,
+            ["Exponential decay", "Weibull", "Step function", "Uniform (no decay)"],
+            index=2,
             horizontal=True,
         )
         access_model = {
             "Exponential decay": "exponential",
+            "Weibull": "weibull",
             "Step function": "step",
             "Uniform (no decay)": "uniform",
         }[model_label]
 
         if access_model == "exponential":
             lambda_km = float(st.slider("Distance decay λ (km)", 5, 200, 30, step=5))
+        elif access_model == "weibull":
+            lambda_km = float(st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 200, 50, step=5))
+            weibull_k = float(st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 2.0, step=0.5))
         elif access_model == "step":
             max_distance_km = float(
                 st.slider("Max treatment distance (km)", 10, 500, 100, step=10)
@@ -1074,7 +1081,7 @@ with tab_model:
 
     _pm_model = st.selectbox(
         "Probability model",
-        ["Exponential decay", "Step function", "Uniform (no decay)"],
+        ["Exponential decay", "Weibull", "Step function", "Uniform (no decay)"],
         key="pm_model",
     )
 
@@ -1101,6 +1108,30 @@ with tab_model:
 
         _pm_dist = np.linspace(0, 1000, 500)
         _pm_prob = np.exp(-_pm_dist / _pm_lambda)
+
+    elif _pm_model == "Weibull":
+        _pm_wlambda = st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 500, 50, step=5, key="pm_wlambda")
+        _pm_wk = st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 2.0, step=0.5, key="pm_wk")
+
+        st.markdown("### Formula")
+        st.latex(r"P(\text{treatment} \mid d) = \exp\!\left(-\left(\frac{d}{\lambda}\right)^k\right)")
+        st.markdown(
+            r"$\lambda$ is the scale (km) at which $P = e^{-1} \approx 37\%$ for any $k$. "
+            r"$k$ controls shape: $k = 1$ is identical to exponential decay; "
+            r"$k > 1$ gives an S-curve with a flat plateau near the facility then a steeper drop-off. "
+            "When multiple facilities exist, contributions are combined as:"
+        )
+        st.latex(r"P_{\text{total}} = 1 - \prod_{i}\!\left(1 - e^{-(d_i/\lambda)^k}\right)^{w_i}")
+        _p_at_lambda = float(np.exp(-1))
+        _p_at_half = float(np.exp(-(0.5 ** _pm_wk)))
+        st.markdown(
+            f"At the current settings (λ = {_pm_wlambda} km, k = {_pm_wk}): "
+            f"P({_pm_wlambda} km) = **{_p_at_lambda:.1%}**, "
+            f"P({_pm_wlambda//2} km) = **{_p_at_half:.1%}**."
+        )
+
+        _pm_dist = np.linspace(0, 1000, 500)
+        _pm_prob = np.exp(-np.power(_pm_dist / _pm_wlambda, _pm_wk))
 
     elif _pm_model == "Step function":
         _pm_cutoff = st.slider("Max treatment distance (km)", 10, 1000, 100, step=10, key="pm_cutoff")
@@ -1155,6 +1186,14 @@ with tab_model:
             line_dash="dash",
             line_color="orange",
             annotation_text=f"λ = {_pm_lambda} km  (P ≈ 37%)",
+            annotation_position="top right",
+        )
+    elif _pm_model == "Weibull":
+        _fig_pm.add_vline(
+            x=_pm_wlambda,
+            line_dash="dash",
+            line_color="orange",
+            annotation_text=f"λ = {_pm_wlambda} km  (P ≈ 37%)",
             annotation_position="top right",
         )
 
@@ -1401,6 +1440,7 @@ with tab_map:
                     h3_resolution,
                     _is_region,
                     snap_linacs_to_hex,
+                    weibull_k=float(weibull_k),
                 )
 
             pitch = 30.0 if show_linac_markers else 0.0
@@ -1594,6 +1634,8 @@ with tab_map:
 
                 if access_model == "exponential":
                     model_info = f"Exponential | λ = {lambda_km} km | cut-off = {stats['cutoff_km']:.0f} km"
+                elif access_model == "weibull":
+                    model_info = f"Weibull | λ = {lambda_km} km | k = {weibull_k} | cut-off = {stats['cutoff_km']:.0f} km"
                 elif access_model == "step":
                     model_info = f"Step function | max distance = {max_distance_km:.0f} km"
                 else:
@@ -1765,7 +1807,7 @@ with tab_intro:
         | **📖 Method** | Full pipeline description with flowchart, data sources, and step-by-step methodology. |
         | **⚠️ Assumptions** | Tabulated model assumptions and limitations, ranked by likely impact, with suggested improvements. |
         | **🧪 Toy Example** | Step-by-step worked example showing how each pipeline stage transforms inputs into access outputs. |
-        | **📐 Probability Models** | Explanation and visualisation of the three distance-decay models used to compute geographic access probability. |
+        | **📐 Probability Models** | Explanation and visualisation of the four distance-decay models (exponential, Weibull, step function, uniform) used to compute geographic access probability. |
         """
     )
 

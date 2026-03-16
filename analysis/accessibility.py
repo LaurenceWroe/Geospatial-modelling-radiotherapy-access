@@ -9,6 +9,9 @@ Models
 **Step function**:
     P_total = 1 if any facility within max_distance_km, else 0
 
+**Weibull survival**:
+    P(d) = exp(-(d / λ)^k)
+
 **Uniform**:
     P_total = 1 for all hexes (no distance barrier)
 
@@ -65,8 +68,9 @@ def compute_accessibility(
     lambda_km: float = 30.0,
     cutoff_km: Optional[float] = None,
     use_weights: bool = True,
-    model: Literal["exponential", "step"] = "exponential",
+    model: Literal["exponential", "step", "weibull"] = "exponential",
     max_distance_km: float = 50.0,
+    weibull_k: float = 2.0,
     capacity_per_machine_per_year: float = _REFERENCE_CAPACITY,
     demand: Optional[np.ndarray] = None,
     snap_linacs_to_hex: bool = False,
@@ -81,15 +85,20 @@ def compute_accessibility(
     linac_locations : list of (lat, lon, n_linacs)
         LINAC facility positions and machine counts.
     lambda_km : float
-        Distance-decay half-length in km (exponential model only).
+        Scale parameter in km (exponential and Weibull models).
+        For exponential: P(λ) = e⁻¹ ≈ 37%.
+        For Weibull: P(λ) = e⁻¹ ≈ 37% for any k.
     cutoff_km : float, optional
         Hard cut-off distance; defaults to 10 × lambda_km.
     use_weights : bool
         Scale facility contribution by machine count in the geographic model.
-    model : "exponential" | "step"
+    model : "exponential" | "step" | "weibull"
         Probability model.
     max_distance_km : float
         Maximum reach for the step-function model.
+    weibull_k : float
+        Shape parameter for the Weibull model (k ≥ 1 gives s-curve behaviour;
+        k = 1 reduces to exponential decay).
     capacity_per_machine_per_year : float
         Throughput per machine (patients/year).
     demand : np.ndarray, optional
@@ -181,6 +190,9 @@ def compute_accessibility(
             p = np.where(dists_km <= max_distance_km, 1.0, 0.0)
         elif model == "uniform":
             p = np.ones(n, dtype=np.float64)
+        elif model == "weibull":
+            p = np.exp(-np.power(dists_km / lambda_km, weibull_k))
+            p = np.where(dists_km <= cutoff_km, p, 0.0)
         else:  # exponential
             p = np.exp(-dists_km / lambda_km)
             p = np.where(dists_km <= cutoff_km, p, 0.0)
