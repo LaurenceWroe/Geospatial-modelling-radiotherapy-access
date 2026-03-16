@@ -50,7 +50,7 @@ from analysis.accessibility import compute_accessibility
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Radiotherapy Access Maps",
+    page_title="RT Access",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -551,7 +551,7 @@ def _render_with_colorbar(
     with col_map:
         st.pydeck_chart(deck, use_container_width=True)
     with col_cb:
-        fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white", clamp=clamp)
+        fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white" if dark else "black", clamp=clamp)
         st.pyplot(fig, use_container_width=True)
 
 
@@ -580,7 +580,7 @@ MAP_TYPES = [
 ]
 
 with st.sidebar:
-    st.title("🏥 Radiotherapy Access")
+    st.title("🏥 RT Access")
 
     _all_options = _selection_options()
     country = st.selectbox(
@@ -829,7 +829,9 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_map, tab_data, tab_model, tab_method, tab_assumptions, tab_toy = st.tabs(["🗺️ Modelling", "📊 Data", "📐 Probability Models", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example"])
+tab_map, tab_data, _tab_sep1, tab_intro, tab_model, tab_method, tab_assumptions, _tab_sep2, tab_toy = st.tabs([
+    "🗺️ Modelling", "📊 Data", "│", "💡 Introduction", "📐 Probability Models", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example",
+])
 
 # ---------------------------------------------------------------------------
 # Data tab — always available, no Generate button required
@@ -960,59 +962,6 @@ with tab_data:
         "[doi:10.1002/cncr.21324](https://doi.org/10.1002/cncr.21324)"
     )
 
-    st.divider()
-
-    # ---- RT needs (country-specific) ---------------------------------------
-    st.subheader(f"Minimum RT Needs to Meet Capacity — {country}")
-    if not has_globocan_data(iso3):
-        st.warning(f"No GLOBOCAN data for **{country}** — RT need cannot be estimated.")
-    else:
-        with st.spinner("Computing RT need…"):
-            _rt_need = _data_tab_rt_need(iso3)
-        _total_rt_cases = _rt_need["total_rt_cases"]
-        _n_linacs = int(_linac_df["n_linacs"].sum()) if _linac_result[0] is not None else 0
-        _capacity_per_linac = 450
-
-        st.markdown("**Calculation based on annual cancer incidence and optimal RT utilisation**")
-        _linacs_required_incidence = _total_rt_cases / _capacity_per_linac
-        _linacs_required_incidence_ceil = math.ceil(_linacs_required_incidence)
-        _linac_gap_incidence = _linacs_required_incidence_ceil - _n_linacs
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Cancers requiring RT annually", f"{int(_total_rt_cases):,}")
-        col2.metric("LINACs (DIRAC)", f"{_n_linacs:,}")
-        col3.metric("LINACs required (450 pts/yr/LINAC)", f"{_linacs_required_incidence_ceil:,}")
-        _gap_inc_label = "LINAC shortage" if _linac_gap_incidence > 0 else "LINAC surplus"
-        _gap_inc_color = "red" if _linac_gap_incidence > 0 else "green"
-        col4.markdown(
-            f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_inc_label}</span>"
-            f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_inc_color}'>{abs(_linac_gap_incidence):,}</span></div>",
-            unsafe_allow_html=True,
-        )
-
-        st.markdown("**Calculation based on 5 machines per million of population**")
-        _linacs_required_pop = _total_pop / 1_000_000 * 5
-        _linacs_required_pop_ceil = math.ceil(_linacs_required_pop)
-        _linac_gap_pop = _linacs_required_pop_ceil - _n_linacs
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Population", f"{_total_pop:,}")
-        col2.metric("LINACs (DIRAC)", f"{_n_linacs:,}")
-        col3.metric("LINACs required (5 per million pop.)", f"{_linacs_required_pop_ceil:,}")
-        _gap_pop_label = "LINAC shortage" if _linac_gap_pop > 0 else "LINAC surplus"
-        _gap_pop_color = "red" if _linac_gap_pop > 0 else "green"
-        col4.markdown(
-            f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_pop_label}</span>"
-            f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_pop_color}'>{abs(_linac_gap_pop):,}</span></div>",
-            unsafe_allow_html=True,
-        )
-
-        st.caption(
-            "Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence by optimal RT utilisation rates "
-            "(Delaney et al. 2005) for each cancer site independently. "
-            "Aggregate cancer types (All cancers, All cancers excl. NMSC) are excluded to avoid double counting. "
-            f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
-            "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8)). "
-            "Population-based benchmark: 5 LINACs per million population ([IAEA DIRAC Database](https://dirac.iaea.org/))."
-        )
 
 # ---------------------------------------------------------------------------
 # Probability Model tab
@@ -1502,17 +1451,76 @@ with tab_map:
                     f"{_demand_info} | {stats['n_hexagons']:,} hexagons"
                 )
 
+                # ---- Minimum RT Needs to Meet Capacity ---------------------
+                st.divider()
+                st.subheader(f"Minimum RT Needs to Meet Capacity — {country}")
+                if not has_globocan_data(iso3):
+                    st.warning(f"No GLOBOCAN data for **{country}** — RT need cannot be estimated.")
+                else:
+                    with st.spinner("Computing RT need…"):
+                        _rt_need = _data_tab_rt_need(iso3)
+                    _total_rt_cases = _rt_need["total_rt_cases"]
+                    _n_linacs_need = int(facilities_df["n_linacs"].sum()) if facilities_df is not None and len(facilities_df) > 0 else 0
+                    _capacity_per_linac = 450
+
+                    st.markdown("**Calculation based on annual cancer incidence and optimal RT utilisation**")
+                    _linacs_required_incidence = _total_rt_cases / _capacity_per_linac
+                    _linacs_required_incidence_ceil = math.ceil(_linacs_required_incidence)
+                    _linac_gap_incidence = _linacs_required_incidence_ceil - _n_linacs_need
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Cancers requiring RT annually", f"{int(_total_rt_cases):,}")
+                    col2.metric("LINACs (DIRAC)", f"{_n_linacs_need:,}")
+                    col3.metric("LINACs required (450 pts/yr/LINAC)", f"{_linacs_required_incidence_ceil:,}")
+                    _gap_inc_label = "LINAC shortage" if _linac_gap_incidence > 0 else "LINAC surplus"
+                    _gap_inc_color = "red" if _linac_gap_incidence > 0 else "green"
+                    col4.markdown(
+                        f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_inc_label}</span>"
+                        f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_inc_color}'>{abs(_linac_gap_incidence):,}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown("**Calculation based on 5 machines per million of population**")
+                    _linacs_required_pop = _total_pop / 1_000_000 * 5
+                    _linacs_required_pop_ceil = math.ceil(_linacs_required_pop)
+                    _linac_gap_pop = _linacs_required_pop_ceil - _n_linacs_need
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Population", f"{_total_pop:,}")
+                    col2.metric("LINACs (DIRAC)", f"{_n_linacs_need:,}")
+                    col3.metric("LINACs required (5 per million pop.)", f"{_linacs_required_pop_ceil:,}")
+                    _gap_pop_label = "LINAC shortage" if _linac_gap_pop > 0 else "LINAC surplus"
+                    _gap_pop_color = "red" if _linac_gap_pop > 0 else "green"
+                    col4.markdown(
+                        f"<div><span style='display:block;font-size:0.875rem;color:#808495;margin-bottom:0.25rem'>{_gap_pop_label}</span>"
+                        f"<span style='display:block;font-size:2rem;font-weight:600;line-height:1;color:{_gap_pop_color}'>{abs(_linac_gap_pop):,}</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(
+                        "Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence by optimal RT utilisation rates "
+                        "(Delaney et al. 2005) for each cancer site independently. "
+                        "Aggregate cancer types (All cancers, All cancers excl. NMSC) are excluded to avoid double counting. "
+                        f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
+                        "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8)). "
+                        "Population-based benchmark: 5 LINACs per million population ([IAEA DIRAC Database](https://dirac.iaea.org/))."
+                    )
+
 # ---------------------------------------------------------------------------
 # Method tab
 # ---------------------------------------------------------------------------
 
-with tab_method:
-    st.header("Method")
+with _tab_sep1:
+    pass
 
-    # ------------------------------------------------------------------
-    # Aim
-    # ------------------------------------------------------------------
-    st.subheader("Aim")
+with _tab_sep2:
+    pass
+
+# ---------------------------------------------------------------------------
+# Introduction tab
+# ---------------------------------------------------------------------------
+
+with tab_intro:
+    st.header("Introduction")
+
+    st.subheader("About this tool")
     st.markdown(
         """
         This tool provides fast visualisation and analysis of access to radiotherapy (RT) at
@@ -1521,15 +1529,7 @@ with tab_method:
         this is driven by a shortage of machines or their geographic distribution — and the
         **solution landscape** — highlighting where new or relocated facilities would have
         the greatest impact.
-        """
-    )
 
-    # ------------------------------------------------------------------
-    # Introduction
-    # ------------------------------------------------------------------
-    st.subheader("Introduction")
-    st.markdown(
-        """
         Approximately half of all cancer cases require radiotherapy, yet worldwide access
         to RT remains unacceptably low. This gap has been well characterised at the national,
         regional, and global levels
@@ -1540,17 +1540,62 @@ with tab_method:
         Access to RT is constrained by two principal factors:
 
         - **Machine capacity** — the finite number of linear accelerators (linacs) within a
-          country limits the total number of patients that can be treated each year
-          ([Abdel-Wahab *et al.* 2025](https://doi.org/10.1016/S1470-2045(24)00678-8)).
+          country limits the total number of patients that can be treated each year.
         - **Geographic access** — RT requires attendance over several weeks; patients who
-          live far from a facility are substantially less likely to complete treatment
-          ([Burnet *et al.* 2025](https://doi.org/10.1016/j.radonc.2025.111061)).
+          live far from a facility are substantially less likely to complete a course of treatment.
 
-        Previous work has addressed each of these factors independently. This model is a
+        Previous work has addressed each of these factors independently. This tool is a
         first attempt to combine both constraints simultaneously, providing a unified view of
         where patients are most at risk of not receiving treatment.
         """
     )
+
+    st.subheader("What each tab does")
+    st.markdown(
+        """
+        | Tab | Contents |
+        |---|---|
+        | **🗺️ Modelling** | Interactive H3 hexagon maps — population density, cancer burden, RT demand, geographic access probability, and capacity-limited access. Select a country or region in the sidebar and click **Generate Map**. |
+        | **📊 Data** | Country-level data tables — cancer incidence by site (GLOBOCAN 2022), LINAC locations (DIRAC), and optimal RT utilisation rates. |
+        | **📐 Probability Models** | Explanation and visualisation of the three distance-decay models used to compute geographic access probability. |
+        | **📖 Method** | Full pipeline description with flowchart, data sources, and step-by-step methodology. |
+        | **⚠️ Assumptions** | Tabulated model assumptions and limitations, ranked by likely impact, with suggested improvements. |
+        | **🧪 Toy Example** | Step-by-step worked example showing how each pipeline stage transforms inputs into access outputs. |
+        """
+    )
+
+    st.subheader("Quick start guide")
+    st.markdown(
+        """
+        1. **Select a country or region** from the dropdown in the left sidebar. Countries
+           are limited to those with GLOBOCAN cancer incidence data. Regions (Africa, Europe,
+           etc.) are also available at lower resolutions.
+
+        2. **Choose a map type** — start with *Population Density* to see the underlying
+           data, then *Annual New Cancer Cases* to see where cancer burden is concentrated,
+           then *Radiotherapy Access* to see the combined model output.
+
+        3. **Set the H3 resolution** — the map is built on an
+           [H3 hexagonal grid](https://h3geo.org/). Resolution 8 (~400 m hexagons) gives the
+           most detail for single countries; lower resolutions (3–5) are faster and better
+           suited to regions.
+
+        4. **Click Generate Map** — the first load for a new country downloads the Kontur
+           population file (~1–60 seconds depending on country size); subsequent loads are
+           instant.
+
+        5. **Explore the access model** — under *Radiotherapy Access*, adjust the distance-
+           decay model (exponential, step, or uniform), the decay parameter λ, and the
+           capacity per machine to see how results change.
+
+        6. **Check the Data tab** for country-level cancer and LINAC statistics, and the
+           *Minimum RT Needs to Meet Capacity* panel beneath the access map for a
+           headline capacity gap estimate.
+        """
+    )
+
+# ---------------------------------------------------------------------------
+# Method tab
 
     # ------------------------------------------------------------------
     # Method / flowchart
