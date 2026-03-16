@@ -1678,6 +1678,13 @@ with tab_intro:
     st.subheader("About this tool")
     st.markdown(
         """
+        This tool is open source and released under the
+        [MIT License](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/blob/main/LICENSE).
+        Source code is available on [GitHub](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access).
+        """
+    )
+    st.markdown(
+        """
         This tool provides fast visualisation and analysis of access to radiotherapy (RT) at
         the sub-national scale, within countries and regions. It is designed to illuminate
         both the **problem landscape** — identifying which areas are underserved and whether
@@ -1986,3 +1993,13 @@ with tab_toy:
             st.warning(f"Image not found: {fname}")
         st.caption(caption)
         st.divider()
+
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
+
+st.divider()
+st.caption(
+    "RT Access · Released under the [MIT License](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/blob/main/LICENSE) · "
+    "[GitHub](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access)"
+)
