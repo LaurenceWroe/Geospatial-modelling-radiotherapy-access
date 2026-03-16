@@ -1215,11 +1215,15 @@ with tab_map:
             gdf = gdf.copy()
             gdf["color"] = colors
             _s_area_pop = pd.Series(_areas_pop, index=gdf.index).round(2).astype(str)
-            gdf["tip"] = (
+            _s_pop_raw = gdf["population"].apply(_fmt_sigfig)
+            _pop_tip = (
                 "<b>" + gdf["h3"].astype(str) + "</b><br/>"
                 + pop_label + ": " + pd.Series(plot_vals, index=gdf.index).round(2).astype(str) + "<br/>"
-                + "Hex area: " + _s_area_pop + " km²"
             )
+            if density_per_km2:
+                _pop_tip = _pop_tip + "People in hex: " + _s_pop_raw + "<br/>"
+            _pop_tip = _pop_tip + "Hex area: " + _s_area_pop + " km²"
+            gdf["tip"] = _pop_tip
 
             _geom_pop = gdf.geometry
             _lat_span_pop = float(_geom_pop.bounds["maxy"].max() - _geom_pop.bounds["miny"].min())
@@ -1309,9 +1313,11 @@ with tab_map:
 
                     s_combined = pd.Series(plot_vals_c, index=gdf.index).round(2).astype(str)
                     _s_area_c = pd.Series(_areas_cancer, index=gdf.index).round(2).astype(str)
+                    _s_pop_c = gdf["population"].apply(_fmt_sigfig)
                     gdf["tip"] = (
                         "<b>" + gdf["h3"].astype(str) + "</b><br/>"
                         + label + ": " + s_combined + "<br/>"
+                        + "People in hex: " + _s_pop_c + "<br/>"
                         + "Hex area: " + _s_area_c + " km²"
                     )
 
@@ -1414,11 +1420,16 @@ with tab_map:
                 auto_vmax = float(np.nanpercentile(dist_km[valid], 95)) if valid.any() else 500.0
                 colors, vmin, vmax = _color_values(dist_km, cb_cmap_fn, auto_vmin, auto_vmax)
 
+                _areas_near = _hex_areas_km2(gdf_out)
+                _s_area_near = pd.Series(_areas_near, index=gdf_out.index).round(2).astype(str)
+                _s_pop_near = gdf_out["population"].apply(_fmt_sigfig)
                 gdf_out = gdf_out.copy()
                 gdf_out["color"] = colors
                 gdf_out["tip"] = (
                     "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
-                    "Nearest LINAC: " + dist_km.round(1).astype(str) + " km"
+                    + "Nearest LINAC: " + pd.Series(dist_km, index=gdf_out.index).round(1).astype(str) + " km<br/>"
+                    + "People in hex: " + _s_pop_near + "<br/>"
+                    + "Hex area: " + _s_area_near + " km²"
                 )
 
                 layers = [_build_hex_layer(
@@ -1447,7 +1458,20 @@ with tab_map:
                 s_h3 = gdf_out["h3"].astype(str)
                 s_prob = (gdf_out["access_probability"] * 100).round(1).astype(str)
                 s_cap = (gdf_out["capacity_limited_probability"] * 100).round(1).astype(str)
-                s_pop = gdf_out["population"].round(0).astype(int).astype(str)
+
+                # Common tooltip fields
+                _areas_acc = _hex_areas_km2(gdf_out)
+                _s_area_acc = pd.Series(_areas_acc, index=gdf_out.index).round(2).astype(str)
+                s_pop_fmt = gdf_out["population"].apply(_fmt_sigfig)
+                s_treated = gdf_out["rt_treated"].round(1).astype(str)
+                s_untreated = gdf_out["rt_untreated"].round(1).astype(str)
+                _rt_demand_arr = gdf_out["rt_demand"].to_numpy(dtype=np.float64)
+                _pct_arr = np.where(
+                    _rt_demand_arr > 0,
+                    gdf_out["rt_treated"].to_numpy(dtype=np.float64) / _rt_demand_arr * 100,
+                    0.0,
+                )
+                s_pct = pd.Series(_pct_arr, index=gdf_out.index).round(1).astype(str)
 
                 if access_display_metric == "Modelled Untreated":
                     display_vals = gdf_out["rt_untreated"].to_numpy(dtype=np.float64)
@@ -1455,6 +1479,8 @@ with tab_map:
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
                     _tip_prefix = "RT patients untreated/yr"
+                    _tip_extra = "RT patients treated/yr"
+                    _tip_extra_s = s_treated
                     metric_cmap_fn = _rdylgn_reversed_rgb
 
                 elif access_display_metric == "Modelled Treated":
@@ -1463,6 +1489,8 @@ with tab_map:
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
                     _tip_prefix = "RT patients treated/yr"
+                    _tip_extra = "RT patients untreated/yr"
+                    _tip_extra_s = s_untreated
                     metric_cmap_fn = _rdylgn_rgb
 
                 elif access_display_metric == "Modelled Access Probability":
@@ -1472,7 +1500,9 @@ with tab_map:
                     tip_series = (
                         "<b>" + s_h3 + "</b><br/>"
                         + "Modelled access probability: " + s_cap + "%<br/>"
-                        + "Geographic access probability: " + s_prob + "%"
+                        + "Geographic access probability: " + s_prob + "%<br/>"
+                        + "People in hex: " + s_pop_fmt + "<br/>"
+                        + "Hex area: " + _s_area_acc + " km²"
                     )
                     metric_cmap_fn = _rdylgn_rgb
 
@@ -1483,14 +1513,14 @@ with tab_map:
                     tip_series = (
                         "<b>" + s_h3 + "</b><br/>"
                         + "Geographic access probability: " + s_prob + "%<br/>"
-                        + "People per hex: " + s_pop
+                        + "Modelled access probability: " + s_cap + "%<br/>"
+                        + "People in hex: " + s_pop_fmt + "<br/>"
+                        + "Hex area: " + _s_area_acc + " km²"
                     )
                     metric_cmap_fn = _rdylgn_rgb
 
                 # Apply per-km² normalisation for count-based access metrics
                 if access_display_metric in _count_access_metrics:
-                    _areas_acc = _hex_areas_km2(gdf_out)
-                    _s_area_acc = pd.Series(_areas_acc, index=gdf_out.index).round(2).astype(str)
                     if density_per_km2:
                         display_vals = display_vals / (_areas_acc / 10)
                         auto_vmax_a = float(np.nanmax(display_vals))
@@ -1499,7 +1529,10 @@ with tab_map:
                         tip_series = (
                             "<b>" + s_h3 + "</b><br/>"
                             + _tip_prefix + " per 10 km²: " + s_vals + "<br/>"
-                            + "Cap-limited probability: " + s_cap + "%<br/>"
+                            + _tip_extra + " per 10 km²: " + _tip_extra_s + "<br/>"
+                            + "% treated: " + s_pct + "%<br/>"
+                            + "Modelled access probability: " + s_cap + "%<br/>"
+                            + "People in hex: " + s_pop_fmt + "<br/>"
                             + "Hex area: " + _s_area_acc + " km²"
                         )
                     else:
@@ -1508,7 +1541,10 @@ with tab_map:
                         tip_series = (
                             "<b>" + s_h3 + "</b><br/>"
                             + _tip_prefix + ": " + s_vals + "<br/>"
-                            + "Cap-limited probability: " + s_cap + "%<br/>"
+                            + _tip_extra + ": " + _tip_extra_s + "<br/>"
+                            + "% treated: " + s_pct + "%<br/>"
+                            + "Modelled access probability: " + s_cap + "%<br/>"
+                            + "People in hex: " + s_pop_fmt + "<br/>"
                             + "Hex area: " + _s_area_acc + " km²"
                         )
 
@@ -1531,6 +1567,9 @@ with tab_map:
                         f"RT demand is zero for **{country}** — this country may not be in the GLOBOCAN dataset. "
                         "Capacity allocation cannot be computed; geographic access probability is still valid."
                     )
+
+                if access_display_metric in ("Modelled Access Probability", "Geographic Access Probability"):
+                    st.subheader(access_display_metric)
 
                 _render_with_colorbar(
                     layers, _make_view(gdf_out, pitch=pitch),
