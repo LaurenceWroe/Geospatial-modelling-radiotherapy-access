@@ -816,10 +816,10 @@ with st.sidebar:
         }[model_label]
 
         if access_model == "exponential":
-            lambda_km = float(st.slider("Distance decay λ (km)", 5, 200, 30, step=5))
+            lambda_km = float(st.slider("Distance decay λ (km)", 5, 200, 100, step=5))
         elif access_model == "weibull":
-            lambda_km = float(st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 200, 50, step=5))
-            weibull_k = float(st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 2.0, step=0.5))
+            lambda_km = float(st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 200, 150, step=5))
+            weibull_k = float(st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 4.0, step=0.5))
         elif access_model == "step":
             max_distance_km = float(
                 st.slider("Max treatment distance (km)", 10, 500, 100, step=10)
@@ -1110,8 +1110,8 @@ with tab_model:
         _pm_prob = np.exp(-_pm_dist / _pm_lambda)
 
     elif _pm_model == "Weibull":
-        _pm_wlambda = st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 500, 50, step=5, key="pm_wlambda")
-        _pm_wk = st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 2.0, step=0.5, key="pm_wk")
+        _pm_wlambda = st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 500, 150, step=5, key="pm_wlambda")
+        _pm_wk = st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 4.0, step=0.5, key="pm_wk")
 
         st.markdown("### Formula")
         st.latex(r"P(\text{treatment} \mid d) = \exp\!\left(-\left(\frac{d}{\lambda}\right)^k\right)")
