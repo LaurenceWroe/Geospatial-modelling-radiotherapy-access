@@ -1214,14 +1214,14 @@ with tab_map:
 
             gdf = gdf.copy()
             gdf["color"] = colors
-            _s_area_pop = pd.Series(_areas_pop, index=gdf.index).round(2).astype(str)
+            _s_area_pop = pd.Series(_areas_pop, index=gdf.index).apply(_fmt_sigfig)
             _s_pop_raw = gdf["population"].apply(_fmt_sigfig)
             _pop_tip = (
                 "<b>" + gdf["h3"].astype(str) + "</b><br/>"
                 + pop_label + ": " + pd.Series(plot_vals, index=gdf.index).round(2).astype(str) + "<br/>"
             )
             if density_per_km2:
-                _pop_tip = _pop_tip + "People in hex: " + _s_pop_raw + "<br/>"
+                _pop_tip = _pop_tip + "<hr style='margin:3px 0'/>" + "People in hex: " + _s_pop_raw + "<br/>"
             _pop_tip = _pop_tip + "Hex area: " + _s_area_pop + " km²"
             gdf["tip"] = _pop_tip
 
@@ -1312,11 +1312,12 @@ with tab_map:
                         label = f"Annual New Cancer Cases{_per_suffix}"
 
                     s_combined = pd.Series(plot_vals_c, index=gdf.index).round(2).astype(str)
-                    _s_area_c = pd.Series(_areas_cancer, index=gdf.index).round(2).astype(str)
+                    _s_area_c = pd.Series(_areas_cancer, index=gdf.index).apply(_fmt_sigfig)
                     _s_pop_c = gdf["population"].apply(_fmt_sigfig)
                     gdf["tip"] = (
                         "<b>" + gdf["h3"].astype(str) + "</b><br/>"
                         + label + ": " + s_combined + "<br/>"
+                        + "<hr style='margin:3px 0'/>"
                         + "People in hex: " + _s_pop_c + "<br/>"
                         + "Hex area: " + _s_area_c + " km²"
                     )
@@ -1421,13 +1422,14 @@ with tab_map:
                 colors, vmin, vmax = _color_values(dist_km, cb_cmap_fn, auto_vmin, auto_vmax)
 
                 _areas_near = _hex_areas_km2(gdf_out)
-                _s_area_near = pd.Series(_areas_near, index=gdf_out.index).round(2).astype(str)
+                _s_area_near = pd.Series(_areas_near, index=gdf_out.index).apply(_fmt_sigfig)
                 _s_pop_near = gdf_out["population"].apply(_fmt_sigfig)
                 gdf_out = gdf_out.copy()
                 gdf_out["color"] = colors
                 gdf_out["tip"] = (
                     "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
                     + "Nearest LINAC: " + pd.Series(dist_km, index=gdf_out.index).round(1).astype(str) + " km<br/>"
+                    + "<hr style='margin:3px 0'/>"
                     + "People in hex: " + _s_pop_near + "<br/>"
                     + "Hex area: " + _s_area_near + " km²"
                 )
@@ -1461,7 +1463,7 @@ with tab_map:
 
                 # Common tooltip fields
                 _areas_acc = _hex_areas_km2(gdf_out)
-                _s_area_acc = pd.Series(_areas_acc, index=gdf_out.index).round(2).astype(str)
+                _s_area_acc = pd.Series(_areas_acc, index=gdf_out.index).apply(_fmt_sigfig)
                 s_pop_fmt = gdf_out["population"].apply(_fmt_sigfig)
                 s_treated = gdf_out["rt_treated"].round(1).astype(str)
                 s_untreated = gdf_out["rt_untreated"].round(1).astype(str)
@@ -1501,6 +1503,7 @@ with tab_map:
                         "<b>" + s_h3 + "</b><br/>"
                         + "Modelled access probability: " + s_cap + "%<br/>"
                         + "Geographic access probability: " + s_prob + "%<br/>"
+                        + "<hr style='margin:3px 0'/>"
                         + "People in hex: " + s_pop_fmt + "<br/>"
                         + "Hex area: " + _s_area_acc + " km²"
                     )
@@ -1514,6 +1517,7 @@ with tab_map:
                         "<b>" + s_h3 + "</b><br/>"
                         + "Geographic access probability: " + s_prob + "%<br/>"
                         + "Modelled access probability: " + s_cap + "%<br/>"
+                        + "<hr style='margin:3px 0'/>"
                         + "People in hex: " + s_pop_fmt + "<br/>"
                         + "Hex area: " + _s_area_acc + " km²"
                     )
@@ -1531,7 +1535,7 @@ with tab_map:
                             + _tip_prefix + " per 10 km²: " + s_vals + "<br/>"
                             + _tip_extra + " per 10 km²: " + _tip_extra_s + "<br/>"
                             + "% treated: " + s_pct + "%<br/>"
-                            + "Modelled access probability: " + s_cap + "%<br/>"
+                            + "<hr style='margin:3px 0'/>"
                             + "People in hex: " + s_pop_fmt + "<br/>"
                             + "Hex area: " + _s_area_acc + " km²"
                         )
@@ -1543,7 +1547,7 @@ with tab_map:
                             + _tip_prefix + ": " + s_vals + "<br/>"
                             + _tip_extra + ": " + _tip_extra_s + "<br/>"
                             + "% treated: " + s_pct + "%<br/>"
-                            + "Modelled access probability: " + s_cap + "%<br/>"
+                            + "<hr style='margin:3px 0'/>"
                             + "People in hex: " + s_pop_fmt + "<br/>"
                             + "Hex area: " + _s_area_acc + " km²"
                         )
