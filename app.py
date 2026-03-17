@@ -903,6 +903,7 @@ with st.sidebar:
             cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
     if st.button("Generate Map", type="primary", use_container_width=True):
         st.session_state["_map_generated"] = True
+        st.session_state["_switch_to_map_tab"] = True
     generate = st.session_state.get("_map_generated", False)
 
 
@@ -935,8 +936,18 @@ else:
         st.stop()
 
 tab_map, tab_data, _tab_sep1, tab_intro, tab_method, tab_assumptions, _tab_sep2, tab_toy, tab_model = st.tabs([
-    "🗺️ Modelling", "📊 Data", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
+    "🗺️ Map Modelling", "📊 Data", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
 ])
+
+if st.session_state.pop("_switch_to_map_tab", False):
+    import streamlit.components.v1 as _components
+    _components.html(
+        "<script>setTimeout(function(){"
+        "var t=window.parent.document.querySelectorAll('[data-baseweb=\"tab\"]');"
+        "if(t.length>0)t[0].click();"
+        "},120);</script>",
+        height=0,
+    )
 
 # ---------------------------------------------------------------------------
 # Data tab — always available, no Generate button required
@@ -1802,7 +1813,7 @@ with tab_intro:
         """
         | Tab | Contents |
         |---|---|
-        | **🗺️ Modelling** | Interactive H3 hexagon maps — population density, cancer burden, RT demand, geographic access probability, and capacity-limited access. Select a country or region in the sidebar and click **Generate Map**. |
+        | **🗺️ Map Modelling** | Interactive H3 hexagon maps — population density, cancer burden, RT demand, geographic access probability, and capacity-limited access. Select a country or region in the sidebar and click **Generate Map**. |
         | **📊 Data** | Country-level data tables — cancer incidence by site (GLOBOCAN 2022), LINAC locations (DIRAC), and optimal RT utilisation rates. |
         | **📖 Method** | Full pipeline description with flowchart, data sources, and step-by-step methodology. |
         | **⚠️ Assumptions** | Tabulated model assumptions and limitations, ranked by likely impact, with suggested improvements. |
