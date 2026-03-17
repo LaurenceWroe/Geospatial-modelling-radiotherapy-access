@@ -901,11 +901,14 @@ with st.sidebar:
         if not cb_auto:
             cb_vmin_user = st.number_input("Min value", value=0.0, format="%.4g")
             cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
-    if st.button("Generate Map", type="primary", use_container_width=True):
+    if st.button(
+        "Generate Map  \n*(Press again if hexagons do not render)*",
+        type="primary",
+        use_container_width=True,
+    ):
         st.session_state["_map_generated"] = True
         st.session_state["_switch_to_map_tab"] = True
     generate = st.session_state.get("_map_generated", False)
-    st.caption("Press twice if the map does not appear.")
 
 
 # ---------------------------------------------------------------------------
@@ -946,7 +949,7 @@ if st.session_state.pop("_switch_to_map_tab", False):
         "<script>setTimeout(function(){"
         "var t=window.parent.document.querySelectorAll('[data-baseweb=\"tab\"]');"
         "if(t.length>0)t[0].click();"
-        "},500);</script>",
+        "},120);</script>",
         height=0,
     )
 
