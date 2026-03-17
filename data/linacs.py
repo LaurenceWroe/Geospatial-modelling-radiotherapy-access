@@ -19,8 +19,8 @@ import pandas as pd
 import pycountry
 
 # Prefer the geocoding-corrected version if it exists, fall back to original
-_DIRAC_FIXED = Path("c_probability_of_access/linac/Database_DIRAC_fixed.csv")
-_DIRAC_ORIG  = Path("c_probability_of_access/linac/Database_DIRAC.csv")
+_DIRAC_FIXED = Path("linac_data/Database_DIRAC_fixed.csv")
+_DIRAC_ORIG  = Path("linac_data/Database_DIRAC.csv")
 DIRAC_CSV = _DIRAC_FIXED if _DIRAC_FIXED.exists() else _DIRAC_ORIG
 
 # pycountry name → DIRAC CSV country name for known mismatches

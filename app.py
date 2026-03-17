@@ -1870,7 +1870,7 @@ with tab_method:
     st.subheader("Model Overview")
 
     import os as _os
-    _flowchart_path = _os.path.join(_os.path.dirname(__file__), "FlowChart.png")
+    _flowchart_path = _os.path.join(_os.path.dirname(__file__), "assets", "flowchart.png")
     if _os.path.exists(_flowchart_path):
         st.image(_flowchart_path, use_column_width=True)
 
@@ -2040,7 +2040,7 @@ with tab_toy:
         """
     )
 
-    _toy_dir = _os.path.join(_os.path.dirname(__file__), "ToyExample")
+    _toy_dir = _os.path.join(_os.path.dirname(__file__), "assets", "toy_example")
 
     _toy_figures = [
         (

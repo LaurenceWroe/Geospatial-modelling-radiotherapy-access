@@ -3,11 +3,11 @@ Cancer incidence loader and H3 apportionment.
 
 Data sources
 ------------
-- ``b_cancer_incidence/globocan_xarray.nc``  — national cancer case totals
+- ``cancer_data/globocan_xarray.nc``  — national cancer case totals
   (dims: Cancer × Metric × ISO3).
-- ``b_cancer_incidence/optimal_rt_utilisations.csv``  — optimal RT fraction
+- ``cancer_data/optimal_rt_utilisations.csv``  — optimal RT fraction
   per cancer type, format: ``Cancer type, fraction`` (no header).
-- ``b_cancer_incidence/actual_data/{ISO3}.csv``  — actual per-country RT
+- ``cancer_data/actual_data/{ISO3}.csv``  — actual per-country RT
   fraction (optional; falls back to optimal if missing).
 
 Cases are apportioned over H3 hexagons proportional to population, so that
@@ -24,9 +24,9 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-XARRAY_PATH = Path("b_cancer_incidence/globocan_xarray.nc")
-OPTIMAL_CSV = Path("b_cancer_incidence/optimal_rt_utilisations.csv")
-ACTUAL_DIR = Path("b_cancer_incidence/actual_data")
+XARRAY_PATH = Path("cancer_data/globocan_xarray.nc")
+OPTIMAL_CSV = Path("cancer_data/optimal_rt_utilisations.csv")
+ACTUAL_DIR = Path("cancer_data/actual_data")
 NEW_CASES_METRIC = "New_Cases_Number"
 
 # Derived cancer types not directly in GLOBOCAN — computed from aggregates
