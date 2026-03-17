@@ -901,14 +901,15 @@ with st.sidebar:
         if not cb_auto:
             cb_vmin_user = st.number_input("Min value", value=0.0, format="%.4g")
             cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
-    if st.button(
-        "Generate Map  \n*(Press again if hexagons do not render)*",
-        type="primary",
-        use_container_width=True,
-    ):
+    if st.button("Generate Map", type="primary", use_container_width=True):
         st.session_state["_map_generated"] = True
         st.session_state["_switch_to_map_tab"] = True
     generate = st.session_state.get("_map_generated", False)
+    st.markdown(
+        "<div style='text-align:center;font-size:0.75rem;color:gray;margin-top:-8px'>"
+        "Press again if hexagons do not render</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
