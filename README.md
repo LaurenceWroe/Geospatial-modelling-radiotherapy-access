@@ -1,304 +1,115 @@
-<a id="readme-top"></a>
-# Geospatial Modelling Radiotherapy Access
+# RT Access
 
-<!-- TABLE OF CONTENTS -->
-<details>
-  <summary>Table of Contents</summary>
-  <ol>
-    <li>
-      <a href="#about-the-project">About The Project</a>
-      <ul>
-        <li><a href="#built-with">Built With</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
-    </li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
-  </ol>
-</details>
+An interactive web tool for modelling and visualising sub-national access to radiotherapy (RT) at country and regional scale.
 
-<!-- ABOUT THE PROJECT -->
-## About The Project
+**Live app → [rt-access.streamlit.app](https://rt-access.streamlit.app)** *(update link once deployed)*
 
-This project aims to visualise and calculate access and capacity for radiotherapy centres, with cancer data sourced from individual countries.
+---
 
-This GitHub provides a tool that can use either distance-based or time-based calculations to determine probability of access. From this tool, analysis can be done
+## Overview
 
-![Alt text](Data_flow.png?raw=true "Data Flow Plan Diagram")
+Approximately half of all cancer cases require radiotherapy, yet access to RT remains critically low in many parts of the world. National-level statistics mask large within-country inequalities driven by two compounding factors:
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+- **Geographic access** — RT requires attendance over several weeks; patients far from a facility are substantially less likely to complete treatment.
+- **Machine capacity** — the finite number of linear accelerators (linacs) limits total annual throughput.
 
-### Built With
+This tool combines both constraints simultaneously, producing per-hexagon estimates of:
 
-* [![Python][Python.js]][Python-url]
+- Population density and cancer burden (GLOBOCAN 2022)
+- RT demand (optimal utilisation rates or user-defined fraction)
+- Geographic access probability (exponential, Weibull, or step-function distance-decay models)
+- Capacity-limited (modelled) access via a ring-based proportional allocation algorithm
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+Maps are built on [H3 hexagonal grids](https://h3geo.org/) (Uber H3) at resolutions from ~400 m (country-level) down to ~87,000 km² (regional), enabling consistent multi-scale analysis.
 
-<!-- GETTING STARTED -->
-## Getting Started
+---
 
-This is an example of how you may give instructions on setting up your project locally.
-To get a local copy up and running follow these simple example steps.
+## Data sources
 
-### Prerequisites
+| Data | Source |
+|---|---|
+| Population | [Kontur Population Dataset](https://www.kontur.io/portfolio/population-dataset/) — H3 resolution 8 (~400 m) |
+| Cancer incidence | [GLOBOCAN 2022](https://gco.iarc.fr/today/) (IARC) — 175 countries |
+| Optimal RT utilisation | Delaney *et al.* 2005 — site-specific RT fractions |
+| LINAC locations & counts | [DIRAC database](https://dirac.iaea.org/) (IAEA) |
 
-Install Python in your favourite IDE (or other means)
+---
 
-* pycountry
-  ```sh
-  pip install pycountry
-  ```
-* rioxarray
-  ```sh
-  pip install rioxarray
-  ```
-  
-### Installation
+## Getting started
 
+### Requirements
 
-1. Clone the repo
-   ```sh
-   git clone https://github.com/smartin3113/Geospatial-modelling-radiotherapy-access
-   ```
-2. Install python and associated packages in the Prerequisites
+Python 3.9+ with dependencies listed in `requirements.txt`. Key packages: `streamlit`, `geopandas`, `h3`, `pydeck`, `xarray`, `pyogrio`.
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+```bash
+pip install -r requirements.txt
+```
 
+### Run locally
 
+```bash
+streamlit run app.py
+```
 
-<!-- USAGE EXAMPLES -->
-## Usage
+On first run for a new country, population data is downloaded from the Kontur S3 bucket (~1–60 seconds depending on country size). Subsequent loads are cached.
 
-To be written
+---
 
-_For more examples, please refer to the [Documentation](https://example.com)_
+## Project structure
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+```
+app.py                        # Streamlit application
+analysis/
+  accessibility.py            # H3 accessibility computation (geographic + capacity-limited)
+data/
+  cancer.py                   # GLOBOCAN loader and H3 apportionment
+  linacs.py                   # DIRAC LINAC database loader
+  population.py               # Kontur population loader and resampler
+  regions.py                  # Region definitions (Africa, Europe, etc.)
+cancer_data/
+  globocan_xarray.nc          # GLOBOCAN 2022 data (Cancer × Metric × ISO3)
+  optimal_rt_utilisations.csv # Site-specific RT utilisation fractions
+linac_data/
+  Database_DIRAC_fixed.csv    # DIRAC LINAC database (geocoding-corrected)
+assets/
+  flowchart.png               # Pipeline flowchart (shown in Method tab)
+  toy_example/                # Step-by-step worked example figures
+H3_region_cache/              # Pre-generated regional H3 parquets (res 1–3)
+H3_pop_density_maps/          # Per-country Kontur GPKG files (downloaded on demand)
+```
 
+---
 
+## Probability models
 
-<!-- ROADMAP -->
-## Roadmap
-Tool:
-Longer (probably in order of priority, but note we have to get the linac capacity calculation incorporated)
-- [] Change to using H3 hexagons. Download population at the 400 m resolution and resample? Note that the hexagons will have different sizes across the country, this is okay, but need to make sure calculation is working correctly
-- [] Implement traveltime API hit. For functionality, add a button to switch between time (driving and public transport) and distance-based calculations (warn or stop user, if API is not configured correctly)
-- [] Incorporate OpenStreetMap and overlay the plots on top (using transparency)
-- [] Add in the linac capacity calculation code (allow the user to change the lambda, and capacity of each linac)
-- [] Get the linac locations for all countries, either from IAEA or Polish paper
-- [] Add in the isochrone plot (maybe this is extra, we can just use the API directly to plot the individual traveltimes)
-- [] Add in the functionality for the user to click to add linacs
+Three distance-decay models are available:
 
-Medium 
-- [] Add functionaility and a dropdown to allow user to switch between exponential decay probability and a step-function
-- [] Add some additional information into the title, or nearby. For example, mean probability by square, mean probability per population, mean distance to linac etc.
-- [] Create an updated flowchart to insert into the readme
-  
-Shorter
-- [] Add clarity to treated by radiotherapy plot - add a textbox which allows user to set a flat percentage (e.g. 10 %, 25 %) and also add a tickbox that loads the treated percentage per cancer type (if found)
-- [] Add variable distance scale to Distance to Nearest LINAC (keep linear ? or log?)
-- [] Add a lower 10^k to all plot colourbars
+| Model | Formula | Key parameter |
+|---|---|---|
+| Exponential | P(d) = exp(−d/λ) | λ = decay length (km) |
+| Weibull | P(d) = exp(−(d/λ)ᵏ) | λ = scale (km), k = shape |
+| Step function | P(d) = 1 if d ≤ d_max, else 0 | d_max = cutoff (km) |
 
-Paper / publicity:
-- [] Present to CERN people
-- [] Release the tool on GitHub
-- [] White paper presenting the tool in journal such as Radiotherapy and Oncology (The Green Journal) / Frontiers in Oncology – Radiation Oncology Section / Physics in Medicine & Biology (PMB) / The Lancet Oncology (?)
-- [] Analysis paper focusing on (e.g.) UK
+The Weibull model (k ≥ 1) generalises exponential decay with a flat near-facility plateau followed by a steeper drop-off, matching observed patterns in RT attendance with distance.
 
-Thorough UK Analysis:
-- [] Determine the cities of poorest access in the UK, for public transport and driving
-- [] Analyse the difference between using distance and travel time
-- [] how much should linac capacity be to improve access (i,e, number of new machines)? where should new centres be placed to improve access? (look at existing hospital sites w/out machine)
-- [] Speak / present to Sarah Quinlan (Radiotherapy UK)
+Capacity allocation uses a **ring-based proportional algorithm**: for each facility, hexagons are grouped into concentric rings; each ring is served in full before moving outward, and when a ring exhausts remaining capacity the budget is split proportionally by demand weight across all hexagons in that ring.
 
-<!-- ROADMAP -->
+---
 
-## Implementing H3
+## Citation
 
+If you use this tool in your work, please cite:
 
-https://h3geo.org/
-- H3 is a discrete global grid system for indexing geographies into a hexagonal grid, developed at Uber.
-- Coordinates can be indexed to cell IDs that each represent a unique cell.
-- Indexed data can be quickly joined across disparate datasets and aggregated at different levels of precision.
-- H3 enables a range of algorithms and optimizations based on the grid, including nearest neighbors, shortest path, gradient smoothing, and more."
-- Its Github here: https://github.com/uber/h3?tab=readme-ov-file
+> Wroe L, Ho A, Brown A, Martin S. *RT Access: a geospatial tool for modelling sub-national radiotherapy access.* (2025). https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access
 
-Kontur have population density maps at 3 different H3 resolutions (400m, 3km , 22km)
-- https://data.humdata.org/dataset/kontur-population-dataset
+---
 
-## Bugs
-
-- [] Fix select all cancer types ticking all cancers and then erroring cos filename is too long
-- [] Fix that when you go onto the distance plotting, the 'distance' text then stays if you swap back to another plot
-
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
-<!-- CONTRIBUTING -->
-## Contributing
-
-<!-- 
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
-
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
-Don't forget to give the project a star! Thanks again!
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
--->
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
-<!-- LICENSE -->
 ## License
 
-TO BE DETERMINED
+Released under the [MIT License](LICENSE).
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+---
 
-
-
-<!-- CONTACT -->
 ## Contact
 
-Laurence Wroe - laurence.wroe@cern.ch
-
-Alika Ho - alika.ho@queens.ox.ac.uk
-
-Archie Brown - archie.brown@st-hughs.ox.ac.uk
-
-Sophia Martin - sophia.martin@lmh.ox.ac.uk
-
-Project Link: [https://github.com/smartin3113/Geospatial-modelling-radiotherapy-access](https://github.com/smartin3113/Geospatial-modelling-radiotherapy-access)
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-
-<!-- ACKNOWLEDGMENTS -->
-## Acknowledgments
-
-* [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
-
-
-<!-- MARKDOWN LINKS & IMAGES -->
-[Python.js]: https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff
-[Python-url]: https://www.python.org/
-
-<!-- ACKNOWLEDGMENTS -->
-## RUNNING TO DO LIST TO TIDY AND DELETE
-
-To do (15/08/2025)
-
-- OVERLEAF document
-  - Just with source code at the moment, recording the parts of this
-- Area coverage probability
-  - On graph of probability it calculates mean probability across all squares
-- Loz will do the time to get to the center, talk to Sara
-- Comparing with other treatment options (e.g. chemo), other treatment options are offerred in more places 
-  - Would need a database of all 
-  - Showing that maybe its easier to get chemo/surgery etc. which is the reason behind low radiotherapy rates
-- GUI local vs online
-  - Maybe always run locally at 5km (so the GUI always works offline) - very basic offline, which is always there as a backup
-  - Total file size of all these countries make 100 MB ish 
-  - Less than 20 MB (email ??)
-  - Maybe greys out resample box etc.
-- Check US doesn't include non-contiguous countries?
-- Debug the worldpop downloader so it's downloading the actual small file size (Alika)
-  - Check if worldpop has api for downloading
-- Debug the types of cancer to plot with same axis (Sophia)
-- Can we process border differently to uninhabited areas 
-  - Make it clear that mountains are still part of the country but no one can live there with colour mapping (e.g. make -99999 to 0 etc.)
-- Overlayed a map which has the big cities
-  - Some resource with state capitals/important cities/counties
-- Later on, state by state analysis for the US
-  - e.g. when states have different laws for travelling for radiotherapy treatment
-- Capacities for each linac in the UK (e.g. radiotherapy UK report)
-  - This should be done separately from the main GUI/code!
-
-
-
-
-To do (14/08/2025)
-
-- Add archie and loz to github
-- Research
-  - Types of cancer
-  - Percentage of cancer that can be treated with radiotherapy (for each type)
-      - What could be treated
-      - What actually is treated
-  - Capacity for each linac in the country
-  - Smapped/ UK Radiotherapy report
-  - If exists, mean number of fractions per cancer
-- Code
-  - Check resampling stage
-  - Fix the unallocated just being a subtraction of allocated from total radiotherapy (instead of running through all linacs again)
-  - Prediction of computational time
-  - User pick their resolution
-  - User selecting colormap
-  - Adding linacs by clicking in a spot, recalculate with new linacs
-
-
-
-
-To Do (27/08/2025) 
-- Data flow chart update (Sophia) DONE (AND PUT IN SLIDES FOR CHANGES AND ADDITIONS) 
-- generalising code to run for all countries using GLOBOCAN data (Archie) 
-- Optimal RT treatment maps using Australian paper data (Sophia) DONE (although could do with using better database) 
-- How TravelTime code could be used in flow chart of what the tools does (Sophia) DONE
-- Probability maps (Archie) 
-- GUI fix: close resampling loading output after it has loaded. DONE 
-- Once probability maps are good to go, add option to GUI which allows a checkbox of all maps made --> look at run_country_analysis.py file 
-- Add relevant maps and comments to presentation slides (Archie and Sophia) 
-- we need GUI to produce just population density maps!  DONE (saves maps to a_population_density) 
-
-To Do (29/08/2025) 
-- GUI code commenting and neatening up (Archie) (DONE) 
-- Updating Data Flow chart to include GUI usage, GLOBOCAN data, where we would like the new data to come from (Sophia) (DONE)
-- Presentation slides 
-- Probability of access maps (Sophia) 
-- Look at UK Gov data source to collect data on stage at diagnosis (Sophia) 
-- travel-time visualization, how to integrate traveltime code (Archie: Monday, Tuesday) 
-- Integrating GLOBOCAN data into generate_cancer_type_map.py (Archie) 
-- Make Linac capacity a user input in the GUI (need probability maps doen first though) (Sophia) 
-- If time, add a function that allows the user to plot a LINAC (archie)
-
-- I (archie) want to edit the plots so that cancers are displayed as a list next to the plot as selecting a few makes it a super long title
-
-
-
-- code for probability access plots i think takes too long to compute or soemthing is wrong with the code that geenrates the plots in the GUI but i (sophia) cant work it out
-
-
-
-LIST OF PYTHON FILES THAT ARE BEING USED: 
-(i want to clear out all the redundant files to neaten things up)
-- download_worldpop.py (legacy model) 
-- resample_population.py 
-- generate_cancer_type_map_v2.py 
-- generate_access_map_v2.py
-
-
-
-
-
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+Laurence Wroe — laurence.wroe@cern.ch
