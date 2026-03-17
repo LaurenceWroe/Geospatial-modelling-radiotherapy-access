@@ -905,6 +905,7 @@ with st.sidebar:
         st.session_state["_map_generated"] = True
         st.session_state["_switch_to_map_tab"] = True
     generate = st.session_state.get("_map_generated", False)
+    st.caption("Press twice if the map does not appear.")
 
 
 # ---------------------------------------------------------------------------
@@ -945,7 +946,7 @@ if st.session_state.pop("_switch_to_map_tab", False):
         "<script>setTimeout(function(){"
         "var t=window.parent.document.querySelectorAll('[data-baseweb=\"tab\"]');"
         "if(t.length>0)t[0].click();"
-        "},120);</script>",
+        "},500);</script>",
         height=0,
     )
 
