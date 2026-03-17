@@ -24,9 +24,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-XARRAY_PATH = Path("cancer_data/globocan_xarray.nc")
-OPTIMAL_CSV = Path("cancer_data/optimal_rt_utilisations.csv")
-ACTUAL_DIR = Path("cancer_data/actual_data")
+_ROOT = Path(__file__).resolve().parent.parent
+XARRAY_PATH = _ROOT / "cancer_data" / "globocan_xarray.nc"
+OPTIMAL_CSV = _ROOT / "cancer_data" / "optimal_rt_utilisations.csv"
+ACTUAL_DIR = _ROOT / "cancer_data" / "actual_data"
 NEW_CASES_METRIC = "New_Cases_Number"
 
 # Derived cancer types not directly in GLOBOCAN — computed from aggregates
