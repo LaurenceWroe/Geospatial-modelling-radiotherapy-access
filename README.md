@@ -112,4 +112,4 @@ Released under the [MIT License](LICENSE).
 
 ## Contact
 
-Laurence Wroe — laurence.wroe@cern.ch
+Laurence Wroe — laurencewroe@gmail.com
