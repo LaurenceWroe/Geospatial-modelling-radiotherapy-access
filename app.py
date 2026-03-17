@@ -687,7 +687,7 @@ with st.sidebar:
         h3_resolution = st.selectbox(
             "H3 resolution",
             options=_res_opts,
-            index=0,  # default to H1 (coarsest) for regions
+            index=min(1, len(_res_opts) - 1),  # default H2
             format_func=lambda r: _res_labels.get(r, str(r)),
             key="h3_res_region",
         )
