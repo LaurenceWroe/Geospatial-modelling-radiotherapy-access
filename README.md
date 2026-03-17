@@ -2,7 +2,7 @@
 
 An interactive web tool for modelling and visualising sub-national access to radiotherapy (RT) at country and regional scale.
 
-**Live app → [[rt-access.streamlit.app](https://rt-access.streamlit.app)](https://rtaccess.streamlit.app/)** 
+**Live app → [[rt-access.streamlit.app](https://rt-access.streamlit.app)]** 
 
 ---
 
