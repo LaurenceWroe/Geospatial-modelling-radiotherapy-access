@@ -204,20 +204,18 @@ def apportion_cancer_to_h3(
     total_pop = pop.sum()
     pop_share = pop / total_pop if total_pop > 0 else np.zeros_like(pop)
 
-    result = gdf.copy()
+    new_cols: Dict[str, np.ndarray] = {}
     for cancer in cancer_types:
         n_cases = national_cases.get(cancer, 0.0)
         incidence = pop_share * n_cases
-        result[f"{cancer}_incidence"] = incidence.astype(np.float32)
 
         cancer_key = _norm_key(cancer)
         opt_frac = optimal_fracs.get(cancer_key, 0.0)
-        result[f"{cancer}_optimal_rt"] = (incidence * opt_frac).astype(np.float32)
+        act_frac = actual_fracs.get(cancer_key, opt_frac) if actual_fracs is not None else opt_frac
 
-        if actual_fracs is not None:
-            act_frac = actual_fracs.get(cancer_key, opt_frac)
-        else:
-            act_frac = opt_frac
-        result[f"{cancer}_actual_rt"] = (incidence * act_frac).astype(np.float32)
+        new_cols[f"{cancer}_incidence"] = incidence.astype(np.float32)
+        new_cols[f"{cancer}_optimal_rt"] = (incidence * opt_frac).astype(np.float32)
+        new_cols[f"{cancer}_actual_rt"] = (incidence * act_frac).astype(np.float32)
 
-    return result
+    result = pd.concat([gdf, pd.DataFrame(new_cols, index=gdf.index)], axis=1)
+    return gpd.GeoDataFrame(result, geometry=gdf.geometry.name, crs=gdf.crs)
