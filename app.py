@@ -841,6 +841,27 @@ with st.sidebar:
     access_model: str = "exponential"
     access_display_metric: str = "Modelled Inaccessible"
     capacity_per_machine_per_year: float = 450.0
+    use_travel_time: bool = False
+    tt_mode: str = "driving"
+    tt_app_id: str = ""
+    tt_api_key: str = ""
+
+    if needs_linac:
+        # --- Distance method (shown for both Access and Nearest Linac maps) ---
+        tt_method = st.radio(
+            "Distance method",
+            ["Straight-line distance", "Driving time", "Public transport time"],
+            index=0,
+            horizontal=True,
+        )
+        use_travel_time = tt_method != "Straight-line distance"
+        tt_mode = "driving" if tt_method == "Driving time" else "public_transport"
+        if use_travel_time:
+            st.markdown(
+                "**TravelTime API credentials** — [get a free key](https://traveltime.com/)"
+            )
+            tt_app_id = st.text_input("App ID", key="tt_app_id", type="default")
+            tt_api_key = st.text_input("API Key", key="tt_api_key", type="password")
 
     if is_access:
         capacity_per_machine_per_year = float(
@@ -873,25 +894,6 @@ with st.sidebar:
             ],
             index=0,
         )
-        # --- Distance method ---
-        tt_method = st.radio(
-            "Distance method",
-            ["Straight-line distance", "Driving time", "Public transport time"],
-            index=0,
-            horizontal=True,
-        )
-        use_travel_time = tt_method != "Straight-line distance"
-        tt_mode = "driving" if tt_method == "Driving time" else "public_transport"
-
-        tt_app_id: str = ""
-        tt_api_key: str = ""
-        if use_travel_time:
-            st.markdown(
-                "**TravelTime API credentials** — [get a free key](https://traveltime.com/)"
-            )
-            tt_app_id = st.text_input("App ID", key="tt_app_id", type="default")
-            tt_api_key = st.text_input("API Key", key="tt_api_key", type="password")
-
         model_label = st.radio(
             "Access model",
             ["Exponential decay", "Weibull", "Step function", "Uniform (no decay)"],
