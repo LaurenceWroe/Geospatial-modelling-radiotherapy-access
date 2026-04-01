@@ -1,5 +1,5 @@
 """
-RadMap — Interactive H3 Map (Streamlit)
+RadMaps — Interactive H3 Map (Streamlit)
 
 Run with:
     streamlit run app.py
@@ -49,7 +49,7 @@ from analysis.accessibility import compute_accessibility
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="RadMap",
+    page_title="RadMaps",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -665,7 +665,7 @@ MAP_TYPES = [
 ]
 
 with st.sidebar:
-    st.title("🏥 RadMap")
+    st.title("🏥 RadMaps")
 
     _all_options = _selection_options()
     country = st.selectbox(
@@ -1658,16 +1658,31 @@ with tab_map:
                 else:
                     model_info = "Uniform (no distance decay)"
 
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                # Row 1: machine/demand overview
+                _globocan = stats.get("total_cancer_excl_nmsc")
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric("LINACs", int(stats["total_machines"]))
                 col2.metric("Total LINAC Capacity", _fmt_sigfig(stats['total_national_capacity']))
-                _globocan = stats.get("total_cancer_excl_nmsc")
                 col3.metric("Cancer Incidence", _fmt_sigfig(_globocan) if _globocan is not None else "N/A")
                 col4.metric("RT Demand", _fmt_sigfig(stats['total_rt_demand']))
-                col5.metric("Model: Patients Accessing", _fmt_sigfig(stats['total_rt_treated']))
+
+                # Row 2: modelled (capacity + geography combined) access outcomes
                 _pct_treated = (stats['total_rt_treated'] / stats['total_rt_demand'] * 100) if stats['total_rt_demand'] > 0 else 0.0
-                col6.metric("Model: % Patients Accessing", f"{_pct_treated:.1f}%")
-                # col7.metric("Mean Geographic Access", f"{stats['mean_access_probability']:.1%}")
+                col1b, col2b, col3b = st.columns(3)
+                col1b.metric("Modelled RT Access", _fmt_sigfig(stats['total_rt_treated']))
+                col2b.metric("Modelled RT Inaccessible", _fmt_sigfig(stats['total_rt_demand'] - stats['total_rt_treated']))
+                col3b.metric("Modelled RT Access Ratio", f"{_pct_treated:.1f}%")
+
+                # Row 3: single-constraint summaries
+                _cap_only = (stats['total_rt_demand'] / _globocan) if (_globocan and _globocan > 0) else None
+                _geo_access = stats.get("mean_access_probability", 0.0)
+                col1c, col2c = st.columns(2)
+                col1c.metric("Capacity-Only Limited Access",
+                             f"{_cap_only:.1%}" if _cap_only is not None else "N/A",
+                             help="RT Demand ÷ Cancer Incidence — fraction of cancer patients needing RT, assuming geography is no barrier")
+                col2c.metric("Geographic-Only Limited Access",
+                             f"{_geo_access:.1%}",
+                             help="Population-weighted mean geographic access probability, assuming unlimited machine capacity")
                 _demand_info = (
                     f"demand: optimal RT utilisations"
                     if access_rt_method == "optimal"
@@ -1684,12 +1699,15 @@ with tab_map:
                 st.caption(
                     "These calculations consider only geographic access and do not account for machine capacity."
                 )
-                _geo_col1, _geo_col2 = st.columns(2)
+                _near_valid = gdf_out["nearest_linac_km"].notna()
+                _near_km = gdf_out.loc[_near_valid, "nearest_linac_km"]
+                _near_pop = gdf_out.loc[_near_valid, "population"].to_numpy(dtype=np.float64)
                 _mean_geo_prob = stats.get("mean_access_probability", 0.0)
+                _pop_total = _near_pop.sum()
+                _pop_wtd_dist = float((_near_km.to_numpy() * _near_pop).sum() / _pop_total) if _pop_total > 0 else 0.0
+                _geo_col1, _geo_col2 = st.columns(2)
                 _geo_col1.metric("Average Geographic Access Probability", f"{_mean_geo_prob:.1%}")
-                _near_km = gdf_out["nearest_linac_km"].dropna()
-                _mean_dist = float(_near_km.mean()) if len(_near_km) > 0 else 0.0
-                _geo_col2.metric("Mean Distance to Nearest Linac", f"{_mean_dist:.1f} km")
+                _geo_col2.metric("Pop-Weighted Mean Distance to Linac", f"{_pop_wtd_dist:.1f} km")
                 if len(_near_km) > 0:
                     _fig_hist = go.Figure()
                     _fig_hist.add_trace(go.Histogram(
@@ -2136,6 +2154,6 @@ with tab_toy:
 
 st.divider()
 st.caption(
-    "RadMap · Released under the [MIT License](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/blob/main/LICENSE) · "
+    "RadMaps · Released under the [MIT License](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/blob/main/LICENSE) · "
     "[GitHub](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access)"
 )

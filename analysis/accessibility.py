@@ -67,7 +67,6 @@ def compute_accessibility(
     linac_locations: List[Tuple[float, float, float]],
     lambda_km: float = 30.0,
     cutoff_km: Optional[float] = None,
-    use_weights: bool = True,
     model: Literal["exponential", "step", "weibull"] = "exponential",
     max_distance_km: float = 50.0,
     weibull_k: float = 2.0,
@@ -157,7 +156,6 @@ def compute_accessibility(
     raw_weights = np.array([w for _, _, w in linac_locations], dtype=np.float64)
 
     # Geographic access probability accumulator
-    cap_factor = capacity_per_machine_per_year / _REFERENCE_CAPACITY
     complement = np.ones(n, dtype=np.float64)
 
     # Capacity-limited allocation accumulator (RT patients/year)
@@ -197,8 +195,9 @@ def compute_accessibility(
             p = np.exp(-dists_km / lambda_km)
             p = np.where(dists_km <= cutoff_km, p, 0.0)
 
-        eff_w = (w * cap_factor) if use_weights else 1.0
-        complement *= np.power(np.maximum(1.0 - p, 0.0), eff_w)
+        # Geographic probability: each centre counts once regardless of linac count.
+        # Capacity (linac count) is handled separately in the allocation below.
+        complement *= np.maximum(1.0 - p, 0.0)
 
         # --- ring-based proportional capacity allocation ---
         cap_j = w * capacity_per_machine_per_year
