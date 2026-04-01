@@ -1,17 +1,16 @@
 """
-Radiotherapy Access — Interactive H3 Map (Streamlit)
+RadMap — Interactive H3 Map (Streamlit)
 
 Run with:
     streamlit run app.py
 
 Map types
 ---------
-Population Density        — Kontur H3 population per hexagon (log scale)
-Annual New Cancer Cases          — Estimated cases per hexagon (proportional to pop)
-Optimal RT Treatment      — Cases that should receive RT (optimal fractions)
-Actual RT Treatment       — Cases that are receiving RT (actual fractions)
-Radiotherapy Access       — P(patient can access a LINAC) per hexagon
-Nearest LINAC Distance    — Distance (km) to the closest LINAC facility
+Population Density    — Kontur H3 population per hexagon (log scale)
+Cancer Incidence      — Estimated cases per hexagon (proportional to pop)
+Radiotherapy Demand   — Cancer cases requiring RT per hexagon
+Radiotherapy Access   — P(patient can access a LINAC) per hexagon
+Nearest Linac         — Distance (km) to the closest LINAC facility
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ from analysis.accessibility import compute_accessibility
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="RT Access",
+    page_title="RadMap",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -164,10 +163,10 @@ COLORMAPS = {
 
 _DEFAULT_CMAP = {
     "Population Density": "Green → Red",
-    "Annual New Cancer Cases": "Green → Red",
-    "Cancer cases requiring RT": "Green → Red",
+    "Cancer Incidence": "Green → Red",
+    "Radiotherapy Demand": "Green → Red",
     "Radiotherapy Access": "Green → Red",
-    "Nearest LINAC Distance": "Green → Red",
+    "Nearest Linac": "Green → Red",
 }
 
 
@@ -659,14 +658,14 @@ def _h3_caption(gdf) -> str:
 
 MAP_TYPES = [
     "Population Density",
-    "Annual New Cancer Cases",
-    "Cancer cases requiring RT",
+    "Cancer Incidence",
+    "Radiotherapy Demand",
     "Radiotherapy Access",
-    "Nearest LINAC Distance",
+    "Nearest Linac",
 ]
 
 with st.sidebar:
-    st.title("🏥 RT Access")
+    st.title("🏥 RadMap")
 
     _all_options = _selection_options()
     country = st.selectbox(
@@ -677,6 +676,8 @@ with st.sidebar:
     _is_region = is_region(country)
 
     map_type = st.selectbox("Map type", MAP_TYPES, index=MAP_TYPES.index("Radiotherapy Access"))
+    if map_type == "Cancer Incidence":
+        st.caption("Data: GLOBOCAN 2022 estimates")
 
     if _is_region:
         _reg_def = get_region(country)
@@ -703,10 +704,10 @@ with st.sidebar:
             key="h3_res_country",
         )
 
-    is_rt_demand_map = map_type == "Cancer cases requiring RT"
-    is_cancer = map_type in ("Annual New Cancer Cases", "Cancer cases requiring RT")
+    is_rt_demand_map = map_type == "Radiotherapy Demand"
+    is_cancer = map_type in ("Cancer Incidence", "Radiotherapy Demand")
     is_access = map_type == "Radiotherapy Access"
-    is_nearest = map_type == "Nearest LINAC Distance"
+    is_nearest = map_type == "Nearest Linac"
     needs_linac = is_access or is_nearest
 
     # ------ Cancer controls -----------------------------------------------
@@ -768,7 +769,7 @@ with st.sidebar:
     max_distance_km: float = 100.0
     weibull_k: float = 2.0
     access_model: str = "exponential"
-    access_display_metric: str = "Capacity-limited population untreated"
+    access_display_metric: str = "Modelled Inaccessible"
     capacity_per_machine_per_year: float = 450.0
 
     if is_access:
@@ -795,9 +796,9 @@ with st.sidebar:
         access_display_metric = st.selectbox(
             "Display metric",
             [
-                "Modelled Untreated",
-                "Modelled Treated",
-                "Modelled Access Probability",
+                "Modelled Inaccessible",
+                "Modelled Accessed",
+                "Modelled Access Ratio",
                 "Geographic Access Probability",
             ],
             index=0,
@@ -833,7 +834,7 @@ with st.sidebar:
     tower_radius_scale: float = 1.0
     linac_tower_style: str = "stacked"
     snap_linacs_to_hex: bool = False
-    _default_log = map_type in ("Population Density", "Annual New Cancer Cases")
+    _default_log = map_type in ("Population Density", "Cancer Incidence")
 
     st.divider()
     show_linac_markers = st.checkbox("Show LINAC locations", value=needs_linac)
@@ -878,10 +879,10 @@ with st.sidebar:
         cb_log = st.checkbox("Log scale", value=_default_log)
 
         _count_maps = {
-            "Population Density", "Annual New Cancer Cases", "Cancer cases requiring RT",
+            "Population Density", "Cancer Incidence", "Radiotherapy Demand",
         }
         _count_access_metrics = {
-            "Modelled Treated", "Modelled Untreated",
+            "Modelled Accessed", "Modelled Inaccessible",
         }
         _supports_per_km2 = (
             map_type in _count_maps
@@ -975,7 +976,7 @@ with tab_data:
     st.divider()
 
     # ---- Annual cancer incidence -------------------------------------------
-    st.subheader(f"Annual New Cancer Cases — {country}")
+    st.subheader(f"Cancer Incidence — {country}")
     if not has_globocan_data(iso3):
         st.warning(f"**{country}** (ISO3: {iso3}) is not present in the GLOBOCAN dataset.")
     else:
@@ -1000,10 +1001,10 @@ with tab_data:
 
         if _cancer_view == "All cancers":
             _headline_n = _all_cancers_n
-            _headline_label = "Annual New Cancer Cases: All Sites"
+            _headline_label = "Cancer Incidence: All Sites"
         elif _cancer_view == "All cancers excl. NMSC":
             _headline_n = _nmsc_n if _nmsc_n is not None else _all_cancers_n
-            _headline_label = "Annual New Cancer Cases: All Cancers excl. NMSC"
+            _headline_label = "Cancer Incidence: All Cancers excl. NMSC"
         else:
             _site_options = _site_df["Cancer type"].tolist()
             _selected_sites = st.multiselect(
@@ -1014,7 +1015,7 @@ with tab_data:
             )
             _headline_n = int(_site_df[_site_df["Cancer type"].isin(_selected_sites)]["New cases"].sum())
             _site_names = ", ".join(_selected_sites) if _selected_sites else "none selected"
-            _headline_label = f"Annual New Cancer Cases: {_site_names}"
+            _headline_label = f"Cancer Incidence: {_site_names}"
 
         col1, col2 = st.columns(2)
         col1.metric(_headline_label, f"{_headline_n:,}")
@@ -1321,7 +1322,7 @@ with tab_map:
                     c for c in get_cancer_types() + DERIVED_CANCER_TYPES
                     if c.strip().lower() not in _AGGREGATE_CANCER_KEYS
                 ]
-                if map_type == "Cancer cases requiring RT" and rt_method == "optimal" and _map_cancer_view != "Specific cancer site(s)":
+                if map_type == "Radiotherapy Demand" and rt_method == "optimal" and _map_cancer_view != "Specific cancer site(s)":
                     if _map_cancer_view == "All cancers":
                         _load_cancers = _all_individual
                     else:  # All cancers excl. NMSC
@@ -1332,7 +1333,7 @@ with tab_map:
                 with st.spinner("Apportioning cancer incidence to H3 grid…"):
                     gdf = _load_cancer(country, iso3, tuple(_load_cancers), use_actual, h3_resolution, region_flag=_is_region)
 
-                if map_type == "Cancer cases requiring RT":
+                if map_type == "Radiotherapy Demand":
                     suffix = "_optimal_rt" if rt_method == "optimal" else "_incidence"
                 else:
                     suffix = "_incidence"
@@ -1343,7 +1344,7 @@ with tab_map:
                 else:
                     combined = gdf[cols_of_interest].sum(axis=1).to_numpy(dtype=np.float64)
 
-                    if map_type == "Cancer cases requiring RT" and rt_method == "proportional":
+                    if map_type == "Radiotherapy Demand" and rt_method == "proportional":
                         combined = combined * rt_fraction
 
                     _areas_cancer = _hex_areas_km2(gdf)
@@ -1361,10 +1362,10 @@ with tab_map:
                     gdf = gdf.copy()
                     gdf["color"] = colors
 
-                    if map_type == "Cancer cases requiring RT":
-                        label = f"Cancer Cases Requiring RT{_per_suffix}"
+                    if map_type == "Radiotherapy Demand":
+                        label = f"Radiotherapy Demand{_per_suffix}"
                     else:
-                        label = f"Annual New Cancer Cases{_per_suffix}"
+                        label = f"Cancer Incidence{_per_suffix}"
 
                     s_combined = pd.Series(plot_vals_c, index=gdf.index).round(2).astype(str)
                     _s_area_c = pd.Series(_areas_cancer, index=gdf.index).apply(_fmt_sigfig)
@@ -1396,7 +1397,7 @@ with tab_map:
                         show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
                     )
                     st.caption(_h3_caption(gdf) + " · " + _scale_caption(gdf))
-                    if map_type == "Cancer cases requiring RT":
+                    if map_type == "Radiotherapy Demand":
                         if rt_method == "optimal":
                             _rt_method_text = (
                                 "Based on optimal RT utilisation rates (Delaney et al. 2005): "
@@ -1407,7 +1408,7 @@ with tab_map:
                                 f"Based on proportional scaling: {rt_fraction:.0%} of all cancer cases assumed to require RT."
                             )
                         st.caption(_rt_method_text)
-                    if map_type == "Annual New Cancer Cases":
+                    if map_type == "Cancer Incidence":
                         if _map_cancer_view == "All cancers":
                             _scope_text = "Showing: all cancer sites (GLOBOCAN — All cancers)"
                         elif _map_cancer_view == "All cancers excl. NMSC":
@@ -1417,14 +1418,14 @@ with tab_map:
                             _scope_text = f"Showing specific sites: {_site_str}"
                         st.caption(_scope_text)
                     if _map_cancer_view == "All cancers":
-                        _cases_label = "Annual New Cancer Cases: All Sites"
+                        _cases_label = "Cancer Incidence: All Sites"
                     elif _map_cancer_view == "All cancers excl. NMSC":
-                        _cases_label = "Annual New Cancer Cases: All Cancers excl. NMSC"
+                        _cases_label = "Cancer Incidence: All Cancers excl. NMSC"
                     else:
                         _site_str = ", ".join(selected_cancers) if selected_cancers else "none"
-                        _cases_label = f"Annual New Cancer Cases: {_site_str}"
+                        _cases_label = f"Cancer Incidence: {_site_str}"
 
-                    if map_type == "Cancer cases requiring RT":
+                    if map_type == "Radiotherapy Demand":
                         incidence_cols = [c + "_incidence" for c in _load_cancers if (c + "_incidence") in gdf.columns]
                         total_incidence = float(gdf[incidence_cols].sum(axis=1).sum()) if incidence_cols else 0.0
                         col1, col2, col3 = st.columns(3)
@@ -1438,7 +1439,7 @@ with tab_map:
                         col2.metric("Country population", f"{int(total_pop):,}")
                         col3.metric("H3 hexagons", f"{len(gdf):,}")
 
-        # ---- Radiotherapy Access / Nearest LINAC Distance ----------------------
+        # ---- Radiotherapy Access / Nearest Linac ----------------------
         elif is_access or is_nearest:
             linac_locs_tuple = tuple(locs)
 
@@ -1484,7 +1485,7 @@ with tab_map:
                 gdf_out["color"] = colors
                 gdf_out["tip"] = (
                     "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
-                    + "Nearest LINAC: " + pd.Series(dist_km, index=gdf_out.index).round(1).astype(str) + " km<br/>"
+                    + "Nearest Linac: " + pd.Series(dist_km, index=gdf_out.index).round(1).astype(str) + " km<br/>"
                     + "<hr style='margin:3px 0'/>"
                     + "People in hex: " + _s_pop_near + "<br/>"
                     + "Hex area: " + _s_area_near + " km²"
@@ -1531,33 +1532,33 @@ with tab_map:
                 )
                 s_pct = pd.Series(_pct_arr, index=gdf_out.index).round(1).astype(str)
 
-                if access_display_metric == "Modelled Untreated":
+                if access_display_metric == "Modelled Inaccessible":
                     display_vals = gdf_out["rt_untreated"].to_numpy(dtype=np.float64)
-                    cb_label_access = "RT patients untreated/yr"
+                    cb_label_access = "RT patients inaccessible/yr"
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
-                    _tip_prefix = "RT patients untreated/yr"
-                    _tip_extra = "RT patients treated/yr"
+                    _tip_prefix = "RT patients inaccessible/yr"
+                    _tip_extra = "RT patients accessing/yr"
                     _tip_extra_s = s_treated
                     metric_cmap_fn = _rdylgn_reversed_rgb
 
-                elif access_display_metric == "Modelled Treated":
+                elif access_display_metric == "Modelled Accessed":
                     display_vals = gdf_out["rt_treated"].to_numpy(dtype=np.float64)
-                    cb_label_access = "RT patients treated/yr"
+                    cb_label_access = "RT patients accessing/yr"
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
-                    _tip_prefix = "RT patients treated/yr"
-                    _tip_extra = "RT patients untreated/yr"
+                    _tip_prefix = "RT patients accessing/yr"
+                    _tip_extra = "RT patients inaccessible/yr"
                     _tip_extra_s = s_untreated
                     metric_cmap_fn = _rdylgn_rgb
 
-                elif access_display_metric == "Modelled Access Probability":
+                elif access_display_metric == "Modelled Access Ratio":
                     display_vals = cap_prob
-                    cb_label_access = "Modelled Access Probability"
+                    cb_label_access = "Modelled Access Ratio"
                     auto_vmin_a, auto_vmax_a = 0.0, 1.0
                     tip_series = (
                         "<b>" + s_h3 + "</b><br/>"
-                        + "Modelled access probability: " + s_cap + "%<br/>"
+                        + "Modelled access ratio: " + s_cap + "%<br/>"
                         + "Geographic access probability: " + s_prob + "%<br/>"
                         + "<hr style='margin:3px 0'/>"
                         + "People in hex: " + s_pop_fmt + "<br/>"
@@ -1628,7 +1629,7 @@ with tab_map:
                         "Capacity allocation cannot be computed; geographic access probability is still valid."
                     )
 
-                if access_display_metric in ("Modelled Access Probability", "Geographic Access Probability"):
+                if access_display_metric in ("Modelled Access Ratio", "Geographic Access Probability"):
                     st.subheader(access_display_metric)
 
                 _render_with_colorbar(
@@ -1638,9 +1639,9 @@ with tab_map:
                     show_linac_legend=show_linac_markers,
                 )
                 st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
-                if access_display_metric == "Modelled Access Probability":
+                if access_display_metric == "Modelled Access Ratio":
                     st.caption(
-                        "Modelled Access Probability gives the ratio of treated to untreated patients per hex."
+                        "Modelled Access Ratio gives the ratio of patients accessing RT to total RT demand per hex."
                     )
                 elif access_display_metric == "Geographic Access Probability":
                     st.caption(
@@ -1661,11 +1662,11 @@ with tab_map:
                 col1.metric("LINACs", int(stats["total_machines"]))
                 col2.metric("Total LINAC Capacity", _fmt_sigfig(stats['total_national_capacity']))
                 _globocan = stats.get("total_cancer_excl_nmsc")
-                col3.metric("Annual New Cancer Cases", _fmt_sigfig(_globocan) if _globocan is not None else "N/A")
-                col4.metric("Modelled RT Need", _fmt_sigfig(stats['total_rt_demand']))
-                col5.metric("Model: Patients Treated", _fmt_sigfig(stats['total_rt_treated']))
+                col3.metric("Cancer Incidence", _fmt_sigfig(_globocan) if _globocan is not None else "N/A")
+                col4.metric("RT Demand", _fmt_sigfig(stats['total_rt_demand']))
+                col5.metric("Model: Patients Accessing", _fmt_sigfig(stats['total_rt_treated']))
                 _pct_treated = (stats['total_rt_treated'] / stats['total_rt_demand'] * 100) if stats['total_rt_demand'] > 0 else 0.0
-                col6.metric("Model: % Patients Treated", f"{_pct_treated:.1f}%")
+                col6.metric("Model: % Patients Accessing", f"{_pct_treated:.1f}%")
                 # col7.metric("Mean Geographic Access", f"{stats['mean_access_probability']:.1%}")
                 _demand_info = (
                     f"demand: optimal RT utilisations"
@@ -1677,9 +1678,40 @@ with tab_map:
                     f"{_demand_info} | {stats['n_hexagons']:,} hexagons"
                 )
 
-                # ---- Minimum RT Needs to Meet Capacity ---------------------
+                # ---- Geography Only Calculations ---------------------------
                 st.divider()
-                st.subheader(f"Minimum RT Needs to Meet Capacity — {country}")
+                st.subheader(f"Geography Only Calculations — {country}")
+                st.caption(
+                    "These calculations consider only geographic access and do not account for machine capacity."
+                )
+                _geo_col1, _geo_col2 = st.columns(2)
+                _mean_geo_prob = stats.get("mean_access_probability", 0.0)
+                _geo_col1.metric("Average Geographic Access Probability", f"{_mean_geo_prob:.1%}")
+                _near_km = gdf_out["nearest_linac_km"].dropna()
+                _mean_dist = float(_near_km.mean()) if len(_near_km) > 0 else 0.0
+                _geo_col2.metric("Mean Distance to Nearest Linac", f"{_mean_dist:.1f} km")
+                if len(_near_km) > 0:
+                    _fig_hist = go.Figure()
+                    _fig_hist.add_trace(go.Histogram(
+                        x=_near_km.values,
+                        nbinsx=40,
+                        marker_color="#4C9BE8",
+                        name="Distance (km)",
+                    ))
+                    _fig_hist.update_layout(
+                        xaxis_title="Distance to nearest linac (km)",
+                        yaxis_title="Number of hexagons",
+                        height=220,
+                        margin=dict(l=40, r=20, t=20, b=40),
+                        showlegend=False,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_fig_hist, use_container_width=True)
+
+                # ---- Capacity Only Calculations ----------------------------
+                st.divider()
+                st.subheader(f"Capacity Only Calculations — {country}")
                 st.caption(
                     "NOTE: These calculations do not include access considerations based on "
                     "geographic access limitations, as modelled in the map above."
@@ -1835,7 +1867,7 @@ with tab_intro:
            etc.) are also available at lower resolutions.
 
         2. **Choose a map type** — start with *Population Density* to see the underlying
-           data, then *Annual New Cancer Cases* to see where cancer burden is concentrated,
+           data, then *Cancer Incidence* to see where cancer burden is concentrated,
            then *Radiotherapy Access* to see the combined model output.
 
         3. **Set the H3 resolution** — the map is built on an
@@ -1852,7 +1884,7 @@ with tab_intro:
            capacity per machine to see how results change.
 
         6. **Check the Data tab** for country-level cancer and LINAC statistics, and the
-           *Minimum RT Needs to Meet Capacity* panel beneath the access map for a
+           *Capacity Only Calculations* panel beneath the access map for a
            headline capacity gap estimate.
         """
     )
@@ -2052,7 +2084,7 @@ with tab_toy:
         ),
         (
             "AnnualNewCancerDensity.png",
-            "Step 2 — Annual New Cancer Cases",
+            "Step 2 — Cancer Incidence",
             "National cancer incidence figures (GLOBOCAN) are apportioned to each hexagon "
             "in proportion to its population. This gives an estimate of the number of new "
             "cancer cases arising in each cell each year.",
@@ -2077,11 +2109,11 @@ with tab_toy:
             "Machine capacity is distributed using a greedy nearest-first algorithm. Each "
             "linac fills its annual capacity by serving the nearest hexagons first, working "
             "outward until capacity is exhausted. The proportion of demand met in each "
-            "hexagon gives the Modelled Access Probability.",
+            "hexagon gives the Modelled Access Ratio.",
         ),
         (
             "Untreated.png",
-            "Step 6 — Modelled Untreated Patients",
+            "Step 6 — Modelled Inaccessible Patients",
             "The difference between RT demand and allocated capacity in each hexagon gives "
             "the estimated number of patients who cannot access treatment. This highlights "
             "which areas are most underserved, whether due to distance or capacity shortfall.",
@@ -2104,6 +2136,6 @@ with tab_toy:
 
 st.divider()
 st.caption(
-    "RT Access · Released under the [MIT License](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/blob/main/LICENSE) · "
+    "RadMap · Released under the [MIT License](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/blob/main/LICENSE) · "
     "[GitHub](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access)"
 )
