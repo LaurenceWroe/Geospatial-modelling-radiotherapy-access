@@ -1618,7 +1618,8 @@ with tab_map:
                 valid = np.isfinite(dist_vals)
                 auto_vmin = 0.0
                 auto_vmax = float(np.nanpercentile(dist_vals[valid], 95)) if valid.any() else 500.0
-                colors, vmin, vmax = _color_values(dist_vals, cb_cmap_fn, auto_vmin, auto_vmax)
+                dist_vals_plot = np.where(valid, dist_vals, auto_vmax)
+                colors, vmin, vmax = _color_values(dist_vals_plot, cb_cmap_fn, auto_vmin, auto_vmax)
 
                 _areas_near = _hex_areas_km2(gdf_out)
                 _s_area_near = pd.Series(_areas_near, index=gdf_out.index).apply(_fmt_sigfig)
