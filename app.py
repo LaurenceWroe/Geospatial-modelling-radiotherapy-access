@@ -42,6 +42,7 @@ from data.cancer import (
     XARRAY_PATH,
 )
 from analysis.accessibility import compute_accessibility
+from data.travel_time import compute_travel_time_matrix, CACHE_DIR as _TT_CACHE_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +337,75 @@ def _compute_access(
         demand=demand,
         snap_linacs_to_hex=snap_linacs_to_hex,
         h3_resolution=h3_res,
+    )
+    stats["total_cancer_excl_nmsc"] = total_cancer_excl_nmsc
+    return gdf_out, stats
+
+
+@st.cache_data(show_spinner=False)
+def _compute_access_travel_time(
+    country: str,
+    iso3: str,
+    linac_locs: tuple,
+    lambda_km: float,
+    model: str,
+    max_distance_km: float,
+    capacity_per_machine_per_year: float,
+    tt_mode: str,           # "driving" or "public_transport"
+    tt_cache_key: str,      # pre-computed cache key
+    rt_method: str = "optimal",
+    rt_fraction: float = 0.25,
+    h3_res: int = 8,
+    region_flag: bool = False,
+    snap_linacs_to_hex: bool = False,
+    weibull_k: float = 2.0,
+):
+    """Like _compute_access but loads a pre-computed travel time matrix from disk."""
+    gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
+
+    demand = None
+    total_cancer_excl_nmsc = None
+    try:
+        if rt_method == "optimal":
+            all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
+            cancer_gdf = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False)
+            excl_col = "All cancers excl. NMSC_incidence"
+            if excl_col in cancer_gdf.columns:
+                total_cancer_excl_nmsc = float(cancer_gdf[excl_col].clip(lower=0).sum())
+            rt_cols = [
+                c for c in cancer_gdf.columns
+                if c.endswith("_optimal_rt")
+                and c[:-len("_optimal_rt")].strip().lower() not in _AGGREGATE_CANCER_KEYS
+            ]
+            if rt_cols:
+                demand = cancer_gdf[rt_cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
+        else:
+            cancer_gdf = apportion_cancer_to_h3(
+                gdf, iso3, ["All cancers excl. NMSC"], use_actual_rt=False
+            )
+            col = "All cancers excl. NMSC_incidence"
+            if col in cancer_gdf.columns:
+                total_cancer_excl_nmsc = float(cancer_gdf[col].clip(lower=0).sum())
+                demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
+    except Exception:
+        pass
+
+    # Load travel time matrix from disk cache (must already exist)
+    cache_file = _TT_CACHE_DIR / f"{tt_cache_key}_{tt_mode}.npz"
+    tt_matrix = np.load(cache_file)["matrix"] if cache_file.exists() else None
+
+    gdf_out, stats = compute_accessibility(
+        gdf,
+        list(linac_locs),
+        lambda_km=lambda_km,
+        model=model,
+        max_distance_km=max_distance_km,
+        weibull_k=weibull_k,
+        capacity_per_machine_per_year=capacity_per_machine_per_year,
+        demand=demand,
+        snap_linacs_to_hex=snap_linacs_to_hex,
+        h3_resolution=h3_res,
+        travel_time_matrix=tt_matrix,
     )
     stats["total_cancer_excl_nmsc"] = total_cancer_excl_nmsc
     return gdf_out, stats
@@ -803,6 +873,25 @@ with st.sidebar:
             ],
             index=0,
         )
+        # --- Distance method ---
+        tt_method = st.radio(
+            "Distance method",
+            ["Straight-line distance", "Driving time", "Public transport time"],
+            index=0,
+            horizontal=True,
+        )
+        use_travel_time = tt_method != "Straight-line distance"
+        tt_mode = "driving" if tt_method == "Driving time" else "public_transport"
+
+        tt_app_id: str = ""
+        tt_api_key: str = ""
+        if use_travel_time:
+            st.markdown(
+                "**TravelTime API credentials** — [get a free key](https://traveltime.com/)"
+            )
+            tt_app_id = st.text_input("App ID", key="tt_app_id", type="default")
+            tt_api_key = st.text_input("API Key", key="tt_api_key", type="password")
+
         model_label = st.radio(
             "Access model",
             ["Exponential decay", "Weibull", "Step function", "Uniform (no decay)"],
@@ -816,14 +905,15 @@ with st.sidebar:
             "Uniform (no decay)": "uniform",
         }[model_label]
 
+        _unit = "min" if use_travel_time else "km"
         if access_model == "exponential":
-            lambda_km = float(st.slider("Distance decay λ (km)", 5, 200, 100, step=5))
+            lambda_km = float(st.slider(f"Distance decay λ ({_unit})", 5, 200, 30 if use_travel_time else 100, step=5))
         elif access_model == "weibull":
-            lambda_km = float(st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 200, 150, step=5))
+            lambda_km = float(st.slider(f"Scale λ ({_unit})  —  P(λ) = 37%", 5, 200, 60 if use_travel_time else 150, step=5))
             weibull_k = float(st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 4.0, step=0.5))
         elif access_model == "step":
             max_distance_km = float(
-                st.slider("Max treatment distance (km)", 10, 500, 100, step=10)
+                st.slider(f"Max treatment {'time' if use_travel_time else 'distance'} ({_unit})", 10, 500, 60 if use_travel_time else 100, step=10)
             )
 
     # ------ Plot settings (expander) ---------------------------------------
@@ -1443,22 +1533,61 @@ with tab_map:
         elif is_access or is_nearest:
             linac_locs_tuple = tuple(locs)
 
-            with st.spinner("Computing accessibility…"):
-                gdf_out, stats = _compute_access(
-                    country,
-                    iso3,
-                    linac_locs_tuple,
-                    float(lambda_km),
-                    access_model,
-                    float(max_distance_km),
-                    capacity_per_machine_per_year,
-                    access_rt_method,
-                    access_rt_fraction,
-                    h3_resolution,
-                    _is_region,
-                    snap_linacs_to_hex,
-                    weibull_k=float(weibull_k),
-                )
+            if use_travel_time:
+                if not tt_app_id or not tt_api_key:
+                    st.warning(
+                        "Enter your TravelTime App ID and API Key in the sidebar to use "
+                        "driving or public transport times."
+                    )
+                    st.stop()
+
+                # Build cache key from hex centroids + linac positions
+                import hashlib as _hl, json as _json
+                from data.population import load_population_at_resolution as _lpar
+                _gdf_tmp = _load_pop_region(country, h3_resolution) if _is_region else _load_pop(country, h3_resolution)
+                _hex_ll = [h3.cell_to_latlng(h) for h in _gdf_tmp["h3"]]
+                _linac_ll = [(lat, lon) for lat, lon, _ in locs]
+                _tt_payload = _json.dumps({"h": _hex_ll[:10], "l": _linac_ll, "n": len(_hex_ll)}, sort_keys=True)
+                _tt_cache_key = _hl.md5(_tt_payload.encode()).hexdigest()[:16]
+                _tt_cache_file = _TT_CACHE_DIR / f"{_tt_cache_key}_{tt_mode}.npz"
+
+                if not _tt_cache_file.exists():
+                    _tt_progress = st.progress(0, text="Fetching travel times from TravelTime API…")
+                    def _tt_cb(done, total):
+                        _tt_progress.progress(
+                            min(done / max(total, 1), 1.0),
+                            text=f"Travel time API: request {done}/{total}…",
+                        )
+                    try:
+                        compute_travel_time_matrix(
+                            _hex_ll, _linac_ll, tt_mode,
+                            tt_app_id, tt_api_key,
+                            cache_key=_tt_cache_key,
+                            progress_callback=_tt_cb,
+                        )
+                        _tt_progress.empty()
+                    except Exception as _e:
+                        st.error(f"TravelTime API error: {_e}")
+                        st.stop()
+
+                with st.spinner("Computing accessibility…"):
+                    gdf_out, stats = _compute_access_travel_time(
+                        country, iso3, linac_locs_tuple,
+                        float(lambda_km), access_model, float(max_distance_km),
+                        capacity_per_machine_per_year, tt_mode, _tt_cache_key,
+                        access_rt_method, access_rt_fraction,
+                        h3_resolution, _is_region, snap_linacs_to_hex,
+                        weibull_k=float(weibull_k),
+                    )
+            else:
+                with st.spinner("Computing accessibility…"):
+                    gdf_out, stats = _compute_access(
+                        country, iso3, linac_locs_tuple,
+                        float(lambda_km), access_model, float(max_distance_km),
+                        capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
+                        h3_resolution, _is_region, snap_linacs_to_hex,
+                        weibull_k=float(weibull_k),
+                    )
 
             pitch = 30.0 if show_linac_markers else 0.0
 
@@ -1472,11 +1601,22 @@ with tab_map:
             )
 
             if is_nearest:
-                dist_km = gdf_out["nearest_linac_km"].to_numpy(dtype=np.float64)
-                valid = np.isfinite(dist_km)
+                _has_tt = use_travel_time and "nearest_linac_min" in gdf_out.columns
+                if _has_tt:
+                    dist_vals = gdf_out["nearest_linac_min"].to_numpy(dtype=np.float64)
+                    _near_label = "Travel time (min)"
+                    _near_tip_label = "Nearest Linac"
+                    _near_tip_unit = "min"
+                else:
+                    dist_vals = gdf_out["nearest_linac_km"].to_numpy(dtype=np.float64)
+                    _near_label = "Distance (km)"
+                    _near_tip_label = "Nearest Linac"
+                    _near_tip_unit = "km"
+
+                valid = np.isfinite(dist_vals)
                 auto_vmin = 0.0
-                auto_vmax = float(np.nanpercentile(dist_km[valid], 95)) if valid.any() else 500.0
-                colors, vmin, vmax = _color_values(dist_km, cb_cmap_fn, auto_vmin, auto_vmax)
+                auto_vmax = float(np.nanpercentile(dist_vals[valid], 95)) if valid.any() else 500.0
+                colors, vmin, vmax = _color_values(dist_vals, cb_cmap_fn, auto_vmin, auto_vmax)
 
                 _areas_near = _hex_areas_km2(gdf_out)
                 _s_area_near = pd.Series(_areas_near, index=gdf_out.index).apply(_fmt_sigfig)
@@ -1485,7 +1625,9 @@ with tab_map:
                 gdf_out["color"] = colors
                 gdf_out["tip"] = (
                     "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
-                    + "Nearest Linac: " + pd.Series(dist_km, index=gdf_out.index).round(1).astype(str) + " km<br/>"
+                    + _near_tip_label + ": "
+                    + pd.Series(dist_vals, index=gdf_out.index).round(1).astype(str)
+                    + f" {_near_tip_unit}<br/>"
                     + "<hr style='margin:3px 0'/>"
                     + "People in hex: " + _s_pop_near + "<br/>"
                     + "Hex area: " + _s_area_near + " km²"
@@ -1499,7 +1641,7 @@ with tab_map:
 
                 _render_with_colorbar(
                     layers, _make_view(gdf_out, pitch=pitch),
-                    cb_cmap_fn, vmin, vmax, "Distance (km)",
+                    cb_cmap_fn, vmin, vmax, _near_label,
                     log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
                     show_linac_legend=show_linac_markers,
                 )
@@ -1703,25 +1845,34 @@ with tab_map:
                 st.caption(
                     "These calculations consider only geographic access and do not account for machine capacity."
                 )
-                _near_valid = gdf_out["nearest_linac_km"].notna()
-                _near_km = gdf_out.loc[_near_valid, "nearest_linac_km"]
+                _use_tt_geo = use_travel_time and "nearest_linac_min" in gdf_out.columns
+                if _use_tt_geo:
+                    _near_col = "nearest_linac_min"
+                    _dist_unit = "min"
+                    _dist_label = "Travel Time to Linac"
+                else:
+                    _near_col = "nearest_linac_km"
+                    _dist_unit = "km"
+                    _dist_label = "Distance to Linac"
+                _near_valid = gdf_out[_near_col].notna()
+                _near_vals = gdf_out.loc[_near_valid, _near_col]
                 _near_pop = gdf_out.loc[_near_valid, "population"].to_numpy(dtype=np.float64)
                 _mean_geo_prob = stats.get("mean_access_probability", 0.0)
                 _pop_total = _near_pop.sum()
-                _pop_wtd_dist = float((_near_km.to_numpy() * _near_pop).sum() / _pop_total) if _pop_total > 0 else 0.0
+                _pop_wtd_dist = float((_near_vals.to_numpy() * _near_pop).sum() / _pop_total) if _pop_total > 0 else 0.0
                 _geo_col1, _geo_col2 = st.columns(2)
                 _geo_col1.metric("Average Geographic Access Probability", f"{_mean_geo_prob:.1%}")
-                _geo_col2.metric("Pop-Weighted Mean Distance to Linac", f"{_pop_wtd_dist:.1f} km")
-                if len(_near_km) > 0:
+                _geo_col2.metric(f"Pop-Weighted Mean {_dist_label}", f"{_pop_wtd_dist:.1f} {_dist_unit}")
+                if len(_near_vals) > 0:
                     _fig_hist = go.Figure()
                     _fig_hist.add_trace(go.Histogram(
-                        x=_near_km.values,
+                        x=_near_vals.values,
                         nbinsx=40,
                         marker_color="#4C9BE8",
-                        name="Distance (km)",
+                        name=f"{_dist_label} ({_dist_unit})",
                     ))
                     _fig_hist.update_layout(
-                        xaxis_title="Distance to nearest linac (km)",
+                        xaxis_title=f"{_dist_label} ({_dist_unit})",
                         yaxis_title="Number of hexagons",
                         height=220,
                         margin=dict(l=40, r=20, t=20, b=40),
