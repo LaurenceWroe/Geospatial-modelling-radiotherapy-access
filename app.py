@@ -1674,13 +1674,13 @@ with tab_map:
                 col3b.metric("Modelled RT Access Ratio", f"{_pct_treated:.1f}%")
 
                 # Row 3: single-constraint and combined ratios for direct comparison
-                _cap_only = (stats['total_rt_demand'] / _globocan) if (_globocan and _globocan > 0) else None
                 _geo_access = stats.get("mean_access_probability", 0.0)
+                _cap_only = (stats['total_national_capacity'] / stats['total_rt_demand']) if stats['total_rt_demand'] > 0 else None
                 _modelled_ratio = (stats['total_rt_treated'] / stats['total_rt_demand']) if stats['total_rt_demand'] > 0 else 0.0
-                col1c, col2c, col3c = st.columns(3)
+                col1c, col2c, col3c, _ = st.columns([1, 1, 1, 1])
                 col1c.metric("Capacity-Only Limited Access",
                              f"{_cap_only:.1%}" if _cap_only is not None else "N/A",
-                             help="RT Demand ÷ Cancer Incidence — fraction of cancer patients needing RT, assuming geography is no barrier")
+                             help="Total LINAC Capacity ÷ RT Demand — fraction of demand serviceable by machines alone, assuming no geographic barrier")
                 col2c.metric("Geographic-Only Limited Access",
                              f"{_geo_access:.1%}",
                              help="Population-weighted mean geographic access probability, assuming unlimited machine capacity")
