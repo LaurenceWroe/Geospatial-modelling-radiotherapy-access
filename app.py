@@ -1555,9 +1555,9 @@ with tab_map:
                 import hashlib as _hl, json as _json
                 from data.population import load_population_at_resolution as _lpar
                 _gdf_tmp = _load_pop_region(country, h3_resolution) if _is_region else _load_pop(country, h3_resolution)
-                _hex_ll = [h3.cell_to_latlng(h) for h in _gdf_tmp["h3"]]
+                _hex_ids = list(_gdf_tmp["h3"])
                 _linac_ll = [(lat, lon) for lat, lon, _ in locs]
-                _tt_payload = _json.dumps({"h": _hex_ll[:10], "l": _linac_ll, "n": len(_hex_ll)}, sort_keys=True)
+                _tt_payload = _json.dumps({"h": _hex_ids[:10], "l": _linac_ll, "n": len(_hex_ids)}, sort_keys=True)
                 _tt_cache_key = _hl.md5(_tt_payload.encode()).hexdigest()[:16]
                 _tt_cache_file = _TT_CACHE_DIR / f"{_tt_cache_key}_{tt_mode}.npz"
 
@@ -1570,7 +1570,7 @@ with tab_map:
                         )
                     try:
                         _, _tt_errors = compute_travel_time_matrix(
-                            _hex_ll, _linac_ll, tt_mode,
+                            _hex_ids, _linac_ll, h3_resolution, tt_mode,
                             tt_app_id, tt_api_key,
                             cache_key=_tt_cache_key,
                             progress_callback=_tt_cb,

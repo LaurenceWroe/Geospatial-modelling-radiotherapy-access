@@ -1,10 +1,15 @@
 """
-TravelTime API integration for computing travel times to LINAC facilities.
+TravelTime H3 API integration for computing travel times to LINAC facilities.
 
-Supports driving and public_transport modes via the TravelTime REST API.
+Uses the /v4/h3 endpoint which returns H3 cell travel times natively — one
+request per LINAC (up to 10 LINACs per request via arrival_searches), no
+hex-centroid batching needed, and supports `remove_water_bodies` to avoid
+routing failures for cells whose centroid falls in water.
+
+Modes: "driving" and "public_transport" via the TravelTime REST API.
 Results are cached to disk as .npz files keyed by location hash + mode.
 
-API docs: https://docs.traveltime.com/api/reference/time-filter
+API docs: https://docs.traveltime.com/api/reference/h3
 """
 
 from __future__ import annotations
@@ -22,10 +27,20 @@ _ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = _ROOT / "travel_time_cache"
 TT_BASE_URL = "https://api.traveltimeapp.com/v4"
 
-# TravelTime API limits
-_MAX_SEARCHES_PER_REQUEST = 10   # arrival searches per request
-_MAX_LOCATIONS_PER_REQUEST = 2000  # total locations (hexes + linacs) per request
-_MAX_TRAVEL_TIME_SEC = 14400     # 4 hours — TravelTime upper limit
+# TravelTime H3 API limits
+_MAX_SEARCHES_PER_REQUEST = 10   # arrival_searches per request
+
+# Maximum travel time (seconds) by H3 resolution, per TravelTime docs
+_MAX_TRAVEL_TIME_BY_RES: dict[int, int] = {
+    6: 36000,   # 10 hours
+    7: 36000,   # 10 hours
+    8: 28800,   # 8 hours
+    9: 14400,   # 4 hours
+    10: 5400,   # 90 minutes
+    11: 2700,   # 45 minutes
+    12: 1800,   # 30 minutes
+}
+_DEFAULT_MAX_TRAVEL_TIME_SEC = 14400  # 4 hours fallback
 
 
 def _cache_path(cache_key: str, mode: str) -> Path:
@@ -33,19 +48,19 @@ def _cache_path(cache_key: str, mode: str) -> Path:
 
 
 def _make_cache_key(
-    hex_latlons: List[Tuple[float, float]],
+    hex_ids: List[str],
     linac_latlons: List[Tuple[float, float]],
 ) -> str:
-    """Short cache key from hex + linac locations."""
+    """Short cache key from hex IDs + linac locations."""
     payload = json.dumps(
-        {"h": hex_latlons[:10], "l": linac_latlons, "n": len(hex_latlons)},
+        {"h": hex_ids[:10], "l": linac_latlons, "n": len(hex_ids)},
         sort_keys=True,
     )
     return hashlib.md5(payload.encode()).hexdigest()[:16]
 
 
 def _next_wednesday_8am_utc() -> str:
-    """ISO8601 string for the next Wednesday at 08:00 UTC (typical weekday morning)."""
+    """ISO8601 string for the next Wednesday at 08:00 UTC."""
     now = datetime.now(timezone.utc)
     days_ahead = (2 - now.weekday()) % 7 or 7  # 2 = Wednesday
     target = (now + timedelta(days=days_ahead)).replace(
@@ -62,53 +77,49 @@ def _transportation(mode: str) -> dict:
     raise ValueError(f"Unsupported mode: {mode!r}")
 
 
-def _call_time_filter(
-    hex_latlons: List[Tuple[float, float]],
-    hex_ids: List[str],
+def _call_h3(
     linac_latlons: List[Tuple[float, float]],
     linac_ids: List[str],
+    h3_resolution: int,
     mode: str,
     app_id: str,
     api_key: str,
     arrival_time: str,
+    max_travel_time_sec: int,
 ) -> dict[str, dict[str, float]]:
     """
-    Single TravelTime API request.
+    Single POST to /v4/h3.
 
     Returns
     -------
-    {linac_id: {hex_id: travel_time_minutes}} for reachable pairs only.
+    {linac_id: {h3_cell_id: travel_time_minutes}} for reachable cells only.
     """
-    locations = (
-        [{"id": h_id, "coords": {"lat": lat, "lng": lon}}
-         for h_id, (lat, lon) in zip(hex_ids, hex_latlons)]
-        + [{"id": l_id, "coords": {"lat": lat, "lng": lon}}
-           for l_id, (lat, lon) in zip(linac_ids, linac_latlons)]
-    )
-
     arrival_searches = [
         {
             "id": l_id,
-            "departure_location_ids": hex_ids,
-            "arrival_location_id": l_id,
+            "coords": {"lat": lat, "lng": lon},
             "arrival_time": arrival_time,
-            "travel_time": _MAX_TRAVEL_TIME_SEC,
+            "travel_time": max_travel_time_sec,
             "transportation": _transportation(mode),
-            "properties": ["travel_time"],
+            "remove_water_bodies": True,
         }
-        for l_id in linac_ids
+        for l_id, (lat, lon) in zip(linac_ids, linac_latlons)
     ]
 
     resp = requests.post(
-        f"{TT_BASE_URL}/time-filter",
+        f"{TT_BASE_URL}/h3",
         headers={
             "X-Application-Id": app_id,
             "X-Api-Key": api_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
-        json={"locations": locations, "arrival_searches": arrival_searches},
-        timeout=60,
+        json={
+            "resolution": h3_resolution,
+            "properties": ["mean"],
+            "arrival_searches": arrival_searches,
+        },
+        timeout=120,
     )
     resp.raise_for_status()
 
@@ -116,17 +127,18 @@ def _call_time_filter(
     for r in resp.json().get("results", []):
         sid = r["search_id"]
         out[sid] = {}
-        for loc in r.get("locations", []):
-            props = loc.get("properties", [{}])
-            tt = props[0].get("travel_time") if props else None
-            if tt is not None:
-                out[sid][loc["id"]] = tt / 60.0  # seconds → minutes
+        for cell in r.get("cells", []):
+            cell_id = cell.get("cell_index") or cell.get("cell_id") or cell.get("id")
+            mean_sec = cell.get("mean")
+            if cell_id is not None and mean_sec is not None:
+                out[sid][cell_id] = mean_sec / 60.0  # seconds → minutes
     return out
 
 
 def compute_travel_time_matrix(
-    hex_latlons: List[Tuple[float, float]],
+    hex_ids: List[str],
     linac_latlons: List[Tuple[float, float]],
+    h3_resolution: int,
     mode: str,
     app_id: str,
     api_key: str,
@@ -134,12 +146,17 @@ def compute_travel_time_matrix(
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """
-    Compute travel time (minutes) from every hex centroid to every LINAC.
+    Compute travel time (minutes) from every H3 cell to every LINAC.
+
+    Uses the TravelTime /v4/h3 endpoint: one request per batch of up to 10
+    LINACs. The API returns all reachable H3 cells natively, with water body
+    filtering enabled to avoid routing failures near coastlines.
 
     Parameters
     ----------
-    hex_latlons : list of (lat, lon) for each H3 hex centroid
+    hex_ids : list of H3 cell ID strings (the ``h3`` column of your GeoDataFrame)
     linac_latlons : list of (lat, lon) for each LINAC facility
+    h3_resolution : H3 resolution of the hex grid (determines travel time cap)
     mode : "driving" or "public_transport"
     app_id, api_key : TravelTime credentials
     cache_key : optional override for the cache file name
@@ -148,72 +165,62 @@ def compute_travel_time_matrix(
     Returns
     -------
     matrix : np.ndarray, shape (n_hexes, n_linacs), float32, minutes.
-        np.inf where unreachable within the 4-hour limit.
+        np.inf where unreachable within the resolution travel time cap.
     errors : list of str
-        One entry per failed API batch, with hex/linac range and error message.
-        Empty if all batches succeeded.
+        One entry per failed API batch. Empty if all batches succeeded.
     """
-    n_hexes = len(hex_latlons)
+    n_hexes = len(hex_ids)
     n_linacs = len(linac_latlons)
 
     if not cache_key:
-        cache_key = _make_cache_key(hex_latlons, linac_latlons)
+        cache_key = _make_cache_key(hex_ids, linac_latlons)
 
     cache_file = _cache_path(cache_key, mode)
     if cache_file.exists():
         return np.load(cache_file)["matrix"], []
 
+    max_travel_time_sec = _MAX_TRAVEL_TIME_BY_RES.get(
+        h3_resolution, _DEFAULT_MAX_TRAVEL_TIME_SEC
+    )
     arrival_time = _next_wednesday_8am_utc()
     matrix = np.full((n_hexes, n_linacs), np.inf, dtype=np.float32)
-    failed_batches: List[tuple] = []
+    failed_batches: List[str] = []
 
-    hex_ids = [f"h{i}" for i in range(n_hexes)]
+    # Build lookup: H3 cell ID → row index in matrix
+    cell_to_idx: dict[str, int] = {cell_id: i for i, cell_id in enumerate(hex_ids)}
+
     linac_ids = [f"l{j}" for j in range(n_linacs)]
-
-    # Batch linacs (max 10 per request) and hexes (fill remaining location slots)
-    total_requests = sum(
-        len(range(0, n_hexes, _MAX_LOCATIONS_PER_REQUEST - min(linac_batch, n_linacs - l_start)))
-        for l_start in range(0, n_linacs, _MAX_SEARCHES_PER_REQUEST)
-        for linac_batch in [min(_MAX_SEARCHES_PER_REQUEST, n_linacs - l_start)]
-    )
+    total_requests = (n_linacs + _MAX_SEARCHES_PER_REQUEST - 1) // _MAX_SEARCHES_PER_REQUEST
     done = 0
 
     for l_start in range(0, n_linacs, _MAX_SEARCHES_PER_REQUEST):
         l_end = min(l_start + _MAX_SEARCHES_PER_REQUEST, n_linacs)
         l_batch_ids = linac_ids[l_start:l_end]
         l_batch_latlons = linac_latlons[l_start:l_end]
-        hex_batch_size = _MAX_LOCATIONS_PER_REQUEST - len(l_batch_ids)
 
-        for h_start in range(0, n_hexes, hex_batch_size):
-            h_end = min(h_start + hex_batch_size, n_hexes)
-            h_batch_ids = hex_ids[h_start:h_end]
-            h_batch_latlons = hex_latlons[h_start:h_end]
-
-            try:
-                results = _call_time_filter(
-                    h_batch_latlons, h_batch_ids,
-                    l_batch_latlons, l_batch_ids,
-                    mode, app_id, api_key, arrival_time,
-                )
-                for l_local_id, hex_times in results.items():
-                    j = int(l_local_id[1:])
-                    for h_local_id, tt_min in hex_times.items():
-                        i = int(h_local_id[1:])
+        try:
+            results = _call_h3(
+                l_batch_latlons, l_batch_ids,
+                h3_resolution, mode,
+                app_id, api_key,
+                arrival_time, max_travel_time_sec,
+            )
+            for l_local_id, cell_times in results.items():
+                j = int(l_local_id[1:])
+                for cell_id, tt_min in cell_times.items():
+                    i = cell_to_idx.get(cell_id)
+                    if i is not None:
                         matrix[i, j] = min(matrix[i, j], tt_min)
-            except Exception as e:
-                failed_batches.append((h_start, h_end, l_start, l_end, str(e)))
+        except Exception as e:
+            failed_batches.append(f"linacs {l_start}–{l_end - 1}: {e}")
 
-            done += 1
-            if progress_callback:
-                progress_callback(done, total_requests)
+        done += 1
+        if progress_callback:
+            progress_callback(done, total_requests)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(cache_file, matrix=matrix)
-    errors = [
-        f"hexes {h0}–{h1}, linacs {l0}–{l1}: {msg}"
-        for h0, h1, l0, l1, msg in failed_batches
-    ]
-    return matrix, errors
+    return matrix, failed_batches
 
 
 def clear_cache(cache_key: str, mode: str) -> None:
