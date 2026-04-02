@@ -132,7 +132,7 @@ def compute_travel_time_matrix(
     api_key: str,
     cache_key: str = "",
     progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, List[str]]:
     """
     Compute travel time (minutes) from every hex centroid to every LINAC.
 
@@ -147,8 +147,11 @@ def compute_travel_time_matrix(
 
     Returns
     -------
-    np.ndarray, shape (n_hexes, n_linacs), float32, minutes.
-    np.inf where unreachable within the 4-hour limit.
+    matrix : np.ndarray, shape (n_hexes, n_linacs), float32, minutes.
+        np.inf where unreachable within the 4-hour limit.
+    errors : list of str
+        One entry per failed API batch, with hex/linac range and error message.
+        Empty if all batches succeeded.
     """
     n_hexes = len(hex_latlons)
     n_linacs = len(linac_latlons)
@@ -158,10 +161,11 @@ def compute_travel_time_matrix(
 
     cache_file = _cache_path(cache_key, mode)
     if cache_file.exists():
-        return np.load(cache_file)["matrix"]
+        return np.load(cache_file)["matrix"], []
 
     arrival_time = _next_wednesday_8am_utc()
     matrix = np.full((n_hexes, n_linacs), np.inf, dtype=np.float32)
+    failed_batches: List[tuple] = []
 
     hex_ids = [f"h{i}" for i in range(n_hexes)]
     linac_ids = [f"l{j}" for j in range(n_linacs)]
@@ -196,8 +200,8 @@ def compute_travel_time_matrix(
                     for h_local_id, tt_min in hex_times.items():
                         i = int(h_local_id[1:])
                         matrix[i, j] = min(matrix[i, j], tt_min)
-            except Exception:
-                pass  # leave as inf for failed batches
+            except Exception as e:
+                failed_batches.append((h_start, h_end, l_start, l_end, str(e)))
 
             done += 1
             if progress_callback:
@@ -205,7 +209,11 @@ def compute_travel_time_matrix(
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(cache_file, matrix=matrix)
-    return matrix
+    errors = [
+        f"hexes {h0}–{h1}, linacs {l0}–{l1}: {msg}"
+        for h0, h1, l0, l1, msg in failed_batches
+    ]
+    return matrix, errors
 
 
 def clear_cache(cache_key: str, mode: str) -> None:

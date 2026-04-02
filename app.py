@@ -162,6 +162,9 @@ COLORMAPS = {
     "Green → Red": _rdylgn_reversed_rgb,
 }
 
+# Binary colourmap is handled separately (needs threshold) — sentinel value in dict
+BINARY_CMAP_NAME = "Binary (Green / Red threshold)"
+
 _DEFAULT_CMAP = {
     "Population Density": "Green → Red",
     "Cancer Incidence": "Green → Red",
@@ -838,7 +841,7 @@ with st.sidebar:
     lambda_km: float = 30.0
     max_distance_km: float = 100.0
     weibull_k: float = 2.0
-    access_model: str = "exponential"
+    access_model: str = "weibull"
     access_display_metric: str = "Modelled Inaccessible"
     capacity_per_machine_per_year: float = 450.0
     use_travel_time: bool = False
@@ -896,23 +899,20 @@ with st.sidebar:
         )
         model_label = st.radio(
             "Access model",
-            ["Exponential decay", "Weibull", "Step function", "Uniform (no decay)"],
-            index=2,
+            ["Weibull", "Step function", "Uniform (no decay)"],
+            index=0,
             horizontal=True,
         )
         access_model = {
-            "Exponential decay": "exponential",
             "Weibull": "weibull",
             "Step function": "step",
             "Uniform (no decay)": "uniform",
         }[model_label]
 
         _unit = "min" if use_travel_time else "km"
-        if access_model == "exponential":
-            lambda_km = float(st.slider(f"Distance decay λ ({_unit})", 5, 200, 30 if use_travel_time else 100, step=5))
-        elif access_model == "weibull":
+        if access_model == "weibull":
             lambda_km = float(st.slider(f"Scale λ ({_unit})  —  P(λ) = 37%", 5, 200, 60 if use_travel_time else 150, step=5))
-            weibull_k = float(st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 4.0, step=0.5))
+            weibull_k = float(st.slider("Shape k  —  higher = steeper (k=1 = exponential)", 1.0, 6.0, 4.0, step=0.5))
         elif access_model == "step":
             max_distance_km = float(
                 st.slider(f"Max treatment {'time' if use_travel_time else 'distance'} ({_unit})", 10, 500, 60 if use_travel_time else 100, step=10)
@@ -962,13 +962,21 @@ with st.sidebar:
             st.divider()
 
         _default_cmap_name = _DEFAULT_CMAP.get(map_type, "Purple → Yellow (Viridis)")
+        _cmap_options = list(COLORMAPS.keys()) + ([BINARY_CMAP_NAME] if map_type == "Nearest Linac" else [])
         cb_cmap_name = st.selectbox(
             "Colour scheme",
-            options=list(COLORMAPS.keys()),
-            index=list(COLORMAPS.keys()).index(_default_cmap_name),
+            options=_cmap_options,
+            index=_cmap_options.index(_default_cmap_name),
         )
-        cb_cmap_fn = COLORMAPS[cb_cmap_name]
+        _binary_cmap = (cb_cmap_name == BINARY_CMAP_NAME)
+        cb_cmap_fn = COLORMAPS.get(cb_cmap_name, _viridis_rgb)
         cb_log = st.checkbox("Log scale", value=_default_log)
+        _binary_threshold = 60.0  # default; overridden below if binary selected
+        if _binary_cmap:
+            _binary_threshold = st.number_input(
+                "Threshold (green if below)", min_value=0.0, value=60.0, step=5.0,
+                help="Hexagons below this value are coloured green, above are red. Units match the distance/time measure in use.",
+            )
 
         _count_maps = {
             "Population Density", "Cancer Incidence", "Radiotherapy Demand",
@@ -1561,13 +1569,20 @@ with tab_map:
                             text=f"Travel time API: request {done}/{total}…",
                         )
                     try:
-                        compute_travel_time_matrix(
+                        _, _tt_errors = compute_travel_time_matrix(
                             _hex_ll, _linac_ll, tt_mode,
                             tt_app_id, tt_api_key,
                             cache_key=_tt_cache_key,
                             progress_callback=_tt_cb,
                         )
                         _tt_progress.empty()
+                        if _tt_errors:
+                            st.warning(
+                                f"{len(_tt_errors)} API batch(es) failed — affected hexes shown as >240 min. "
+                                "Delete the cache and retry to attempt re-fetching.\n\n"
+                                + "\n".join(f"• {e}" for e in _tt_errors[:5])
+                                + ("" if len(_tt_errors) <= 5 else f"\n… and {len(_tt_errors) - 5} more")
+                            )
                     except Exception as _e:
                         st.error(f"TravelTime API error: {_e}")
                         st.stop()
@@ -1616,10 +1631,35 @@ with tab_map:
                     _near_tip_unit = "km"
 
                 valid = np.isfinite(dist_vals)
+                # Cap unreachable (inf) at 240 min for all stats/histograms
+                _TT_MAX = 240.0
+                _has_capped = _has_tt and not valid.all()
+                _dist_for_stats = np.where(np.isfinite(dist_vals), dist_vals, _TT_MAX) if _has_tt else dist_vals
                 auto_vmin = 0.0
-                auto_vmax = float(np.nanpercentile(dist_vals[valid], 95)) if valid.any() else 500.0
-                dist_vals_plot = np.where(valid, dist_vals, auto_vmax)
-                colors, vmin, vmax = _color_values(dist_vals_plot, cb_cmap_fn, auto_vmin, auto_vmax)
+                auto_vmax = float(np.percentile(_dist_for_stats, 95)) if len(_dist_for_stats) > 0 else 500.0
+
+                # Tooltip: show "> 240 min" for unreachable hexes when using travel time
+                _tip_dist_str = pd.Series(dist_vals, index=gdf_out.index)
+                if _has_tt:
+                    _tip_dist_str = _tip_dist_str.apply(
+                        lambda v: f"> {int(_TT_MAX)} {_near_tip_unit}" if not np.isfinite(v) else f"{v:.1f} {_near_tip_unit}"
+                    )
+                else:
+                    _tip_dist_str = _tip_dist_str.round(1).astype(str) + f" {_near_tip_unit}"
+
+                # Colour assignment
+                if _binary_cmap:
+                    _green = [34, 197, 94, 180]   # tailwind green-500
+                    _red = [239, 68, 68, 180]      # tailwind red-500
+                    # unreachable hexes are also red (they are by definition > threshold)
+                    colors = [
+                        (_green if (np.isfinite(v) and v <= _binary_threshold) else _red)
+                        for v in dist_vals
+                    ]
+                    vmin, vmax = 0.0, _binary_threshold
+                else:
+                    dist_vals_plot = np.where(valid, dist_vals, auto_vmax)
+                    colors, vmin, vmax = _color_values(dist_vals_plot, cb_cmap_fn, auto_vmin, auto_vmax)
 
                 _areas_near = _hex_areas_km2(gdf_out)
                 _s_area_near = pd.Series(_areas_near, index=gdf_out.index).apply(_fmt_sigfig)
@@ -1629,8 +1669,7 @@ with tab_map:
                 gdf_out["tip"] = (
                     "<b>" + gdf_out["h3"].astype(str) + "</b><br/>"
                     + _near_tip_label + ": "
-                    + pd.Series(dist_vals, index=gdf_out.index).round(1).astype(str)
-                    + f" {_near_tip_unit}<br/>"
+                    + _tip_dist_str
                     + "<hr style='margin:3px 0'/>"
                     + "People in hex: " + _s_pop_near + "<br/>"
                     + "Hex area: " + _s_area_near + " km²"
@@ -1642,17 +1681,95 @@ with tab_map:
                 if show_linac_markers:
                     layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style))
 
-                _render_with_colorbar(
-                    layers, _make_view(gdf_out, pitch=pitch),
-                    cb_cmap_fn, vmin, vmax, _near_label,
-                    log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
-                    show_linac_legend=show_linac_markers,
-                )
+                if _binary_cmap:
+                    # Simple legend instead of colorbar
+                    _map_col, _leg_col = st.columns([10, 1])
+                    with _map_col:
+                        st.pydeck_chart(pdk.Deck(
+                            layers=layers,
+                            initial_view_state=_make_view(gdf_out, pitch=pitch),
+                            map_style="mapbox://styles/mapbox/dark-v9" if dark_mode else None,
+                        ), use_container_width=True)
+                    with _leg_col:
+                        st.markdown(
+                            f"<div style='margin-top:40px;font-size:0.75rem'>"
+                            f"<div style='background:#22c55e;width:16px;height:16px;display:inline-block;border-radius:3px'></div> ≤ {_binary_threshold:.0f} {_near_tip_unit}<br/>"
+                            f"<div style='background:#ef4444;width:16px;height:16px;display:inline-block;border-radius:3px;margin-top:6px'></div> > {_binary_threshold:.0f} {_near_tip_unit}"
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    _render_with_colorbar(
+                        layers, _make_view(gdf_out, pitch=pitch),
+                        cb_cmap_fn, vmin, vmax, _near_label,
+                        log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                        show_linac_legend=show_linac_markers,
+                    )
                 st.caption(_h3_caption(gdf_out) + " · " + _scale_caption(gdf_out))
-                col1, col2, col3 = st.columns(3)
+                _near_pop_all = gdf_out["population"].to_numpy(dtype=np.float64)
+                _pop_total_nn = _near_pop_all.sum()
+                _mean_geo_prob_nn = stats.get("mean_access_probability", 0.0)
+                _median_val = float(np.median(_dist_for_stats))
+                _gt = "> " if _has_capped and _median_val >= _TT_MAX - 0.1 else ""
+                # Population-weighted median via cumulative population sort
+                _sort_idx = np.argsort(_dist_for_stats)
+                _cum_pop = np.cumsum(_near_pop_all[_sort_idx])
+                _pw_median_idx = np.searchsorted(_cum_pop, _pop_total_nn * 0.5)
+                _pw_median_val = float(_dist_for_stats[_sort_idx[min(_pw_median_idx, len(_sort_idx) - 1)]])
+                _gt_pw = "> " if _has_capped and _pw_median_val >= _TT_MAX - 0.1 else ""
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Total LINACs", int(stats["total_machines"]))
-                col2.metric("Median distance", f"{float(np.nanmedian(dist_km)):.1f} km")
-                col3.metric("95th-pct distance", f"{auto_vmax:.1f} km")
+                col2.metric(f"Median {_near_tip_label}", f"{_gt}{_median_val:.1f} {_near_tip_unit}")
+                col3.metric(f"Pop-Weighted Median {_near_tip_label}", f"{_gt_pw}{_pw_median_val:.1f} {_near_tip_unit}")
+                col4.metric("Average Geographic Access Probability", f"{_mean_geo_prob_nn:.1%}")
+                if _has_tt:
+                    st.caption(f"Travel time via TravelTime API · max {int(_TT_MAX)} min limit · {int((~valid).sum()):,} unreachable hexes shown at {int(_TT_MAX)} min")
+
+                # ---- Geography Only Calculations (Nearest Linac) -----------
+                st.divider()
+                _pop_wtd_dist_nn = float((_dist_for_stats * _near_pop_all).sum() / _pop_total_nn) if _pop_total_nn > 0 else 0.0
+                if len(_dist_for_stats) > 0:
+                    _fig_nn1, _fig_nn2 = st.columns(2)
+                    with _fig_nn1:
+                        _fig_h1 = go.Figure()
+                        _fig_h1.add_trace(go.Histogram(
+                            x=_dist_for_stats,
+                            nbinsx=40,
+                            marker_color="#4C9BE8",
+                        ))
+                        _fig_h1.update_layout(
+                            xaxis_title=f"{_near_tip_label} ({_near_tip_unit})"
+                                + (f" — bar at {int(_TT_MAX)} includes all travel time > {int(_TT_MAX)}" if _has_capped else ""),
+                            yaxis_title="Number of hexagons",
+                            height=240,
+                            margin=dict(l=40, r=20, t=30, b=40),
+                            title_text="Hexagon count by distance",
+                            showlegend=False,
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_fig_h1, use_container_width=True)
+                    with _fig_nn2:
+                        _fig_h2 = go.Figure()
+                        _fig_h2.add_trace(go.Histogram(
+                            x=_dist_for_stats,
+                            y=_near_pop_all,
+                            histfunc="sum",
+                            nbinsx=40,
+                            marker_color="#F97316",
+                        ))
+                        _fig_h2.update_layout(
+                            xaxis_title=f"{_near_tip_label} ({_near_tip_unit})"
+                                + (f" — bar at {int(_TT_MAX)} includes all travel time > {int(_TT_MAX)}" if _has_capped else ""),
+                            yaxis_title="Population",
+                            height=240,
+                            margin=dict(l=40, r=20, t=30, b=40),
+                            title_text="Population by distance",
+                            showlegend=False,
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_fig_h2, use_container_width=True)
 
             else:  # Radiotherapy Access
                 prob = gdf_out["access_probability"].to_numpy(dtype=np.float64)
@@ -1794,9 +1911,7 @@ with tab_map:
                         "have treatment, given there are no linac capacity constraints."
                     )
 
-                if access_model == "exponential":
-                    model_info = f"Exponential | λ = {lambda_km} km | cut-off = {stats['cutoff_km']:.0f} km"
-                elif access_model == "weibull":
+                if access_model == "weibull":
                     model_info = f"Weibull | λ = {lambda_km} km | k = {weibull_k} | cut-off = {stats['cutoff_km']:.0f} km"
                 elif access_model == "step":
                     model_info = f"Step function | max distance = {max_distance_km:.0f} km"
@@ -1823,15 +1938,15 @@ with tab_map:
                 _cap_only = (stats['total_national_capacity'] / stats['total_rt_demand']) if stats['total_rt_demand'] > 0 else None
                 _modelled_ratio = (stats['total_rt_treated'] / stats['total_rt_demand']) if stats['total_rt_demand'] > 0 else 0.0
                 col1c, col2c, col3c, _ = st.columns([1, 1, 1, 1])
-                col1c.metric("Capacity-Only Limited Access",
-                             f"{_cap_only:.1%}" if _cap_only is not None else "N/A",
-                             help="Total LINAC Capacity ÷ RT Demand — fraction of demand serviceable by machines alone, assuming no geographic barrier")
-                col2c.metric("Geographic-Only Limited Access",
-                             f"{_geo_access:.1%}",
-                             help="Population-weighted mean geographic access probability, assuming unlimited machine capacity")
-                col3c.metric("Modelled RT Access Ratio",
+                col1c.metric("Modelled RT Access Ratio",
                              f"{_modelled_ratio:.1%}",
                              help="Modelled RT Access ÷ RT Demand — fraction of demand met accounting for both capacity and geography")
+                col2c.metric("Capacity-Only Limited Access",
+                             f"{_cap_only:.1%}" if _cap_only is not None else "N/A",
+                             help="Total LINAC Capacity ÷ RT Demand — fraction of demand serviceable by machines alone, assuming no geographic barrier")
+                col3c.metric("Geographic-Only Limited Access",
+                             f"{_geo_access:.1%}",
+                             help="Population-weighted mean geographic access probability, assuming unlimited machine capacity")
                 _demand_info = (
                     f"demand: optimal RT utilisations"
                     if access_rt_method == "optimal"
@@ -1845,45 +1960,76 @@ with tab_map:
                 # ---- Geography Only Calculations ---------------------------
                 st.divider()
                 st.subheader(f"Geography Only Calculations — {country}")
-                st.caption(
-                    "These calculations consider only geographic access and do not account for machine capacity."
-                )
                 _use_tt_geo = use_travel_time and "nearest_linac_min" in gdf_out.columns
+                _TT_MAX_ACC = 240.0
                 if _use_tt_geo:
                     _near_col = "nearest_linac_min"
                     _dist_unit = "min"
                     _dist_label = "Travel Time to Linac"
+                    _raw_geo_vals = gdf_out[_near_col].to_numpy(dtype=np.float64)
+                    _geo_vals = np.where(np.isfinite(_raw_geo_vals), _raw_geo_vals, _TT_MAX_ACC)
+                    _has_capped_geo = not np.all(np.isfinite(_raw_geo_vals))
                 else:
                     _near_col = "nearest_linac_km"
                     _dist_unit = "km"
                     _dist_label = "Distance to Linac"
-                _near_valid = gdf_out[_near_col].notna()
-                _near_vals = gdf_out.loc[_near_valid, _near_col]
-                _near_pop = gdf_out.loc[_near_valid, "population"].to_numpy(dtype=np.float64)
-                _mean_geo_prob = stats.get("mean_access_probability", 0.0)
-                _pop_total = _near_pop.sum()
-                _pop_wtd_dist = float((_near_vals.to_numpy() * _near_pop).sum() / _pop_total) if _pop_total > 0 else 0.0
+                    _geo_vals = gdf_out[_near_col].fillna(0).to_numpy(dtype=np.float64)
+                    _has_capped_geo = False
+                _geo_pop = gdf_out["population"].to_numpy(dtype=np.float64)
+                _geo_median = float(np.median(_geo_vals))
+                _gt_geo = "> " if _has_capped_geo and _geo_median >= _TT_MAX_ACC - 0.1 else ""
+                # Pop-weighted median
+                _geo_sort_idx = np.argsort(_geo_vals)
+                _geo_cum_pop = np.cumsum(_geo_pop[_geo_sort_idx])
+                _geo_pop_total = _geo_pop.sum()
+                _geo_pw_med_idx = np.searchsorted(_geo_cum_pop, _geo_pop_total * 0.5)
+                _geo_pw_median = float(_geo_vals[_geo_sort_idx[min(_geo_pw_med_idx, len(_geo_sort_idx) - 1)]])
+                _gt_geo_pw = "> " if _has_capped_geo and _geo_pw_median >= _TT_MAX_ACC - 0.1 else ""
                 _geo_col1, _geo_col2 = st.columns(2)
-                _geo_col1.metric("Average Geographic Access Probability", f"{_mean_geo_prob:.1%}")
-                _geo_col2.metric(f"Pop-Weighted Mean {_dist_label}", f"{_pop_wtd_dist:.1f} {_dist_unit}")
-                if len(_near_vals) > 0:
-                    _fig_hist = go.Figure()
-                    _fig_hist.add_trace(go.Histogram(
-                        x=_near_vals.values,
-                        nbinsx=40,
-                        marker_color="#4C9BE8",
-                        name=f"{_dist_label} ({_dist_unit})",
-                    ))
-                    _fig_hist.update_layout(
-                        xaxis_title=f"{_dist_label} ({_dist_unit})",
-                        yaxis_title="Number of hexagons",
-                        height=220,
-                        margin=dict(l=40, r=20, t=20, b=40),
-                        showlegend=False,
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                    )
-                    st.plotly_chart(_fig_hist, use_container_width=True)
+                _geo_col1.metric(f"Median {_dist_label}", f"{_gt_geo}{_geo_median:.1f} {_dist_unit}")
+                _geo_col2.metric(f"Pop-Weighted Median {_dist_label}", f"{_gt_geo_pw}{_geo_pw_median:.1f} {_dist_unit}")
+                if len(_geo_vals) > 0:
+                    _geo_h_col1, _geo_h_col2 = st.columns(2)
+                    with _geo_h_col1:
+                        _fig_hist = go.Figure()
+                        _fig_hist.add_trace(go.Histogram(
+                            x=_geo_vals,
+                            nbinsx=40,
+                            marker_color="#4C9BE8",
+                        ))
+                        _fig_hist.update_layout(
+                            xaxis_title=f"{_dist_label} ({_dist_unit})"
+                                + (f" — bar at {int(_TT_MAX_ACC)} includes all travel time > {int(_TT_MAX_ACC)}" if _has_capped_geo else ""),
+                            yaxis_title="Number of hexagons",
+                            height=240,
+                            margin=dict(l=40, r=20, t=30, b=40),
+                            title_text="Hexagon count by distance",
+                            showlegend=False,
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_fig_hist, use_container_width=True)
+                    with _geo_h_col2:
+                        _fig_hist2 = go.Figure()
+                        _fig_hist2.add_trace(go.Histogram(
+                            x=_geo_vals,
+                            y=_geo_pop,
+                            histfunc="sum",
+                            nbinsx=40,
+                            marker_color="#F97316",
+                        ))
+                        _fig_hist2.update_layout(
+                            xaxis_title=f"{_dist_label} ({_dist_unit})"
+                                + (f" — bar at {int(_TT_MAX_ACC)} includes all travel time > {int(_TT_MAX_ACC)}" if _has_capped_geo else ""),
+                            yaxis_title="Population",
+                            height=240,
+                            margin=dict(l=40, r=20, t=30, b=40),
+                            title_text="Population by distance",
+                            showlegend=False,
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_fig_hist2, use_container_width=True)
 
                 # ---- Capacity Only Calculations ----------------------------
                 st.divider()
