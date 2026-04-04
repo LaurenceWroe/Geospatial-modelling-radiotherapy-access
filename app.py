@@ -42,7 +42,7 @@ from data.cancer import (
     XARRAY_PATH,
 )
 from analysis.accessibility import compute_accessibility
-from data.travel_time import compute_travel_time_matrix, CACHE_DIR as _TT_CACHE_DIR
+from data.travel_time import compute_travel_time_matrix, CACHE_DIR as _TT_CACHE_DIR, MAX_TRAVEL_TIME_BY_RES as _TT_MAX_BY_RES
 
 
 # ---------------------------------------------------------------------------
@@ -1576,13 +1576,13 @@ with tab_map:
                             progress_callback=_tt_cb,
                         )
                         _tt_progress.empty()
-                        if _tt_errors:
-                            st.warning(
-                                f"{len(_tt_errors)} API batch(es) failed — affected hexes shown as >240 min. "
-                                "Delete the cache and retry to attempt re-fetching.\n\n"
-                                + "\n".join(f"• {e}" for e in _tt_errors[:5])
-                                + ("" if len(_tt_errors) <= 5 else f"\n… and {len(_tt_errors) - 5} more")
-                            )
+                        # if _tt_errors:
+                        #     st.warning(
+                        #         f"{len(_tt_errors)} API batch(es) failed — affected hexes shown as >{int(_TT_MAX_BY_RES.get(h3_resolution, 14400) / 60)} min. "
+                        #         "Delete the cache and retry to attempt re-fetching.\n\n"
+                        #         + "\n".join(f"• {e}" for e in _tt_errors[:5])
+                        #         + ("" if len(_tt_errors) <= 5 else f"\n… and {len(_tt_errors) - 5} more")
+                        #     )
                     except Exception as _e:
                         st.error(f"TravelTime API error: {_e}")
                         st.stop()
@@ -1631,8 +1631,8 @@ with tab_map:
                     _near_tip_unit = "km"
 
                 valid = np.isfinite(dist_vals)
-                # Cap unreachable (inf) at 240 min for all stats/histograms
-                _TT_MAX = 240.0
+                # Cap unreachable (inf) at the resolution travel time limit for stats/histograms
+                _TT_MAX = _TT_MAX_BY_RES.get(h3_resolution, 14400) / 60.0
                 _has_capped = _has_tt and not valid.all()
                 _dist_for_stats = np.where(np.isfinite(dist_vals), dist_vals, _TT_MAX) if _has_tt else dist_vals
                 auto_vmin = 0.0
@@ -1722,8 +1722,15 @@ with tab_map:
                 col2.metric(f"Median {_near_tip_label}", f"{_gt}{_median_val:.1f} {_near_tip_unit}")
                 col3.metric(f"Pop-Weighted Median {_near_tip_label}", f"{_gt_pw}{_pw_median_val:.1f} {_near_tip_unit}")
                 col4.metric("Average Geographic Access Probability", f"{_mean_geo_prob_nn:.1%}")
-                if _has_tt:
-                    st.caption(f"Travel time via TravelTime API · max {int(_TT_MAX)} min limit · {int((~valid).sum()):,} unreachable hexes shown at {int(_TT_MAX)} min")
+                if _has_tt and not valid.all():
+                    _unreachable_pop = float(_near_pop_all[~valid].sum())
+                    _unreachable_pct = _unreachable_pop / _pop_total_nn * 100 if _pop_total_nn > 0 else 0.0
+                    st.caption(
+                        f"**Unreachable hexes:** {int((~valid).sum()):,} hexes · "
+                        f"population {_unreachable_pop:,.0f} ({_unreachable_pct:.1f}% of total) · "
+                        f"TravelTime returns no route when a hex centroid cannot be snapped to the road network "
+                        f"(e.g. isolated area, lake, or river)."
+                    )
 
                 # ---- Geography Only Calculations (Nearest Linac) -----------
                 st.divider()
@@ -1961,7 +1968,7 @@ with tab_map:
                 st.divider()
                 st.subheader(f"Geography Only Calculations — {country}")
                 _use_tt_geo = use_travel_time and "nearest_linac_min" in gdf_out.columns
-                _TT_MAX_ACC = 240.0
+                _TT_MAX_ACC = _TT_MAX_BY_RES.get(h3_resolution, 14400) / 60.0
                 if _use_tt_geo:
                     _near_col = "nearest_linac_min"
                     _dist_unit = "min"
@@ -2030,6 +2037,17 @@ with tab_map:
                             plot_bgcolor="rgba(0,0,0,0)",
                         )
                         st.plotly_chart(_fig_hist2, use_container_width=True)
+                if _use_tt_geo and _has_capped_geo:
+                    _geo_unreachable_mask = ~np.isfinite(_raw_geo_vals)
+                    _geo_unreachable_pop = float(_geo_pop[_geo_unreachable_mask].sum())
+                    _geo_pop_total = _geo_pop.sum()
+                    _geo_unreachable_pct = _geo_unreachable_pop / _geo_pop_total * 100 if _geo_pop_total > 0 else 0.0
+                    st.caption(
+                        f"**Unreachable hexes:** {int(_geo_unreachable_mask.sum()):,} hexes · "
+                        f"population {_geo_unreachable_pop:,.0f} ({_geo_unreachable_pct:.1f}% of total) · "
+                        f"TravelTime returns no route when a hex centroid cannot be snapped to the road network "
+                        f"(e.g. isolated area, lake, or river)."
+                    )
 
                 # ---- Capacity Only Calculations ----------------------------
                 st.divider()

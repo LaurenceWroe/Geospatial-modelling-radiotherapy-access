@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+import h3
 import numpy as np
 import requests
 
@@ -31,7 +32,15 @@ TT_BASE_URL = "https://api.traveltimeapp.com/v4"
 _MAX_SEARCHES_PER_REQUEST = 10   # arrival_searches per request
 
 # Maximum travel time (seconds) by H3 resolution, per TravelTime docs
-_MAX_TRAVEL_TIME_BY_RES: dict[int, int] = {
+# https://docs.traveltime.com/api/reference/h3#limits-of-resolution-and-traveltime
+# Resolutions 1–5 are not in the docs table; we apply the res-6 limit (10 h) as a
+# conservative extrapolation since coarser cells cover larger areas.
+MAX_TRAVEL_TIME_BY_RES: dict[int, int] = {
+    1: 36000,   # 10 hours (extrapolated — not in TravelTime docs)
+    2: 36000,   # 10 hours (extrapolated)
+    3: 36000,   # 10 hours (extrapolated)
+    4: 36000,   # 10 hours (extrapolated)
+    5: 36000,   # 10 hours (extrapolated)
     6: 36000,   # 10 hours
     7: 36000,   # 10 hours
     8: 28800,   # 8 hours
@@ -40,7 +49,7 @@ _MAX_TRAVEL_TIME_BY_RES: dict[int, int] = {
     11: 2700,   # 45 minutes
     12: 1800,   # 30 minutes
 }
-_DEFAULT_MAX_TRAVEL_TIME_SEC = 14400  # 4 hours fallback
+_DEFAULT_MAX_TRAVEL_TIME_SEC = 36000  # 10 hours fallback
 
 
 def _cache_path(cache_key: str, mode: str) -> Path:
@@ -60,20 +69,27 @@ def _make_cache_key(
 
 
 def _next_wednesday_8am_utc() -> str:
-    """ISO8601 string for the next Wednesday at 08:00 UTC."""
+    """ISO8601 string for the next Wednesday at 08:00 UTC (with explicit offset)."""
     now = datetime.now(timezone.utc)
     days_ahead = (2 - now.weekday()) % 7 or 7  # 2 = Wednesday
     target = (now + timedelta(days=days_ahead)).replace(
         hour=8, minute=0, second=0, microsecond=0
     )
-    return target.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return target.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
-def _transportation(mode: str) -> dict:
+def _transportation(mode: str, max_travel_time_sec: int) -> dict:
     if mode == "driving":
-        return {"type": "driving"}
+        return {
+            "type": "driving",
+            "include_roads": [],
+            "walking_time": max_travel_time_sec,
+        }
     elif mode == "public_transport":
-        return {"type": "public_transport"}
+        return {
+            "type": "public_transport",
+            "walking_time": max_travel_time_sec,
+        }
     raise ValueError(f"Unsupported mode: {mode!r}")
 
 
@@ -84,8 +100,9 @@ def _call_h3(
     mode: str,
     app_id: str,
     api_key: str,
-    arrival_time: str,
+    departure_time: str,
     max_travel_time_sec: int,
+    snap_threshold_m: int,
 ) -> dict[str, dict[str, float]]:
     """
     Single POST to /v4/h3.
@@ -94,14 +111,18 @@ def _call_h3(
     -------
     {linac_id: {h3_cell_id: travel_time_minutes}} for reachable cells only.
     """
-    arrival_searches = [
+    departure_searches = [
         {
             "id": l_id,
             "coords": {"lat": lat, "lng": lon},
-            "arrival_time": arrival_time,
+            "departure_time": departure_time,
             "travel_time": max_travel_time_sec,
-            "transportation": _transportation(mode),
-            "remove_water_bodies": True,
+            "transportation": _transportation(mode, max_travel_time_sec),
+            "snapping": {
+                "penalty": "enabled",
+                "accept_roads": "any_drivable",
+                "threshold": snap_threshold_m,
+            },
         }
         for l_id, (lat, lon) in zip(linac_ids, linac_latlons)
     ]
@@ -116,8 +137,8 @@ def _call_h3(
         },
         json={
             "resolution": h3_resolution,
-            "properties": ["mean"],
-            "arrival_searches": arrival_searches,
+            "properties": ["min", "mean"],
+            "departure_searches": departure_searches,
         },
         timeout=120,
     )
@@ -128,10 +149,12 @@ def _call_h3(
         sid = r["search_id"]
         out[sid] = {}
         for cell in r.get("cells", []):
-            cell_id = cell.get("cell_index") or cell.get("cell_id") or cell.get("id")
-            mean_sec = cell.get("mean")
-            if cell_id is not None and mean_sec is not None:
-                out[sid][cell_id] = mean_sec / 60.0  # seconds → minutes
+            # SDK confirmed: field is "id", travel time nested under "properties"
+            cell_id = cell.get("id")
+            props = cell.get("properties") or {}
+            tt_sec = props.get("min") if props.get("min") is not None else props.get("mean")
+            if cell_id is not None and tt_sec is not None:
+                out[sid][cell_id] = tt_sec / 60.0  # seconds → minutes
     return out
 
 
@@ -179,10 +202,13 @@ def compute_travel_time_matrix(
     if cache_file.exists():
         return np.load(cache_file)["matrix"], []
 
-    max_travel_time_sec = _MAX_TRAVEL_TIME_BY_RES.get(
+    max_travel_time_sec = MAX_TRAVEL_TIME_BY_RES.get(
         h3_resolution, _DEFAULT_MAX_TRAVEL_TIME_SEC
     )
-    arrival_time = _next_wednesday_8am_utc()
+    # Snap threshold = 3 × H3 edge length in metres, so coastal/rural hex centroids
+    # that sit away from the road network can still be snapped to a road.
+    snap_threshold_m = int(h3.average_hexagon_edge_length(h3_resolution, unit="m") * 3)
+    departure_time = _next_wednesday_8am_utc()
     matrix = np.full((n_hexes, n_linacs), np.inf, dtype=np.float32)
     failed_batches: List[str] = []
 
@@ -203,7 +229,8 @@ def compute_travel_time_matrix(
                 l_batch_latlons, l_batch_ids,
                 h3_resolution, mode,
                 app_id, api_key,
-                arrival_time, max_travel_time_sec,
+                departure_time, max_travel_time_sec,
+                snap_threshold_m,
             )
             for l_local_id, cell_times in results.items():
                 j = int(l_local_id[1:])

@@ -46,3 +46,4 @@ b_cancer_incidence/cancer_type_maps/optimally_treated/
 
 # Test/scratch outputs
 /tmp/
+travel_time_cache/
