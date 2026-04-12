@@ -3,8 +3,8 @@ TravelTime H3 API integration for computing travel times to LINAC facilities.
 
 Uses the /v4/h3 endpoint which returns H3 cell travel times natively — one
 request per LINAC (up to 10 LINACs per request via arrival_searches), no
-hex-centroid batching needed, and supports `remove_water_bodies` to avoid
-routing failures for cells whose centroid falls in water.
+hex-centroid batching needed. `remove_water_bodies` is set to False so that
+all H3 cells are returned regardless of water coverage.
 
 Modes: "driving" and "public_transport" via the TravelTime REST API.
 Results are cached to disk as .npz files keyed by location hash + mode.
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -33,14 +34,10 @@ _MAX_SEARCHES_PER_REQUEST = 10   # arrival_searches per request
 
 # Maximum travel time (seconds) by H3 resolution, per TravelTime docs
 # https://docs.traveltime.com/api/reference/h3#limits-of-resolution-and-traveltime
-# Resolutions 1–5 are not in the docs table; we apply the res-6 limit (10 h) as a
-# conservative extrapolation since coarser cells cover larger areas.
+# Documented range is 6–12. Empirically, resolution 5 also works (returns results).
+# Resolution 4 returns HTTP 500. Resolutions 1–3 are rejected by the API.
 MAX_TRAVEL_TIME_BY_RES: dict[int, int] = {
-    1: 36000,   # 10 hours (extrapolated — not in TravelTime docs)
-    2: 36000,   # 10 hours (extrapolated)
-    3: 36000,   # 10 hours (extrapolated)
-    4: 36000,   # 10 hours (extrapolated)
-    5: 36000,   # 10 hours (extrapolated)
+    5: 36000,   # 10 hours (undocumented but works empirically)
     6: 36000,   # 10 hours
     7: 36000,   # 10 hours
     8: 28800,   # 8 hours
@@ -49,7 +46,10 @@ MAX_TRAVEL_TIME_BY_RES: dict[int, int] = {
     11: 2700,   # 45 minutes
     12: 1800,   # 30 minutes
 }
-_DEFAULT_MAX_TRAVEL_TIME_SEC = 36000  # 10 hours fallback
+_DEFAULT_MAX_TRAVEL_TIME_SEC = 36000  # 10 hours fallback (res 5–7)
+
+# Resolutions supported by the TravelTime H3 endpoint (5 empirical, 6–12 documented)
+TT_SUPPORTED_RESOLUTIONS = frozenset(MAX_TRAVEL_TIME_BY_RES.keys())
 
 
 def _cache_path(cache_key: str, mode: str) -> Path:
@@ -69,7 +69,15 @@ def _make_cache_key(
 
 
 def _next_wednesday_8am_utc() -> str:
-    """ISO8601 string for the next Wednesday at 08:00 UTC (with explicit offset)."""
+    """ISO8601 string for the next Wednesday at 08:00 UTC.
+
+    Wednesday morning UTC is used as a representative weekday departure.
+    Note: this corresponds to different local times across the globe (e.g.
+    08:00 in UK/West Africa, 09:00–10:00 in Europe, 16:00 in East Asia,
+    03:00 in the Americas). Travel times in regions far from UTC±0 will
+    reflect off-peak or night-time conditions rather than a typical morning
+    commute. For a global planning tool this is a known limitation.
+    """
     now = datetime.now(timezone.utc)
     days_ahead = (2 - now.weekday()) % 7 or 7  # 2 = Wednesday
     target = (now + timedelta(days=days_ahead)).replace(
@@ -80,11 +88,8 @@ def _next_wednesday_8am_utc() -> str:
 
 def _transportation(mode: str, max_travel_time_sec: int) -> dict:
     if mode == "driving":
-        return {
-            "type": "driving",
-            "include_roads": [],
-            "walking_time": max_travel_time_sec,
-        }
+        # "driving" uses TravelTime's typical road-speed model (no real-time traffic).
+        return {"type": "driving"}
     elif mode == "public_transport":
         return {
             "type": "public_transport",
@@ -118,6 +123,7 @@ def _call_h3(
             "departure_time": departure_time,
             "travel_time": max_travel_time_sec,
             "transportation": _transportation(mode, max_travel_time_sec),
+            "remove_water_bodies": False,
             "snapping": {
                 "penalty": "enabled",
                 "accept_roads": "any_drivable",
@@ -152,7 +158,7 @@ def _call_h3(
             # SDK confirmed: field is "id", travel time nested under "properties"
             cell_id = cell.get("id")
             props = cell.get("properties") or {}
-            tt_sec = props.get("min") if props.get("min") is not None else props.get("mean")
+            tt_sec = props.get("mean") if props.get("mean") is not None else props.get("min")
             if cell_id is not None and tt_sec is not None:
                 out[sid][cell_id] = tt_sec / 60.0  # seconds → minutes
     return out
@@ -167,6 +173,7 @@ def compute_travel_time_matrix(
     api_key: str,
     cache_key: str = "",
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    max_travel_time_sec: Optional[int] = None,
 ) -> Tuple[np.ndarray, List[str]]:
     """
     Compute travel time (minutes) from every H3 cell to every LINAC.
@@ -184,11 +191,14 @@ def compute_travel_time_matrix(
     app_id, api_key : TravelTime credentials
     cache_key : optional override for the cache file name
     progress_callback : called as (requests_done, total_requests)
+    max_travel_time_sec : optional upper bound on travel time (seconds).
+        If None, defaults to the resolution-based cap in MAX_TRAVEL_TIME_BY_RES.
+        Cannot exceed that cap.
 
     Returns
     -------
     matrix : np.ndarray, shape (n_hexes, n_linacs), float32, minutes.
-        np.inf where unreachable within the resolution travel time cap.
+        np.inf where unreachable within the travel time cap.
     errors : list of str
         One entry per failed API batch. Empty if all batches succeeded.
     """
@@ -202,9 +212,11 @@ def compute_travel_time_matrix(
     if cache_file.exists():
         return np.load(cache_file)["matrix"], []
 
-    max_travel_time_sec = MAX_TRAVEL_TIME_BY_RES.get(
-        h3_resolution, _DEFAULT_MAX_TRAVEL_TIME_SEC
-    )
+    _res_cap = MAX_TRAVEL_TIME_BY_RES.get(h3_resolution, _DEFAULT_MAX_TRAVEL_TIME_SEC)
+    if max_travel_time_sec is None:
+        max_travel_time_sec = _res_cap
+    else:
+        max_travel_time_sec = min(max_travel_time_sec, _res_cap)
     # Snap threshold = 3 × H3 edge length in metres, so coastal/rural hex centroids
     # that sit away from the road network can still be snapped to a road.
     snap_threshold_m = int(h3.average_hexagon_edge_length(h3_resolution, unit="m") * 3)
@@ -219,34 +231,47 @@ def compute_travel_time_matrix(
     total_requests = (n_linacs + _MAX_SEARCHES_PER_REQUEST - 1) // _MAX_SEARCHES_PER_REQUEST
     done = 0
 
+    _MAX_RETRIES = 10
+    _RETRY_BACKOFF = [2, 5, 10]  # seconds between attempts
+
     for l_start in range(0, n_linacs, _MAX_SEARCHES_PER_REQUEST):
         l_end = min(l_start + _MAX_SEARCHES_PER_REQUEST, n_linacs)
         l_batch_ids = linac_ids[l_start:l_end]
         l_batch_latlons = linac_latlons[l_start:l_end]
 
-        try:
-            results = _call_h3(
-                l_batch_latlons, l_batch_ids,
-                h3_resolution, mode,
-                app_id, api_key,
-                departure_time, max_travel_time_sec,
-                snap_threshold_m,
-            )
-            for l_local_id, cell_times in results.items():
-                j = int(l_local_id[1:])
-                for cell_id, tt_min in cell_times.items():
-                    i = cell_to_idx.get(cell_id)
-                    if i is not None:
-                        matrix[i, j] = min(matrix[i, j], tt_min)
-        except Exception as e:
-            failed_batches.append(f"linacs {l_start}–{l_end - 1}: {e}")
+        last_exc: Optional[Exception] = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                results = _call_h3(
+                    l_batch_latlons, l_batch_ids,
+                    h3_resolution, mode,
+                    app_id, api_key,
+                    departure_time, max_travel_time_sec,
+                    snap_threshold_m,
+                )
+                for l_local_id, cell_times in results.items():
+                    j = int(l_local_id[1:])
+                    for cell_id, tt_min in cell_times.items():
+                        i = cell_to_idx.get(cell_id)
+                        if i is not None:
+                            matrix[i, j] = min(matrix[i, j], tt_min)
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)])
+
+        if last_exc is not None:
+            failed_batches.append(f"linacs {l_start}–{l_end - 1}: {last_exc}")
 
         done += 1
         if progress_callback:
             progress_callback(done, total_requests)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(cache_file, matrix=matrix)
+    if not failed_batches:
+        np.savez_compressed(cache_file, matrix=matrix)
     return matrix, failed_batches
 
 

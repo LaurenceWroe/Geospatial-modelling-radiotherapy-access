@@ -22,6 +22,10 @@ env/
 
 # macOS
 .DS_Store
+**/.DS_Store
+
+# Streamlit secrets (never commit credentials)
+.streamlit/secrets.toml
 
 # Data files (large / downloaded)
 a_population_density/raw_from_worldpop/*.tif
@@ -31,7 +35,10 @@ H3_zipped_pop_density_maps/*.gpkg.gz
 h3_population_maps/
 h3_accessibility_maps/
 cancer_type_maps_h3/
-# H3_region_cache/ — pre-generated and committed to repo (small parquets)
+
+# Generated caches (large / reproducible)
+H3_region_cache/
+*.npz
 
 # Generated outputs (reproducible from inputs)
 b_cancer_incidence/cancer_type_maps/incidence_maps/
