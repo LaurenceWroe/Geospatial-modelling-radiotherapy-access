@@ -65,6 +65,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown(
+    """
+    <style>
+    [data-testid="stMetricValue"] > div { font-size: 1.5rem !important; }
+    [data-testid="stMetricLabel"] > div { font-size: 1rem !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def _apply_app_dark_mode(enabled: bool) -> None:
     """Inject CSS to switch the entire app to a dark background."""
@@ -292,6 +302,54 @@ def _load_cancer(country: str, iso3: str, cancers: tuple, use_actual: bool,
 
 
 @st.cache_data(show_spinner=False)
+def _load_cancer_region_percountry(region_name: str, cancers: tuple, use_actual: bool, h3_res: int = 3):
+    """Build a cancer GeoDataFrame for a region using per-country GLOBOCAN data.
+
+    Each country's cancer cases are apportioned to its own hexes using that
+    country's iso3, then all country GDFs are concatenated.  Border hex
+    duplicates are resolved by keeping the row with higher total cancer value.
+    """
+    import geopandas as gpd
+    from data.regions import get_region as _get_region
+
+    reg = _get_region(region_name)
+    cancer_list = list(cancers)
+    all_gdfs = []
+
+    for alpha2 in reg.member_alpha2:
+        country_obj = pycountry.countries.get(alpha_2=alpha2)
+        if country_obj is None:
+            continue
+        c_name = country_obj.name
+        c_iso3 = country_obj.alpha_3
+        try:
+            gdf = _load_pop(c_name, h3_res)
+            c_gdf = apportion_cancer_to_h3(gdf, c_iso3, cancer_list, use_actual_rt=use_actual)
+            all_gdfs.append(c_gdf)
+        except Exception:
+            continue
+
+    if not all_gdfs:
+        raise ValueError(f"No cancer data found for region {region_name!r}")
+
+    cancer_cols = [c for c in all_gdfs[0].columns if c not in ("h3", "population", "geometry")]
+    combined = pd.concat(
+        [g[["h3", "population", "geometry"] + [c for c in cancer_cols if c in g.columns]]
+         for g in all_gdfs],
+        ignore_index=True,
+    )
+    # Deduplicate border hexes: keep row with highest total cancer burden
+    _sum_cols = [c for c in cancer_cols if c in combined.columns]
+    if _sum_cols:
+        combined["_total"] = combined[_sum_cols].sum(axis=1)
+        combined = combined.sort_values("_total", ascending=False).drop_duplicates("h3").drop(columns="_total")
+    else:
+        combined = combined.drop_duplicates("h3")
+    combined = combined.reset_index(drop=True)
+    return gpd.GeoDataFrame(combined, geometry="geometry")
+
+
+@st.cache_data(show_spinner=False)
 def _compute_access(
     country: str,
     iso3: str,
@@ -460,6 +518,202 @@ def _compute_access_travel_time(
 
 
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
+def _compute_access_one_country_for_region(
+    alpha2: str,
+    lambda_km: float,
+    model: str,
+    max_distance_km: float,
+    capacity_per_machine_per_year: float,
+    rt_method: str,
+    rt_fraction: float,
+    h3_res: int,
+    snap_linacs_to_hex: bool,
+    weibull_k: float,
+    custom_rtu: tuple,
+):
+    """Cached per-country computation for use in per-country regional aggregation.
+
+    Returns (gdf_subset, c_stats) or None if the country should be skipped
+    (no population data or no GLOBOCAN data).  Countries with no LINACs return
+    a gdf with zero access so their unmet demand is still counted.
+    """
+    country_obj = pycountry.countries.get(alpha_2=alpha2)
+    if country_obj is None:
+        return None
+
+    c_name = country_obj.name
+    c_iso3 = country_obj.alpha_3
+    all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
+    _agg_keys = _AGGREGATE_CANCER_KEYS
+
+    try:
+        gdf = _load_pop(c_name, h3_res)
+    except Exception:
+        return None
+
+    demand = None
+    c_cancer_excl_nmsc = None
+    try:
+        if rt_method in ("optimal", "custom"):
+            cancer_gdf = apportion_cancer_to_h3(gdf, c_iso3, all_cancers, use_actual_rt=False)
+            excl_col = "All cancers excl. NMSC_incidence"
+            if excl_col in cancer_gdf.columns:
+                c_cancer_excl_nmsc = float(cancer_gdf[excl_col].clip(lower=0).sum())
+            if rt_method == "optimal":
+                rt_cols = [
+                    c for c in cancer_gdf.columns
+                    if c.endswith("_optimal_rt")
+                    and c[:-len("_optimal_rt")].strip().lower() not in _agg_keys
+                ]
+                if rt_cols:
+                    demand = cancer_gdf[rt_cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
+            else:
+                _custom_fracs = {k.strip().lower(): v / 100.0 for k, v in custom_rtu}
+                demand_arr = None
+                for cancer in all_cancers:
+                    if cancer.strip().lower() in _agg_keys:
+                        continue
+                    col = f"{cancer}_incidence"
+                    if col not in cancer_gdf.columns:
+                        continue
+                    frac = _custom_fracs.get(cancer.strip().lower(), 0.0)
+                    inc = cancer_gdf[col].clip(lower=0).to_numpy(np.float64)
+                    demand_arr = inc * frac if demand_arr is None else demand_arr + inc * frac
+                if demand_arr is not None:
+                    demand = demand_arr
+        else:
+            cancer_gdf = apportion_cancer_to_h3(gdf, c_iso3, ["All cancers excl. NMSC"], use_actual_rt=False)
+            col = "All cancers excl. NMSC_incidence"
+            if col in cancer_gdf.columns:
+                c_cancer_excl_nmsc = float(cancer_gdf[col].clip(lower=0).sum())
+                demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
+    except Exception:
+        return None  # no GLOBOCAN data
+
+    if demand is None:
+        return None
+
+    try:
+        c_locs, _ = load_linacs_from_dirac_db(c_name)
+        has_linacs = bool(c_locs)
+    except (ValueError, FileNotFoundError):
+        c_locs = []
+        has_linacs = False
+
+    if has_linacs:
+        gdf_out, c_stats = compute_accessibility(
+            gdf, c_locs,
+            lambda_km=lambda_km, model=model,
+            max_distance_km=max_distance_km, weibull_k=weibull_k,
+            capacity_per_machine_per_year=capacity_per_machine_per_year,
+            demand=demand, snap_linacs_to_hex=snap_linacs_to_hex,
+            h3_resolution=h3_res,
+        )
+    else:
+        gdf_out = gdf.copy()
+        gdf_out["nearest_linac_km"] = np.float32(np.inf)
+        gdf_out["access_probability"] = np.float32(0.0)
+        gdf_out["capacity_limited_probability"] = np.float32(0.0)
+        gdf_out["rt_demand"] = demand.astype(np.float32)
+        gdf_out["rt_treated"] = np.float32(0.0)
+        gdf_out["rt_untreated"] = demand.astype(np.float32)
+        gdf_out["pop_with_access"] = np.float32(0.0)
+        c_stats = {"n_facilities": 0, "total_machines": 0,
+                   "total_rt_demand": float(demand.sum()), "total_rt_treated": 0.0}
+
+    c_stats["cancer_excl_nmsc"] = c_cancer_excl_nmsc or 0.0
+    return gdf_out, c_stats
+
+
+def _compute_access_region_percountry(
+    region_name: str,
+    lambda_km: float,
+    model: str,
+    max_distance_km: float,
+    capacity_per_machine_per_year: float,
+    rt_method: str,
+    rt_fraction: float,
+    h3_res: int,
+    snap_linacs_to_hex: bool,
+    weibull_k: float,
+    custom_rtu: tuple,
+    progress_callback=None,
+):
+    """Aggregate per-country RT access results into a single regional GeoDataFrame.
+
+    progress_callback(done, total) is called after each country completes.
+    Per-country computations are individually cached via
+    _compute_access_one_country_for_region.
+    """
+    import geopandas as gpd
+    from data.regions import get_region as _get_region
+
+    reg = _get_region(region_name)
+    alpha2_list = reg.member_alpha2
+    n_total = len(alpha2_list)
+
+    all_gdfs = []
+    total_rt_demand = 0.0
+    total_rt_treated = 0.0
+    total_n_facilities = 0
+    total_machines = 0
+    total_cancer_excl_nmsc = 0.0
+
+    for i, alpha2 in enumerate(alpha2_list):
+        result = _compute_access_one_country_for_region(
+            alpha2, lambda_km, model, max_distance_km,
+            capacity_per_machine_per_year, rt_method, rt_fraction,
+            h3_res, snap_linacs_to_hex, weibull_k, custom_rtu,
+        )
+        if progress_callback is not None:
+            progress_callback(i + 1, n_total)
+        if result is None:
+            continue
+        gdf_out, c_stats = result
+        total_rt_demand += c_stats["total_rt_demand"]
+        total_rt_treated += c_stats.get("total_rt_treated", 0.0)
+        total_n_facilities += c_stats.get("n_facilities", 0)
+        total_machines += c_stats.get("total_machines", 0)
+        total_cancer_excl_nmsc += c_stats.get("cancer_excl_nmsc", 0.0)
+        all_gdfs.append(gdf_out)
+
+    if not all_gdfs:
+        raise ValueError(f"No country data found for region {region_name!r}")
+
+    combined = pd.concat(
+        [g[["h3", "population", "geometry", "nearest_linac_km",
+            "access_probability", "capacity_limited_probability",
+            "rt_demand", "rt_treated", "rt_untreated", "pop_with_access"]]
+         for g in all_gdfs],
+        ignore_index=True,
+    )
+    combined = (
+        combined
+        .sort_values("access_probability", ascending=False)
+        .drop_duplicates("h3")
+        .reset_index(drop=True)
+    )
+    gdf_merged = gpd.GeoDataFrame(combined, geometry="geometry")
+
+    total_pop = float(combined["population"].sum())
+    pop_with_access = float(combined["pop_with_access"].sum())
+    stats = {
+        "n_facilities": total_n_facilities,
+        "total_machines": total_machines,
+        "total_national_capacity": total_machines * capacity_per_machine_per_year,
+        "total_rt_demand": total_rt_demand,
+        "total_rt_treated": total_rt_treated,
+        "total_rt_untreated": total_rt_demand - total_rt_treated,
+        "pop_with_access": pop_with_access,
+        "mean_access_probability": pop_with_access / total_pop if total_pop > 0 else 0.0,
+        "total_cancer_excl_nmsc": total_cancer_excl_nmsc if total_cancer_excl_nmsc > 0 else None,
+        "n_hexagons": len(combined),
+    }
+    return gdf_merged, stats
+
+
+@st.cache_data(show_spinner=False)
 def _load_dirac(country: str):
     try:
         if is_region(country):
@@ -546,6 +800,15 @@ def _build_hex_layer(df: pd.DataFrame) -> pdk.Layer:
 
 
 _LINAC_BLUE = [30, 120, 220, 220]
+
+# Discrete colour scale: red → orange → yellow → green → dark green (up to 5 bands)
+_DISCRETE_PALETTE = [
+    [220,  50,  50, 220],  # red
+    [230, 120,  30, 220],  # orange
+    [240, 200,  30, 220],  # yellow
+    [ 60, 180,  60, 220],  # green
+    [ 30, 120,  30, 220],  # dark green
+]
 _LINAC_COLORS = [
     [30,  120, 220, 220],  # blue
     [220, 60,  60,  220],  # red
@@ -579,7 +842,8 @@ def _build_linac_columns(
     hex_radius_km = math.sqrt(hex_area_km2 / math.pi)
     col_radius_m = int(hex_radius_km * 1000 * 0.45 * radius_scale)
     elevation_per_linac = (
-        max(hex_radius_km * 1000 * 0.6, country_span_km * 1000 * 0.0008) * height_scale
+        # max(hex_radius_km * 1000 * 0.6, country_span_km * 1000 * 0.0008) * height_scale
+        hex_radius_km * 1000 * 0.6* height_scale
     )
 
     _has_row_color = "color" in facilities_df.columns
@@ -682,22 +946,17 @@ def _build_linac_columns(
 
 
 def _fmt_sigfig(value: float, sig: int = 3) -> str:
-    """Format a number to *sig* significant figures with k/M suffix."""
+    """Format a number to 1 decimal place with k/M suffix."""
     if value is None:
         return "N/A"
     value = float(value)
     if value == 0:
         return "0"
     if abs(value) >= 1_000_000:
-        scaled = value / 1_000_000
-        rounded = float(f"{scaled:.{sig}g}")
-        return f"{rounded:g} M"
+        return f"{value / 1_000_000:.1f} M"
     if abs(value) >= 1_000:
-        scaled = value / 1_000
-        rounded = float(f"{scaled:.{sig}g}")
-        return f"{rounded:g} k"
-    rounded = float(f"{value:.{sig}g}")
-    return f"{rounded:g}"
+        return f"{value / 1_000:.1f} k"
+    return f"{value:.1f}"
 
 
 def _hex_areas_km2(gdf) -> np.ndarray:
@@ -725,15 +984,22 @@ def _scale_caption(gdf) -> str:
 
 def _make_view(gdf, pitch: float = 0.0) -> pdk.ViewState:
     geom = gdf.geometry
+    span_lat = float(geom.bounds["maxy"].max() - geom.bounds["miny"].min())
+    if span_lat > 130:  # world scale — fixed view centred on land masses
+        return pdk.ViewState(latitude=20, longitude=10, zoom=0.7, pitch=pitch, bearing=0)
     cx = float(geom.centroid.x.mean())
     cy = float(geom.centroid.y.mean())
-    span_lat = float(geom.bounds["maxy"].max() - geom.bounds["miny"].min())
     zoom = max(3, min(8, int(8 - np.log2(max(span_lat, 0.5)))))
     return pdk.ViewState(latitude=cy, longitude=cx, zoom=zoom, pitch=pitch, bearing=0)
 
 
-CARTO_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
-CARTO_DARK  = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+_CARTO_LIGHT_LABELS   = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+_CARTO_LIGHT_NOLABELS = "https://basemaps.cartocdn.com/gl/positron-nolabels-gl-style/style.json"
+_CARTO_DARK_LABELS    = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+_CARTO_DARK_NOLABELS  = "https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json"
+# Defaults — overwritten after sidebar renders with show_map_labels value
+CARTO_LIGHT = _CARTO_LIGHT_NOLABELS
+CARTO_DARK  = _CARTO_DARK_NOLABELS
 
 
 def _linac_legend_fig(dark: bool = False) -> plt.Figure:
@@ -755,6 +1021,58 @@ def _linac_legend_fig(dark: bool = False) -> plt.Figure:
             color=text_color, fontweight="bold")
     fig.tight_layout(pad=0.1)
     return fig
+
+
+def _render_discrete_legend(bounds: list, palette: list, unit: str, text_color: str = "black") -> None:
+    """Render a discrete colour legend in the current column."""
+    n = len(palette)
+    def _hex_color(rgba):
+        return "#{:02x}{:02x}{:02x}".format(rgba[0], rgba[1], rgba[2])
+    band_h = max(40, int(300 / n))
+    items = []
+    for i in range(n):
+        color = _hex_color(palette[i])
+        if i == 0:
+            label = f"< {bounds[0]:.4g}" + (f" {unit}" if unit else "")
+        elif i == n - 1:
+            label = f"≥ {bounds[i - 1]:.4g}" + (f" {unit}" if unit else "")
+        else:
+            label = f"{bounds[i - 1]:.4g}–{bounds[i]:.4g}" + (f" {unit}" if unit else "")
+        items.append(
+            f"<div style='display:flex;align-items:center;height:{band_h}px'>"
+            f"<div style='background:{color};width:16px;height:{band_h - 2}px;flex-shrink:0;border-radius:2px'></div>"
+            f"<span style='font-size:18px;color:{text_color};margin-left:4px;line-height:1.2'>{label}</span></div>"
+        )
+    _cr_color = "#aaa" if text_color == "white" else "#888"
+    st.markdown(
+        f"<p style='font-size:10px;font-family:monospace;color:{_cr_color};margin:0;text-align:center;'>© RadMaps 2025</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("<div style='margin-top:8px'>" + "".join(items) + "</div>", unsafe_allow_html=True)
+
+
+def _render_map_no_cb(layers, view: pdk.ViewState, dark: bool, on_select=None):
+    """Render a pydeck map with an empty right column (matching _render_with_colorbar layout)."""
+    deck = pdk.Deck(
+        layers=layers,
+        initial_view_state=view,
+        map_style=CARTO_DARK if dark else CARTO_LIGHT,
+        tooltip={"html": "{tip}"},
+    )
+    col_map, col_cb = st.columns([7, 1])
+    chart_state = None
+    with col_map:
+        if on_select and _PYDECK_CLICK_SUPPORTED:
+            chart_state = st.pydeck_chart(deck, use_container_width=True,
+                                          on_select=on_select, selection_mode="single-object")
+        else:
+            st.pydeck_chart(deck, use_container_width=True)
+    with col_cb:
+        st.markdown(
+            "<p style='font-size:10px;font-family:monospace;color:#888;margin:0;text-align:center;'>© RadMaps 2025</p>",
+            unsafe_allow_html=True,
+        )
+    return chart_state
 
 
 def _render_with_colorbar(
@@ -788,10 +1106,13 @@ def _render_with_colorbar(
         else:
             st.pydeck_chart(deck, use_container_width=True)
     with col_cb:
+        _cr_color = "#aaa" if (dark or dark_text) else "#888"
+        st.markdown(
+            f"<p style='font-size:10px;font-family:monospace;color:{_cr_color};margin:0;text-align:center;'>© RadMaps 2025</p>",
+            unsafe_allow_html=True,
+        )
         fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white" if (dark or dark_text) else "black", clamp=clamp)
         st.pyplot(fig, use_container_width=True)
-        # if show_linac_legend:
-        #     st.pyplot(_linac_legend_fig(dark=dark), use_container_width=True)
     return chart_state
 
 
@@ -837,12 +1158,12 @@ def _h3_caption(gdf) -> str:
     try:
         area = h3.average_hexagon_area(res, unit="km^2")
         return (
-            f"(Empty hexagons = no population in Kontur data)  \n" 
-            f"H3 Resolution = {res} | Total hexagons = {len(gdf):,} | Area per hexagon ≈ {area:.2f} km² "
+            # f"(Empty hexagons = no population in Kontur data)  \n" 
+            f"**H3 Setup:** Resolution = {res} | Total hexagons = {len(gdf):,} | Area per hexagon ≈ {area:.2f} km² "
             
         )
     except Exception:
-        return f"H3 Resolution = {res} | Total hexagons = {len(gdf):,} hexagons"
+        return f"**H3 Setup:** H3 Resolution = {res} | Total hexagons = {len(gdf):,} hexagons"
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +1178,54 @@ MAP_TYPES = [
 
 _POP_DATA_METRICS = ["Population Density", "Cancer Incidence", "Radiotherapy Demand"]
 
+# ---------------------------------------------------------------------------
+# World default cache — pre-computed result loaded on first session visit
+# ---------------------------------------------------------------------------
+
+_WORLD_DEFAULT_CACHE = Path(__file__).resolve().parent / "cache" / "world_default.pkl"
+_WORLD_DEFAULT_PARAMS = {
+    "country": "World",
+    "iso3": "WLD",
+    "model": "step",
+    "max_distance_km": 200.0,
+    "h3_res": 3,
+    "rt_method": "optimal",
+    "capacity": 450.0,
+    "region_percountry": True,
+}
+
+
+def _save_world_default(gdf_out, stats) -> None:
+    import pickle
+    _WORLD_DEFAULT_CACHE.parent.mkdir(exist_ok=True)
+    with open(_WORLD_DEFAULT_CACHE, "wb") as f:
+        pickle.dump({"gdf_out": gdf_out, "stats": stats, "params": _WORLD_DEFAULT_PARAMS}, f)
+
+
+def _load_world_default():
+    import pickle
+    if not _WORLD_DEFAULT_CACHE.exists():
+        return None
+    try:
+        with open(_WORLD_DEFAULT_CACHE, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+# On first visit this session, pre-populate the map result from disk cache
+if "_session_init" not in st.session_state:
+    st.session_state["_session_init"] = True
+    _cached = _load_world_default()
+    if _cached is not None:
+        st.session_state.setdefault("_map_result", {
+            "gdf_out": _cached["gdf_out"],
+            "stats": _cached["stats"],
+            "region_percountry": True,
+        })
+        st.session_state.setdefault("_map_generated", True)
+
+
 with st.sidebar:
     st.title("🏥 RadMaps")
 
@@ -867,9 +1236,27 @@ with st.sidebar:
     country = st.selectbox(
         "Country / Region",
         options=_all_options,
-        index=_all_options.index("United Kingdom") if "United Kingdom" in _all_options else 0,
+        index=_all_options.index("World") if "World" in _all_options else 0,
     )
     _is_region = is_region(country)
+
+    # Regional mode selector — only shown when a region is selected
+    _region_percountry = False
+    if _is_region:
+        _reg_mode = st.radio(
+            "Regional mode",
+            ["Uniform", "Per-country"],
+            index=1,
+            horizontal=True,
+            key="region_mode_radio",
+            help=(
+                "**Uniform**: single regional cancer profile (GLOBOCAN aggregate), "
+                "all LINACs pooled across the region.\n\n"
+                "**Per-country**: each country's own cancer data and LINACs; "
+                "countries with no LINACs contribute full unmet demand."
+            ),
+        )
+        _region_percountry = _reg_mode == "Per-country"
 
     if _is_region:
         _reg_def = get_region(country)
@@ -877,7 +1264,7 @@ with st.sidebar:
         _res_labels = {1: "H1 (~2.5M km²)", 2: "H2 (~87k km²)", 3: "H3 (~12,400 km²)"}
         h3_resolution = st.selectbox(
             "H3 resolution", options=_res_opts,
-            index=min(1, len(_res_opts) - 1),
+            index=min(2, len(_res_opts) - 1),
             format_func=lambda r: _res_labels.get(r, str(r)),
             key="h3_res_region",
         )
@@ -988,7 +1375,7 @@ with st.sidebar:
     model_label = st.radio(
         "Access model",
         ["Weibull", "Step function", "Uniform (no decay)"],
-        index=0, horizontal=True,
+        index=1, horizontal=True,
     )
     access_model = {"Weibull": "weibull", "Step function": "step", "Uniform (no decay)": "uniform"}[model_label]
     _unit = "min" if use_travel_time else "km"
@@ -998,7 +1385,7 @@ with st.sidebar:
     elif access_model == "step":
         max_distance_km = float(st.slider(
             f"Max treatment {'time' if use_travel_time else 'distance'} ({_unit})",
-            10, 500, 60 if use_travel_time else 100, step=10,
+            10, 500, 60 if use_travel_time else 200, step=10,
         ))
 
     _use_latlng = st.checkbox(
@@ -1027,11 +1414,11 @@ with st.sidebar:
     is_nearest = map_type == "Nearest Linac"
     needs_linac = is_access or is_nearest
 
-    access_display_metric: str = "Modelled Inaccessible"
+    access_display_metric: str = "Modelled Access Deficit"
     if is_access:
         access_display_metric = st.selectbox(
             "RT Access display metric",
-            ["Modelled Inaccessible", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability"],
+            ["Modelled Access Deficit", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability"],
             index=0,
         )
 
@@ -1077,36 +1464,57 @@ with st.sidebar:
     cb_cmap_fn = COLORMAPS.get(cb_cmap_name, _viridis_rgb)
 
     _default_log = map_type in ("Population Density", "Cancer Incidence")
-    _scale_opts = ["Linear", "Log", "Binary"]
+    _discrete_scale = False
+    _no_hex = False
+    _discrete_base = 60.0
+    _discrete_steps = 4
+    _scale_opts = ["Linear", "Log", "Discrete", "No hex"]
     _scale_default_idx = 1 if _default_log else 0
     _scale_type = st.radio("Scale", _scale_opts, index=_scale_default_idx, horizontal=True, key="scale_type_radio")
     cb_log = _scale_type == "Log"
-    _binary_scale = _scale_type == "Binary"
-    _binary_cmap = _binary_scale  # used by Nearest Linac rendering
-    _binary_threshold = 60.0
-    if _binary_scale:
-        _binary_threshold = st.number_input(
-            "Threshold — below = red, above = green",
-            min_value=0.0, value=60.0, step=5.0,
-            help="All hexagons with a value above this threshold are coloured green; below are red.",
+    _discrete_scale = _scale_type == "Discrete"
+    _no_hex = _scale_type == "No hex"
+    if _discrete_scale:
+        if is_access and access_display_metric in ("Modelled Access Ratio", "Geographic Access Probability"):
+            _disc_default, _disc_step = 0.2, 0.05
+        elif is_access:
+            _disc_default, _disc_step = 450.0, 50.0
+        elif is_nearest:
+            _disc_default, _disc_step = (30.0, 5.0) if use_travel_time else (50.0, 10.0)
+        else:
+            _disc_default, _disc_step = 60.0, 5.0
+        _disc_key = f"disc_base_{map_type}_{access_display_metric}_{'tt' if (is_nearest and use_travel_time) else 'km'}"
+        _discrete_base = st.number_input(
+            "Base threshold (X)",
+            min_value=0.1, value=_disc_default, step=_disc_step,
+            key=_disc_key,
+            help="Bands: < X, X–2X, 2X–3X, … up to N bands. Colours: red → orange → yellow → green.",
         )
+        _discrete_steps = int(st.number_input("Number of bands", min_value=2, max_value=5, value=5, step=1))
+    # back-compat aliases used in _color_values and rendering paths
+    _binary_scale = _discrete_scale
+    _binary_cmap = _discrete_scale
+    _binary_threshold = _discrete_base
 
     _count_maps = {"Population Density", "Cancer Incidence", "Radiotherapy Demand"}
-    _count_access_metrics = {"Modelled Accessed", "Modelled Inaccessible"}
+    _count_access_metrics = {"Modelled Access", "Modelled Access Deficit"}
     _supports_per_km2 = map_type in _count_maps or (is_access and access_display_metric in _count_access_metrics)
     density_per_km2: bool = False
-    if _supports_per_km2:
+    _show_cb_controls = not _no_hex
+    if _supports_per_km2 and _show_cb_controls:
         _density_radio = st.radio(
             "Colour scale normalisation", ["Per hexagon", "Per 10 km²"], index=0, horizontal=True,
         )
         density_per_km2 = _density_radio == "Per 10 km²"
 
-    cb_auto = st.checkbox("Auto range", value=True)
+    cb_auto = True
     cb_vmin_user: Optional[float] = None
     cb_vmax_user: Optional[float] = None
-    if not cb_auto:
-        cb_vmin_user = st.number_input("Min value", value=0.0, format="%.4g")
-        cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
+    if _show_cb_controls:
+        cb_auto = st.checkbox("Auto range", value=True)
+        if not cb_auto:
+            cb_vmin_user = st.number_input("Min value", value=0.0, format="%.4g")
+            cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
 
     if st.button("Update Map", use_container_width=True,
                  help="Re-render with current display settings — no recomputation."):
@@ -1125,9 +1533,11 @@ with st.sidebar:
     linac_multi_color: bool = False
 
     show_linac_markers = st.checkbox("Show LINAC locations", value=needs_linac)
+    map_pitch_on: bool = False
     if show_linac_markers:
         tower_height_scale = float(st.slider("Tower height scale", 0.05, 5.0, 1.0, step=0.05))
         tower_radius_scale = float(st.slider("Tower radius scale", 0.1, 5.0, 1.0, step=0.1))
+        map_pitch_on = st.toggle("3D view (map pitch)", value=True)
         _tower_style_label = st.radio(
             "Tower style",
             ["Individual (tower per centre)", "Stacked (tower per hex)"],
@@ -1147,6 +1557,10 @@ with st.sidebar:
     app_dark_mode = st.toggle("Dark background", value=False)
     _apply_app_dark_mode(app_dark_mode)
     dark_mode = st.checkbox("Dark map", value=False)
+    show_map_labels = st.checkbox("Show place names", value=False)
+
+CARTO_LIGHT = _CARTO_LIGHT_LABELS if show_map_labels else _CARTO_LIGHT_NOLABELS
+CARTO_DARK  = _CARTO_DARK_LABELS  if show_map_labels else _CARTO_DARK_NOLABELS
 
 
 # ---------------------------------------------------------------------------
@@ -1161,15 +1575,20 @@ def _color_values(values: np.ndarray, cmap_fn, auto_vmin: float, auto_vmax: floa
     """
     vmin = cb_vmin_user if not cb_auto and cb_vmin_user is not None else auto_vmin
     vmax = cb_vmax_user if not cb_auto and cb_vmax_user is not None else auto_vmax
-    if _binary_scale:
-        finite = np.isfinite(values)
-        above = finite & (values > _binary_threshold)
-        _col_above = [220, 60, 60, 220] if invert_binary else [60, 180, 60, 220]
-        _col_below = [60, 180, 60, 220] if invert_binary else [220, 60, 60, 220]
-        colors = [
-            (_col_above if a else (_col_below if f else [80, 80, 80, 100]))
-            for f, a in zip(finite.tolist(), above.tolist())
-        ]
+    if _discrete_scale:
+        _bounds = [n * _discrete_base for n in range(1, _discrete_steps)]
+        if invert_binary:
+            _palette = list(reversed(_DISCRETE_PALETTE[:_discrete_steps]))
+        else:
+            _palette = _DISCRETE_PALETTE[:_discrete_steps]
+        def _disc_color(v):
+            if not np.isfinite(v):
+                return [80, 80, 80, 100]
+            for i, b in enumerate(_bounds):
+                if v < b:
+                    return _palette[i]
+            return _palette[-1]
+        colors = [_disc_color(v) for v in values.tolist()]
     elif cb_log:
         colors = _apply_colormap_fixed(np.log1p(values), cmap_fn, np.log1p(max(vmin, 0)), np.log1p(vmax))
     else:
@@ -1516,7 +1935,7 @@ def _render_pop_data_fom(gdf, iso3: str, country: str, rt_method: str, rt_fracti
         _fom_c4.metric("Cases Requiring RT", "N/A")
         return
     _fom_rt = _data_tab_rt_need(iso3)
-    _fom_c3.metric("Cancer Incidence excl. NMSC", f"{_fom_rt['total_cancer_excl_nmsc']:,.0f}")
+    _fom_c3.metric("Cancer Incidence excl. NMSC", _fmt_sigfig(_fom_rt['total_cancer_excl_nmsc']))
     if rt_method == "optimal":
         _fom_rt_val = _fom_rt["total_rt_cases"]
         _fom_rt_note = "Optimal RTU (Delaney et al. 2005)"
@@ -1531,7 +1950,7 @@ def _render_pop_data_fom(gdf, iso3: str, country: str, rt_method: str, rt_fracti
             for c in _nat if c.strip().lower() not in _AGGREGATE_CANCER_KEYS
         )
         _fom_rt_note = "Custom RTU rates"
-    _fom_c4.metric("Cases Requiring RT", f"{_fom_rt_val:,.0f}", help=f"Method: {_fom_rt_note}")
+    _fom_c4.metric("Cases Requiring RT", _fmt_sigfig(_fom_rt_val), help=f"Method: {_fom_rt_note}")
 
 
 with tab_map:
@@ -1595,10 +2014,10 @@ with tab_map:
             _areas_pop = _hex_areas_km2(gdf)
             if density_per_km2:
                 plot_vals = pop / (_areas_pop / 10)
-                pop_label = "People per 10 km²"
+                pop_label = "Population per 10 km²"
             else:
                 plot_vals = pop
-                pop_label = "People per hexagon"
+                pop_label = "Population per hexagon"
             auto_vmin = float(max(plot_vals.min(), 1e-3))
             auto_vmax = float(plot_vals.max())
             colors, vmin, vmax = _color_values(plot_vals, cb_cmap_fn, auto_vmin, auto_vmax)
@@ -1621,17 +2040,19 @@ with tab_map:
             country_span_km = max(_lat_span_pop * 111.32, _lon_span_pop * 111.32 * math.cos(math.radians(_lat_mid_pop)))
 
             df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
-            _pop_layers = [_build_hex_layer(df)]
-            _pop_pitch = 0.0
+            _pop_pitch = 30.0 if (show_linac_markers and map_pitch_on and facilities_df is not None and not facilities_df.empty) else 0.0
+            _pop_layers = [] if _no_hex else [_build_hex_layer(df)]
             if show_linac_markers and facilities_df is not None and not facilities_df.empty:
                 _pop_layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
-                _pop_pitch = 30.0
-            _render_with_colorbar(
-                _pop_layers,
-                _make_view(gdf, pitch=_pop_pitch),
-                cb_cmap_fn, vmin, vmax, pop_label, log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
-                show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
-            )
+            if _no_hex:
+                _render_map_no_cb(_pop_layers, _make_view(gdf, pitch=_pop_pitch), dark_mode)
+            else:
+                _render_with_colorbar(
+                    _pop_layers,
+                    _make_view(gdf, pitch=_pop_pitch),
+                    cb_cmap_fn, vmin, vmax, pop_label, log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                    show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
+                )
             st.caption(_h3_caption(gdf) + _scale_caption(gdf))
             _render_pop_data_fom(gdf, iso3, country, rt_method, rt_fraction)
 
@@ -1661,7 +2082,10 @@ with tab_map:
                     _load_cancers = selected_cancers  # "All cancers excl. NMSC" for proportional
 
                 with st.spinner("Apportioning cancer incidence to H3 grid…"):
-                    gdf = _load_cancer(country, iso3, tuple(_load_cancers), False, h3_resolution, region_flag=_is_region)
+                    if _is_region and _region_percountry:
+                        gdf = _load_cancer_region_percountry(country, tuple(_load_cancers), False, h3_resolution)
+                    else:
+                        gdf = _load_cancer(country, iso3, tuple(_load_cancers), False, h3_resolution, region_flag=_is_region)
 
                 if map_type == "Radiotherapy Demand":
                     suffix = "_optimal_rt" if rt_method == "optimal" else "_incidence"
@@ -1693,9 +2117,9 @@ with tab_map:
                     gdf["color"] = colors
 
                     if map_type == "Radiotherapy Demand":
-                        label = f"Radiotherapy Demand{_per_suffix}"
+                        label = f"RT demand{_per_suffix}"
                     else:
-                        label = f"Cancer Incidence{_per_suffix}"
+                        label = f"Cancer incidence{_per_suffix}"
 
                     _s_combined_raw = pd.Series(combined, index=gdf.index).round(2).astype(str)
                     _s_area_c = pd.Series(_areas_cancer, index=gdf.index).apply(_fmt_sigfig)
@@ -1716,17 +2140,19 @@ with tab_map:
                     country_span_km = max(_lat_span_c * 111.32, _lon_span_c * 111.32 * math.cos(math.radians(_lat_mid_c)))
 
                     df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
-                    _cancer_layers = [_build_hex_layer(df)]
-                    _cancer_pitch = 0.0
+                    _cancer_pitch = 30.0 if (show_linac_markers and map_pitch_on and facilities_df is not None and not facilities_df.empty) else 0.0
+                    _cancer_layers = [] if _no_hex else [_build_hex_layer(df)]
                     if show_linac_markers and facilities_df is not None and not facilities_df.empty:
                         _cancer_layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
-                        _cancer_pitch = 30.0
-                    _render_with_colorbar(
-                        _cancer_layers,
-                        _make_view(gdf, pitch=_cancer_pitch),
-                        cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
-                        show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
-                    )
+                    if _no_hex:
+                        _render_map_no_cb(_cancer_layers, _make_view(gdf, pitch=_cancer_pitch), dark_mode)
+                    else:
+                        _render_with_colorbar(
+                            _cancer_layers,
+                            _make_view(gdf, pitch=_cancer_pitch),
+                            cb_cmap_fn, vmin, vmax, label, log_scale=cb_log, dark=dark_mode, dark_text=app_dark_mode, clamp=not cb_auto,
+                            show_linac_legend=show_linac_markers and facilities_df is not None and not facilities_df.empty,
+                        )
                     st.caption(_h3_caption(gdf) + _scale_caption(gdf))
                     if map_type == "Radiotherapy Demand":
                         if rt_method == "optimal":
@@ -1756,13 +2182,13 @@ with tab_map:
                         incidence_cols = [c + "_incidence" for c in _load_cancers if (c + "_incidence") in gdf.columns]
                         total_incidence = float(gdf[incidence_cols].sum(axis=1).sum()) if incidence_cols else 0.0
                         col1, col2, col3 = st.columns(3)
-                        col1.metric(_cases_label, f"{total_incidence:,.0f}")
-                        col2.metric("Corresponding Cases Requiring RT", f"{combined.sum():,.0f}")
+                        col1.metric(_cases_label, _fmt_sigfig(total_incidence))
+                        col2.metric("Corresponding Cases Requiring RT", _fmt_sigfig(combined.sum()))
                         col3.metric("H3 hexagons", f"{len(gdf):,}")
                     else:
                         total_pop = float(gdf["population"].sum())
                         col1, col2, col3 = st.columns(3)
-                        col1.metric(_cases_label, f"{combined.sum():,.0f}")
+                        col1.metric(_cases_label, _fmt_sigfig(combined.sum()))
                         col2.metric("Country population", f"{int(total_pop):,}")
                         col3.metric("H3 hexagons", f"{len(gdf):,}")
 
@@ -1771,17 +2197,23 @@ with tab_map:
             linac_locs_tuple = tuple(locs)
 
             _map_result = st.session_state.get("_map_result")
-            # Discard cached result if TT mode has changed (e.g. switched from
-            # straight-line to driving) — the columns won't match.
+            # Discard cached result if TT mode or regional mode has changed.
             if _map_result is not None:
                 _result_had_tt = "nearest_linac_min" in _map_result["gdf_out"].columns
-                if use_travel_time != _result_had_tt:
+                _result_was_percountry = _map_result.get("region_percountry", False)
+                if use_travel_time != _result_had_tt or _region_percountry != _result_was_percountry:
                     _map_result = None
                     st.session_state["_map_result"] = None
             if _map_result is not None:
                 gdf_out = _map_result["gdf_out"]
                 stats = _map_result["stats"]
             else:
+                if use_travel_time and _region_percountry:
+                    st.warning(
+                        "Travel time mode is not supported with **Per-country** regional analysis. "
+                        "Switch to **Uniform** regional mode or a single country to use travel times."
+                    )
+                    st.stop()
                 if use_travel_time:
                     if not tt_app_id or not tt_api_key:
                         st.warning(
@@ -1833,6 +2265,24 @@ with tab_map:
                             weibull_k=float(weibull_k),
                             custom_rtu=access_custom_rtu,
                         )
+                elif _region_percountry:
+                    _n_countries = len(get_region(country).member_alpha2)
+                    _pc_bar = st.progress(0, text=f"Computing per-country accessibility: 0 / {_n_countries}")
+                    def _pc_progress(done, total):
+                        _pc_bar.progress(
+                            done / total,
+                            text=f"Computing per-country accessibility: {done} / {total}",
+                        )
+                    gdf_out, stats = _compute_access_region_percountry(
+                        country,
+                        float(lambda_km), access_model, float(max_distance_km),
+                        capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
+                        h3_resolution, snap_linacs_to_hex,
+                        weibull_k=float(weibull_k),
+                        custom_rtu=access_custom_rtu,
+                        progress_callback=_pc_progress,
+                    )
+                    _pc_bar.empty()
                 else:
                     with st.spinner("Computing accessibility…"):
                         gdf_out, stats = _compute_access(
@@ -1843,9 +2293,19 @@ with tab_map:
                             weibull_k=float(weibull_k),
                             custom_rtu=access_custom_rtu,
                         )
-                st.session_state["_map_result"] = {"gdf_out": gdf_out, "stats": stats}
+                st.session_state["_map_result"] = {"gdf_out": gdf_out, "stats": stats, "region_percountry": _region_percountry}
 
-            pitch = 30.0 if show_linac_markers else 0.0
+                # Persist world default to disk so future sessions load instantly
+                _wp = _WORLD_DEFAULT_PARAMS
+                if (country == _wp["country"] and access_model == _wp["model"]
+                        and abs(float(max_distance_km) - _wp["max_distance_km"]) < 1
+                        and h3_resolution == _wp["h3_res"]
+                        and access_rt_method == _wp["rt_method"]
+                        and abs(capacity_per_machine_per_year - _wp["capacity"]) < 1
+                        and _region_percountry == _wp["region_percountry"]):
+                    _save_world_default(gdf_out, stats)
+
+            pitch = 30.0 if (show_linac_markers and map_pitch_on) else 0.0
 
             _geom = gdf_out.geometry
             _lat_span = float(_geom.bounds["maxy"].max() - _geom.bounds["miny"].min())
@@ -1887,15 +2347,10 @@ with tab_map:
                     _tip_dist_str = _tip_dist_str.round(1).astype(str) + f" {_near_tip_unit}"
 
                 # Colour assignment
-                if _binary_cmap:
-                    _green = [34, 197, 94, 180]   # tailwind green-500
-                    _red = [239, 68, 68, 180]      # tailwind red-500
-                    # unreachable hexes are also red (they are by definition > threshold)
-                    colors = [
-                        (_green if (np.isfinite(v) and v <= _binary_threshold) else _red)
-                        for v in dist_vals
-                    ]
-                    vmin, vmax = 0.0, _binary_threshold
+                if _discrete_scale:
+                    dist_vals_plot = np.where(valid, dist_vals, np.inf)
+                    colors, vmin, vmax = _color_values(dist_vals_plot, cb_cmap_fn, auto_vmin, auto_vmax)
+                    vmin, vmax = 0.0, _discrete_base * _discrete_steps
                 else:
                     dist_vals_plot = np.where(valid, dist_vals, auto_vmax)
                     colors, vmin, vmax = _color_values(dist_vals_plot, cb_cmap_fn, auto_vmin, auto_vmax)
@@ -1914,9 +2369,8 @@ with tab_map:
                     + "Hex area: " + _s_area_near + " km²"
                 )
 
-                layers = [_build_hex_layer(
-                    pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
-                )]
+                _near_df = pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
+                layers = [] if _no_hex else [_build_hex_layer(_near_df)]
                 if show_linac_markers:
                     layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
 
@@ -1924,29 +2378,23 @@ with tab_map:
                     st.info("Click a hexagon on the map to place a LINAC there, then click **Generate Map** to recompute.")
 
                 _near_chart_state = None
-                if _binary_cmap:
-                    # Simple legend instead of colorbar
-                    _map_col, _leg_col = st.columns([10, 1])
+                if _no_hex:
+                    _near_chart_state = _render_map_no_cb(layers, _make_view(gdf_out, pitch=pitch), dark_mode,
+                                                          on_select="rerun" if click_mode else None)
+                elif _discrete_scale:
+                    _map_col, _leg_col = st.columns([7, 1])
                     with _map_col:
-                        _bin_deck = pdk.Deck(
-                            layers=layers,
-                            initial_view_state=_make_view(gdf_out, pitch=pitch),
-                            map_style="mapbox://styles/mapbox/dark-v9" if dark_mode else None,
-                            tooltip={"html": "{tip}"},
-                        )
+                        _bin_deck = pdk.Deck(layers=layers, initial_view_state=_make_view(gdf_out, pitch=pitch),
+                                             map_style=CARTO_DARK if dark_mode else CARTO_LIGHT, tooltip={"html": "{tip}"})
                         if click_mode and _PYDECK_CLICK_SUPPORTED:
                             _near_chart_state = st.pydeck_chart(_bin_deck, use_container_width=True,
                                                                 on_select="rerun", selection_mode="single-object")
                         else:
                             st.pydeck_chart(_bin_deck, use_container_width=True)
                     with _leg_col:
-                        st.markdown(
-                            f"<div style='margin-top:40px;font-size:0.75rem'>"
-                            f"<div style='background:#22c55e;width:16px;height:16px;display:inline-block;border-radius:3px'></div> ≤ {_binary_threshold:.0f} {_near_tip_unit}<br/>"
-                            f"<div style='background:#ef4444;width:16px;height:16px;display:inline-block;border-radius:3px;margin-top:6px'></div> > {_binary_threshold:.0f} {_near_tip_unit}"
-                            + "</div>",
-                            unsafe_allow_html=True,
-                        )
+                        _disc_bounds_near = [n * _discrete_base for n in range(1, _discrete_steps)]
+                        _render_discrete_legend(_disc_bounds_near, _DISCRETE_PALETTE[:_discrete_steps], _near_tip_unit,
+                                                "white" if (dark_mode or app_dark_mode) else "black")
                 else:
                     _near_chart_state = _render_with_colorbar(
                         layers, _make_view(gdf_out, pitch=pitch),
@@ -1969,8 +2417,9 @@ with tab_map:
                 _pw_median_idx = np.searchsorted(_cum_pop, _pop_total_nn * 0.5)
                 _pw_median_val = float(_dist_for_stats[_sort_idx[min(_pw_median_idx, len(_sort_idx) - 1)]])
                 _gt_pw = "> " if _has_capped and _pw_median_val >= _TT_MAX - 0.1 else ""
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total LINACs", int(stats["total_machines"]))
+                col0, col1, col2, col3, col4 = st.columns(5)
+                col0.metric("Facilities", int(stats["n_facilities"]))
+                col1.metric("LINACs", int(stats["total_machines"]))
                 col2.metric(f"Median {_near_tip_label}", f"{_gt}{_median_val:.1f} {_near_tip_unit}")
                 col3.metric(f"Pop-Weighted Median {_near_tip_label}", f"{_gt_pw}{_pw_median_val:.1f} {_near_tip_unit}")
                 col4.metric("Average Geographic Access Probability", f"{_mean_geo_prob_nn:.1%}")
@@ -1979,9 +2428,9 @@ with tab_map:
                     _unreachable_pct = _unreachable_pop / _pop_total_nn * 100 if _pop_total_nn > 0 else 0.0
                     st.caption(
                         f"**Unreachable hexes:** {int((~valid).sum()):,} hexes · "
-                        f"population {_unreachable_pop:,.0f} ({_unreachable_pct:.1f}% of total).  \n"
-                        f"Note: TravelTime returns no route when a hex centroid cannot be snapped to the road network "
-                        f"(e.g. isolated area, lake, or river)."
+                        f"population {_fmt_sigfig(_unreachable_pop)} ({_unreachable_pct:.1f}% of total)."
+                        f"(Note: TravelTime returns no route when a hex centroid cannot be snapped to the road network, "
+                        f"e.g. isolated area, lake, or river)."
                     )
 
                 # ---- Geography Only Calculations (Nearest Linac) -----------
@@ -2053,23 +2502,23 @@ with tab_map:
                 )
                 s_pct = pd.Series(_pct_arr, index=gdf_out.index).round(1).astype(str)
 
-                if access_display_metric == "Modelled Inaccessible":
+                if access_display_metric == "Modelled Access Deficit":
                     display_vals = gdf_out["rt_untreated"].to_numpy(dtype=np.float64)
-                    cb_label_access = "RT patients inaccessible/yr"
+                    cb_label_access = "RT access deficit"
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
-                    _tip_prefix = "RT patients inaccessible/yr"
-                    _tip_extra = "RT patients accessing/yr"
+                    _tip_prefix = "RT access deficit"
+                    _tip_extra = "RT accessed"
                     _tip_extra_s = s_treated
                     metric_cmap_fn = _rdylgn_reversed_rgb
 
                 elif access_display_metric == "Modelled Accessed":
                     display_vals = gdf_out["rt_treated"].to_numpy(dtype=np.float64)
-                    cb_label_access = "RT patients accessing/yr"
+                    cb_label_access = "RT accessed"
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
-                    _tip_prefix = "RT patients accessing/yr"
-                    _tip_extra = "RT patients inaccessible/yr"
+                    _tip_prefix = "RT accessed"
+                    _tip_extra = "RT access deficit"
                     _tip_extra_s = s_untreated
                     metric_cmap_fn = _rdylgn_rgb
 
@@ -2123,8 +2572,8 @@ with tab_map:
 
                 _map_default_cmap = _DEFAULT_CMAP.get(map_type, "Green → Red")
                 active_cmap_fn = metric_cmap_fn if cb_cmap_name == _map_default_cmap else cb_cmap_fn
-                # For "Modelled Inaccessible", higher = worse → invert binary colours (above = red)
-                _acc_invert_binary = access_display_metric == "Modelled Inaccessible"
+                # For "Modelled Access Deficit", higher = worse → invert binary colours (above = red)
+                _acc_invert_binary = access_display_metric == "Modelled Access Deficit"
                 colors, vmin, vmax = _color_values(display_vals, active_cmap_fn, auto_vmin_a, auto_vmax_a,
                                                    invert_binary=_acc_invert_binary)
 
@@ -2132,9 +2581,8 @@ with tab_map:
                 gdf_out["color"] = colors
                 gdf_out["tip"] = tip_series.values
 
-                layers = [_build_hex_layer(
-                    pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
-                )]
+                _acc_df = pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
+                layers = [] if _no_hex else [_build_hex_layer(_acc_df)]
                 if show_linac_markers:
                     layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
 
@@ -2150,15 +2598,14 @@ with tab_map:
                 if click_mode and _PYDECK_CLICK_SUPPORTED:
                     st.info("Click a hexagon on the map to place a LINAC there, then click **Generate Map** to recompute.")
 
-                if _binary_scale:
-                    _acc_map_col, _acc_leg_col = st.columns([10, 1])
+                if _no_hex:
+                    _acc_chart_state = _render_map_no_cb(layers, _make_view(gdf_out, pitch=pitch), dark_mode,
+                                                         on_select="rerun" if click_mode else None)
+                elif _discrete_scale:
+                    _acc_map_col, _acc_leg_col = st.columns([7, 1])
                     with _acc_map_col:
-                        _acc_deck = pdk.Deck(
-                            layers=layers,
-                            initial_view_state=_make_view(gdf_out, pitch=pitch),
-                            map_style=CARTO_DARK if dark_mode else CARTO_LIGHT,
-                            tooltip={"html": "{tip}"},
-                        )
+                        _acc_deck = pdk.Deck(layers=layers, initial_view_state=_make_view(gdf_out, pitch=pitch),
+                                             map_style=CARTO_DARK if dark_mode else CARTO_LIGHT, tooltip={"html": "{tip}"})
                         if click_mode and _PYDECK_CLICK_SUPPORTED:
                             _acc_chart_state = st.pydeck_chart(_acc_deck, use_container_width=True,
                                                                on_select="rerun", selection_mode="single-object")
@@ -2166,17 +2613,10 @@ with tab_map:
                             st.pydeck_chart(_acc_deck, use_container_width=True)
                             _acc_chart_state = None
                     with _acc_leg_col:
-                        _above_col = "#dc3c3c" if _acc_invert_binary else "#3cb43c"
-                        _below_col = "#3cb43c" if _acc_invert_binary else "#dc3c3c"
-                        st.markdown(
-                            f"<div style='margin-top:40px;font-size:0.75rem'>"
-                            f"<div style='background:{_above_col};width:16px;height:16px;display:inline-block;border-radius:3px'></div>"
-                            f" > {_binary_threshold:.4g}<br/><br/>"
-                            f"<div style='background:{_below_col};width:16px;height:16px;display:inline-block;border-radius:3px;margin-top:6px'></div>"
-                            f" ≤ {_binary_threshold:.4g}"
-                            "</div>",
-                            unsafe_allow_html=True,
-                        )
+                        _disc_palette_acc = list(reversed(_DISCRETE_PALETTE[:_discrete_steps])) if _acc_invert_binary else _DISCRETE_PALETTE[:_discrete_steps]
+                        _disc_bounds_acc = [n * _discrete_base for n in range(1, _discrete_steps)]
+                        _render_discrete_legend(_disc_bounds_acc, _disc_palette_acc, "",
+                                                "white" if (dark_mode or app_dark_mode) else "black")
                 else:
                     _acc_chart_state = _render_with_colorbar(
                         layers, _make_view(gdf_out, pitch=pitch),
@@ -2196,9 +2636,9 @@ with tab_map:
                         _acc_unreach_pct = _acc_unreach_pop / _acc_total_pop * 100 if _acc_total_pop > 0 else 0.0
                         st.caption(
                             f"**Unreachable hexes:** {int(_acc_unreach_mask.sum()):,} hexes · "
-                            f"population {_acc_unreach_pop:,.0f} ({_acc_unreach_pct:.1f}% of total).  \n"
-                            "TravelTime returns no route when a hex centroid cannot be snapped to the road network "
-                            "(e.g. isolated area, lake, or river)."
+                            f"population {_fmt_sigfig(_acc_unreach_pop)} ({_acc_unreach_pct:.1f}% of total). "
+                            f"(Note: TravelTime returns no route when a hex centroid cannot be snapped to the road network, "
+                            f"e.g. isolated area, lake, or river)."
                         )
                 if access_display_metric == "Modelled Access Ratio":
                     st.caption(
@@ -2217,45 +2657,100 @@ with tab_map:
                 else:
                     model_info = "Uniform (no distance decay)"
 
-                # Row 1: machine/demand overview
+                # pre-compute all values
                 _globocan = stats.get("total_cancer_excl_nmsc")
-                col1, col2, col3, col4, col5 = st.columns(5)
-                col1.metric("Facilities", int(stats["n_facilities"]))
-                col2.metric("LINACs", int(stats["total_machines"]))
-                col3.metric("Total RT Capacity", _fmt_sigfig(stats['total_national_capacity']))
-                col4.metric("Cancer Incidence", _fmt_sigfig(_globocan) if _globocan is not None else "N/A")
-                col5.metric("RT Demand", _fmt_sigfig(stats['total_rt_demand']))
-
-                # Row 2: modelled (capacity + geography combined) access outcomes
-                _pct_treated = (stats['total_rt_treated'] / stats['total_rt_demand'] * 100) if stats['total_rt_demand'] > 0 else 0.0
-                col0b, col1b, col2b, col3b = st.columns([1,1,1,1])
-                col1b.metric("Modelled RT Accessed", _fmt_sigfig(stats['total_rt_treated']))
-                col2b.metric("Modelled RT Not Accessed", _fmt_sigfig(stats['total_rt_demand'] - stats['total_rt_treated']))
-
-                # Row 3: single-constraint and combined ratios for direct comparison
+                _demand = stats['total_rt_demand']
+                _treated = stats['total_rt_treated']
+                _total_pop_acc = float(gdf_out["population"].sum())
+                _modelled_ratio = _treated / _demand if _demand > 0 else 0.0
+                _modelled_deficit = _demand - _treated
                 _geo_access = stats.get("mean_access_probability", 0.0)
-                _cap_only = (stats['total_national_capacity'] / stats['total_rt_demand']) if stats['total_rt_demand'] > 0 else None
-                _modelled_ratio = (stats['total_rt_treated'] / stats['total_rt_demand']) if stats['total_rt_demand'] > 0 else 0.0
-                _, col1c, col2c, col3c, _ = st.columns([1, 1, 1, 1, 1])
-                col1c.metric("Modelled Access Ratio",
-                             f"{_modelled_ratio:.1%}",
-                             help="Modelled RT Accessed ÷ RT Demand — fraction of demand met accounting for both capacity and geography")
-                col2c.metric("Capacity-Only Limited Access",
-                             f"{_cap_only:.1%}" if _cap_only is not None else "N/A",
-                             help="Total RT Capacity ÷ RT Demand — fraction of demand serviceable by machines alone, assuming no geographic barrier")
-                col3c.metric("Geographic-Only Limited Access",
-                             f"{_geo_access:.1%}",
-                             help="Population-weighted mean geographic access probability (assumes unlimited machine capacity)")
-                _demand_info = (
-                    f"demand: optimal RT utilisations"
-                    if access_rt_method == "optimal"
-                    else f"demand: proportional RT ({access_rt_fraction:.0%} of cancer cases)"
-                )
-                st.caption(
-                    f"{model_info} | {int(capacity_per_machine_per_year)} patients/machine/yr | "
-                    f"{_demand_info} | {stats['n_hexagons']:,} hexagons"
-                )
+                _cap_ratio = min(stats['total_national_capacity'] / _demand, 1.0) if _demand > 0 else None
+                _cap_accessed = min(stats['total_national_capacity'], _demand) if _demand > 0 else None
+                _cap_deficit = max(_demand - stats['total_national_capacity'], 0.0) if _demand > 0 else None
 
+                def _fmt_k(v) -> str:
+                    if v is None: return "N/A"
+                    return f"{float(v) / 1000:.1f} k"
+
+                def _pct_num(number, pct):
+                    return f"{_fmt_k(number)} ({pct:.1%})"
+
+                # ── Statistics ───────────────────────────────────────────────
+                _cancer_pct_of_pop = _globocan / _total_pop_acc if (_globocan and _total_pop_acc > 0) else None
+                _rt_pct_of_cancer = _demand / _globocan if (_globocan and _globocan > 0) else None
+
+                st.markdown("**Statistics**")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Population", _fmt_sigfig(_total_pop_acc))
+                col2.metric("Facilities", int(stats["n_facilities"]))
+                col3.metric("LINACs", int(stats["total_machines"]))
+                col4.metric("Cancer Incidence",
+                            f"{_fmt_k(_globocan)} ({_cancer_pct_of_pop:.2%})" if _cancer_pct_of_pop is not None else (_fmt_k(_globocan) if _globocan else "N/A"),
+                            help="Annual cancer cases (excl. NMSC) · % of population")
+
+                st.divider()
+
+                # ── RT Demand ────────────────────────────────────────────────
+                st.markdown("**RT Demand**")
+                _rtu_label = "optimal" if access_rt_method == "optimal" else f"proportional ({access_rt_fraction:.0%})"
+                st.caption(f"**Parameters:** RTU = {_rtu_label}")
+                st.metric("RT Demand",
+                          _pct_num(_demand, _rt_pct_of_cancer) if _rt_pct_of_cancer is not None else _fmt_k(_demand),
+                          help="Annual patients requiring RT · % of cancer incidence")
+
+                st.divider()
+
+                # ── Calculations ─────────────────────────────────────────────
+                st.markdown("**Calculations**")
+                if access_model == "step":
+                    _params_str = (
+                        f"**Parameters:** H3 Resolution = {h3_resolution}, Access Model = Step function, "
+                        f"Cut-off = {int(max_distance_km)} km, Capacity per machine = {int(capacity_per_machine_per_year)}"
+                    )
+                elif access_model == "weibull":
+                    _params_str = (
+                        f"**Parameters:** H3 Resolution = {h3_resolution}, Access Model = Weibull, "
+                        f"λ = {lambda_km} km, k = {weibull_k}, Capacity per machine = {int(capacity_per_machine_per_year)}"
+                    )
+                elif access_model == "uniform":
+                    _params_str = (
+                        f"**Parameters:** H3 Resolution = {h3_resolution}, Access Model = Uniform (no decay), "
+                        f"Capacity per machine = {int(capacity_per_machine_per_year)}"
+                    )
+                else:
+                    _params_str = (
+                        f"**Parameters:** H3 Resolution = {h3_resolution}, Access Model = Exponential, "
+                        f"λ = {lambda_km} km, Capacity per machine = {int(capacity_per_machine_per_year)}"
+                    )
+                st.caption(_params_str)
+
+                st.markdown("*RadMaps*")
+                col1b, col2b = st.columns(2)
+                col1b.metric("Accessed",
+                             _pct_num(_treated, _modelled_ratio),
+                             help="Patients accessing RT per year · % of RT demand (capacity + geography combined)")
+                col2b.metric("Deficit ∆",
+                             _pct_num(_modelled_deficit, 1.0 - _modelled_ratio),
+                             help="Patients not accessing RT per year · % of RT demand")
+
+                st.markdown("*Capacity-only*")
+                col1c, col2c = st.columns(2)
+                col1c.metric("Accessed",
+                             _pct_num(_cap_accessed, _cap_ratio) if _cap_ratio is not None else "N/A",
+                             help="Patients serviceable by machine capacity alone · % of RT demand (no geographic barrier assumed)")
+                col2c.metric("Deficit ∆",
+                             _pct_num(_cap_deficit, 1.0 - _cap_ratio) if _cap_ratio is not None else "N/A",
+                             help="Patients demand exceeds machine capacity · % of RT demand")
+
+                st.markdown("*Geography-only*")
+                col1d, col2d = st.columns(2)
+                col1d.metric("Accessed",
+                             _pct_num(_geo_access * _demand, _geo_access),
+                             help="Patients within geographic reach of a LINAC · % of RT demand (unlimited capacity assumed)")
+                col2d.metric("Deficit ∆",
+                             _pct_num((1.0 - _geo_access) * _demand, 1.0 - _geo_access),
+                             help="Patients too far from any LINAC · % of RT demand")
                 # ---- Add Additional LINACs ------------------------------------
                 if is_access:
                     st.divider()
@@ -2441,14 +2936,14 @@ with tab_map:
                                     "Placement": _placement_note,
                                     "Latitude": round(_onew_lat, 4),
                                     "Longitude": round(_onew_lon, 4),
-                                    "RT treated improvement": f"+{_oimprove:,.0f}",
+                                    "RT treated improvement": f"+{_fmt_sigfig(_oimprove)}",
                                     "Cumulative access ratio": f"{_onew_ratio:.1%}",
                                 })
                                 _opt_gdf = _onew_gdf
                                 _opt_stats = _onew_stats
                                 _opt_progress.progress(
                                     (_opt_step + 1) / _n_suggest,
-                                    text=f"Step {_opt_step + 1}/{_n_suggest} — +{_oimprove:,.0f} patients treated",
+                                    text=f"Step {_opt_step + 1}/{_n_suggest} — +{_fmt_sigfig(_oimprove)} patients treated",
                                 )
 
                             _opt_progress.empty()
@@ -2468,17 +2963,17 @@ with tab_map:
                             _opt_final_locs = _opt_res["final_locs"]
 
                             # Map showing final state — use same metric as the main display
-                            if access_display_metric == "Modelled Inaccessible":
+                            if access_display_metric == "Modelled Access Deficit":
                                 _opt_disp_col = "rt_untreated"
                                 _opt_cmap_fn = _rdylgn_reversed_rgb
-                                _opt_cb_label = "RT patients inaccessible/yr"
-                                _opt_tip_label = "RT inaccessible/yr"
+                                _opt_cb_label = "RT access deficit"
+                                _opt_tip_label = "RT access deficit"
                                 _opt_is_ratio = False
                             elif access_display_metric == "Modelled Accessed":
                                 _opt_disp_col = "rt_treated"
                                 _opt_cmap_fn = _rdylgn_rgb
-                                _opt_cb_label = "RT patients accessing/yr"
-                                _opt_tip_label = "RT accessing/yr"
+                                _opt_cb_label = "RT access"
+                                _opt_tip_label = "RT access"
                                 _opt_is_ratio = False
                             elif access_display_metric == "Modelled Access Ratio":
                                 _opt_disp_col = "capacity_limited_probability"
@@ -2548,7 +3043,7 @@ with tab_map:
 
                             st.caption(f"Map shows **{access_display_metric}** after all suggested LINACs are added. Gold = existing facilities, blue = suggested placements.")
                             _render_with_colorbar(
-                                _opt_layers, _make_view(_opt_final_gdf, pitch=30.0 if show_linac_markers else 0.0),
+                                _opt_layers, _make_view(_opt_final_gdf, pitch=30.0 if (show_linac_markers and map_pitch_on) else 0.0),
                                 _opt_cmap_fn, _opt_vmin, _opt_vmax, _opt_cb_label,
                                 dark=dark_mode, dark_text=app_dark_mode,
                             )
@@ -2565,7 +3060,8 @@ with tab_map:
                             _ocol1, _ocol2, _ocol3 = st.columns(3)
                             _ocol1.metric("Access ratio — before", f"{_ob_ratio:.1%}")
                             _ocol2.metric("Access ratio — after", f"{_oa_ratio:.1%}", delta=f"+{(_oa_ratio - _ob_ratio):.1%}")
-                            _ocol3.metric("Additional patients treated", f"+{_opt_final_stats['total_rt_treated'] - stats['total_rt_treated']:,.0f}")
+                            _ocol3.metric("Additional patients treated", f"+{_fmt_sigfig(_opt_final_stats['total_rt_treated'] - stats['total_rt_treated'])}")
+
 
 # ---------------------------------------------------------------------------
 # Geography-Only tab
@@ -2643,9 +3139,9 @@ with tab_geo:
             _geo_unreachable_pct = _geo_unreachable_pop / _geo_pop_total * 100 if _geo_pop_total > 0 else 0.0
             st.caption(
                 f"**Unreachable hexes:** {int(_geo_unreachable_mask.sum()):,} hexes · "
-                f"population {_geo_unreachable_pop:,.0f} ({_geo_unreachable_pct:.1f}% of total) · "
-                f"TravelTime returns no route when a hex centroid cannot be snapped to the road network "
-                f"(e.g. isolated area, lake, or river)."
+                f"population {_fmt_sigfig(_geo_unreachable_pop)} ({_geo_unreachable_pct:.1f}% of total) · "
+                f"(Note: TravelTime returns no route when a hex centroid cannot be snapped to the road network, "
+                f"e.g. isolated area, lake, or river)."
             )
 
 # ---------------------------------------------------------------------------
@@ -3006,7 +3502,7 @@ with tab_toy:
             "PopulationDensity.png",
             "Step 1 — Population Density",
             "The spatial distribution of population across the region, sourced from the "
-            "Kontur H3 dataset. Each hexagon represents the number of people living within "
+            "Kontur H3 dataset. Each hexagon represents the number of population living within "
             "that cell. This forms the base layer for all subsequent calculations.",
         ),
         (

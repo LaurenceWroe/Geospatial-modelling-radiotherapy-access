@@ -29,9 +29,9 @@ _AFRICA = [
     "DZ", "AO", "BJ", "BW", "BF", "BI", "CM", "CV", "CF", "TD",
     "KM", "CG", "CD", "CI", "DJ", "EG", "ER", "SZ", "ET", "GA",
     "GM", "GH", "GN", "GW", "KE", "LS", "LR", "LY", "MG", "MW",
-    "ML", "MR", "MU", "MA", "MZ", "NA", "NE", "NG", "RW", "ST",
-    "SN", "SL", "SO", "ZA", "SS", "SD", "TZ", "TG", "TN", "UG",
-    "ZM", "ZW",
+    "ML", "MR", "MU", "MA", "MZ", "NA", "NE", "NG", "RW", "RE",
+    "ST", "SN", "SL", "SO", "ZA", "SS", "SD", "TZ", "TG", "TN",
+    "UG", "ZM", "ZW",
 ]
 
 # Russia included here — GLOBOCAN classifies RUS in Europe
@@ -43,7 +43,7 @@ _EUROPE = [
     "SE", "CH", "UA", "GB", "VA",
 ]
 
-_NORTHERN_AMERICA = ["CA", "US"]
+_NORTHERN_AMERICA = ["CA", "PR", "US"]
 
 _SOUTH_AMERICA = [
     "AR", "BO", "BR", "CL", "CO", "EC", "GY", "PY", "PE", "SR",
@@ -53,12 +53,12 @@ _SOUTH_AMERICA = [
 _CENTRAL_AMERICA = ["BZ", "CR", "SV", "GT", "HN", "MX", "NI", "PA"]
 
 _CARIBBEAN = [
-    "AG", "BS", "BB", "CU", "DM", "DO", "GD", "HT", "JM", "KN",
-    "LC", "VC", "TT", "TC", "VG",
+    "AG", "AW", "BM", "BS", "BB", "CU", "CW", "DM", "DO", "GD",
+    "GP", "HT", "JM", "KN", "LC", "MQ", "VC", "TT", "TC", "VG",
 ]
 
 # GLOBOCAN "Eastern Asia"
-_EAST_ASIA = ["CN", "JP", "KP", "KR", "MN"]
+_EAST_ASIA = ["CN", "HK", "JP", "KP", "KR", "MN", "MO", "TW"]
 
 # GLOBOCAN "South Central Asia" — Southern Asia + Central Asia
 # Iran (IR) is in this grouping per GLOBOCAN (not Western Asia)

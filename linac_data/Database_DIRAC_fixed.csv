@@ -850,7 +850,7 @@ Egypt,Minya,Minia Oncology Center (M.O.C.) Ministry of Health and Population,2,0
 Egypt,Minya,El Menia Military Oncology center,1,0,0,0,2021.0,28.2125404,30.9123741
 Egypt,Port Said,Al Soltman Hospital,2,0,0,0,2018.0,31.263235,32.305505
 Egypt,Samalout,Samalout Hospital- ElMenya,1,0,0,0,2018.0,28.3139451,30.7103366
-Egypt,Shebeen El Koum,Shebeen El Koum Military Oncology Center,1,0,0,0,2018.0,,
+Egypt,Shebeen El Koum,Shebeen El Koum Military Oncology Center,1,0,0,0,2018.0,30.557,31.02
 Egypt,Shebin El Koum,Shebin El Koum Private Center,1,0,0,0,2018.0,30.550334,31.0106341
 Egypt,Sohag,Sohag Cancer Institute,2,0,0,1,2018.0,26.5590737,31.6956705
 Egypt,Sohag,Sohag University Hospital (SUH),2,0,0,1,2018.0,26.5671514,31.7073872
@@ -859,7 +859,7 @@ Egypt,Suez,Suez Military Oncology Center,1,0,0,0,2018.0,29.9667903,32.5498277
 Egypt,Tanta,Tanta Cancer Centre,1,0,0,0,2018.0,30.80172,30.9954649
 Egypt,Tanta,Tanta Military Oncology Center,1,0,0,0,2018.0,30.7865086,31.0003757
 Egypt,Tanta,Gharbia Cancer Society (GCS),2,0,0,0,2018.0,30.8753556,31.03351
-Egypt,Zagazek,Zagazek Military Oncology Center,1,0,0,0,2018.0,,
+Egypt,Zagazek,Zagazek Military Oncology Center,1,0,0,0,2018.0,30.588,31.502
 Egypt,Zagazig,Zagazig University Hospital,2,0,0,0,2018.0,30.5850061,31.4873074
 El Salvador,Colonia Zacamil,Centro Nacional de Radioterapia,2,0,0,0,2018.0,13.7281717,-89.2059516
 El Salvador,El Salvador,Centro Nacional De Radioterapia,2,0,0,0,2022.0,13.7281717,-89.2059516
@@ -3740,8 +3740,8 @@ China,Emei,Emei Shandong District Hospital,2,0,0,0,2024.0,36.6682599,117.02076
 China,Emeishan,Emeishan Foguang Hospital,1,0,0,0,2024.0,29.61726,103.50179
 China,Enshi,Minda Hospital Affiliated to Hubei University for Nationalities,1,0,0,0,2024.0,29.1894932,75.4961962
 China,Enshi City,Enshi Canton Central Hospital,4,0,0,1,2024.0,30.2721699,109.48817
-China,Erdos City,Erdos Guangsha Hospital,1,0,0,0,2024.0,,
-China,Erdos City,Erdos Central Hospital,1,0,0,0,2024.0,,
+China,Erdos City,Erdos Guangsha Hospital,1,0,0,0,2024.0,39.823,110.003
+China,Erdos City,Erdos Central Hospital,1,0,0,0,2024.0,39.82379,110.00311
 China,Ezhou City,No. 1 Ezhou Central Hospital,1,0,0,0,2024.0,30.3987825,114.8819099
 China,Feicheng City,The People's Hospital in Feicheng City,1,0,0,0,2024.0,36.1824499,116.76917
 China,Feicheng City,"Central Hospital, Feicheng Coal Mining Bureau",2,0,0,0,2024.0,34.9760007,118.294182
@@ -3792,7 +3792,7 @@ China,Gong'an,Gong'an County People's Hospital,1,0,0,0,2024.0,29.8821389,111.909
 China,Gongy,Gongyi City People's Hospital,1,0,0,0,2024.0,34.7479799,113.02206
 China,Guang'an,Guang'an People's Hospital,1,0,0,0,2024.0,30.4747709,106.6388775
 China,Guangrao County,The People's Hospital in Guangrao County,1,0,0,0,2024.0,37.0535899,118.40702
-China,Guangyao County,Guangyao People's Hospital,1,0,0,0,2024.0,,
+China,Guangyao County,Guangyao People's Hospital,1,0,0,0,2024.0,37.049,118.413
 China,Guangyuan,The First People's Hospital of Guangyuan City,1,0,0,0,2024.0,32.4354899,105.84357
 China,Guangyuan City,Guangyuan People's Hospital,2,0,0,1,2024.0,32.4354899,105.84357
 China,Guangzhou,Jinshazhou Hospital of Guangzhou University of Chinesse Medicine,2,0,0,0,2024.0,23.16068,113.20596
@@ -4009,7 +4009,7 @@ China,Jilin,Jilin Central Hospital,1,0,0,2,2024.0,43.841246,126.563971
 China,Jilin,Affiliated Hospital of Beihua University,1,0,0,0,2024.0,43.808842,126.56335
 China,Jilin City,The 2nd People's Hospital in Jilin,3,0,0,1,2024.0,43.8378399,126.54944
 China,Jilin City,"Jihua Group General Hospital (The second Affiliated Hospital, Beihua University)",3,0,0,0,2024.0,43.8349669,126.5438702
-China,Jimo City,The People's Hospital in Jimo City,1,0,0,0,2024.0,,
+China,Jimo City,The People's Hospital in Jimo City,1,0,0,0,2024.0,36.39,120.462
 China,Jinan,Jinan People's Hospital,1,0,0,0,2024.0,36.6518399,117.12009
 China,Jinan,Jinan No.5 People's Hospital,1,0,0,0,2024.0,36.653915,116.960812
 China,Jinan,Jiyang People's Hospital,1,0,0,0,2024.0,36.964339,117.16449
@@ -4047,7 +4047,7 @@ China,Jingxing,Jingxing County Hospital,2,0,0,0,2024.0,38.0322499,114.14532
 China,Jingzhou,Jianli County People's Hospital,1,0,0,0,2024.0,29.83706,112.90965
 China,Jingzhou City,Jingzhou Cancer Hospital ( Jingzhou First People's Hospital),3,0,1,0,2024.0,30.37107,114.32095
 China,Jingzhou City,Jingzhou Central Hospital,3,0,0,1,2024.0,30.353038,112.194049
-China,"Jinhu Town, Jianhu County",The People's Hospital in Jianhu City,1,0,0,0,2024.0,,
+China,"Jinhu Town, Jianhu County",The People's Hospital in Jianhu City,1,0,0,0,2024.0,33.44,119.784
 China,Jinhua City,Jinhua Central Hospital,1,0,0,1,2024.0,29.106072,119.658496
 China,Jinhua City,Jinhua Guangfu Hospital,1,0,0,1,2024.0,29.119493,119.643213
 China,Jining,Jining Psychiatric Hospital,2,0,0,0,2024.0,35.4145899,116.58724
@@ -4074,7 +4074,7 @@ China,Jiyuan City,Jiyuan Cancer Hospital,1,0,0,0,2024.0,35.0670699,112.60273
 China,Jiyuan City,Zhicheng People's Hospital (Zhicheng Township Health Center),1,0,0,0,2024.0,26.0487882,119.2396966
 China,Julu County,Julu County Hospital,2,0,0,0,2024.0,37.2210699,115.0378099
 China,Junan County,Junan People's Hospital,1,0,0,0,2024.0,35.1782704,118.8465475
-China,Junxian (Jun County),Junxian People's Hospital,2,0,0,0,2024.0,,
+China,Junxian (Jun County),Junxian People's Hospital,2,0,0,0,2024.0,35.6943,114.5389
 China,Juxian (Ju County),Juxian Traditional Chinese Medicine Hospital,2,0,0,0,2024.0,35.5799699,118.83687
 China,Kaifeng,Huaihe Hospital of Henan University,1,0,0,0,2024.0,34.808921,114.369752
 China,Kaifeng,Kaifeng Central Hospital,1,0,0,0,2024.0,34.7972599,114.30731
@@ -4231,7 +4231,7 @@ China,Maanshan City,The People’s Hospital in Maanshan,1,0,0,0,2024.0,31.701411
 China,Maanshan City,The Center Hospital of MaAnShan (Magang Group Hospital),2,0,0,0,2024.0,31.6733015,118.5118061
 China,Macheng,Macheng People's Hospital of Hubei Province,1,0,0,0,2024.0,31.1733299,115.00869
 China,Maoming City,Maoming Cancer Hospital,3,0,1,1,2024.0,21.6632899,110.92523
-China,Matou Zhouzhou,Yizhou International Cancer Hospital,5,1,0,0,2024.0,,
+China,Matou Zhouzhou,Yizhou International Cancer Hospital,5,1,0,0,2024.0,39.483,115.967
 China,Meihekou,Meihekou Central Hospital,1,0,0,0,2024.0,42.53411,125.69536
 China,Meishan,Meishan Cancer Hospital,2,0,0,0,2024.0,30.0756299,103.84851
 China,"Meishan City, Dongpo District",The People's Hospital in Meishan City,1,0,0,0,2024.0,30.0756299,103.84851

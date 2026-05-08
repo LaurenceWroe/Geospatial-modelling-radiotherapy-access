@@ -43,13 +43,17 @@ _COUNTRY_ALIASES: dict[str, str] = {
     "Ireland": "Republic of Ireland",
     "Réunion": "Reunion",
     "Türkiye": "Turkey",
-    "Côte d'Ivoire": "Cote D'Ivoire",
+    "Côte d'Ivoire": "Cote D\u2019Ivoire",
     "Congo, The Democratic Republic of the": "Democratic Republic of Congo",
     "Lao People's Democratic Republic": "Laos",
     "Czechia": "Czech Republic",
     "Cabo Verde": "Cape Verde",
     "Timor-Leste": "East Timor",
     "Gambia": "The Gambia",
+    "Bosnia and Herzegovina": "Bosnia - Herzegovina",
+    "Bahrain": "Kingdom of Bahrain",
+    "Brunei Darussalam": "Brunei",
+    "Curaçao": "Curacao",
 }
 
 
