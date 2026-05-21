@@ -156,11 +156,11 @@ def _viridis_rgb(t: float) -> List[int]:
 
 def _rdylgn_rgb(t: float) -> List[int]:
     stops = [
-        [215, 25, 28],
-        [253, 174, 97],
-        [255, 255, 191],
-        [166, 217, 106],
-        [26, 150, 65],
+        [220, 50, 50],
+        [230, 120, 30],
+        [240, 200, 30],
+        [80, 190, 60],
+        [30, 120, 30],
     ]
     t = float(np.clip(t, 0, 1))
     n = len(stops) - 1
@@ -518,7 +518,6 @@ def _compute_access_travel_time(
 
 
 @st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False)
 def _compute_access_one_country_for_region(
     alpha2: str,
     lambda_km: float,
@@ -786,7 +785,7 @@ def _data_tab_optimal_rt() -> pd.DataFrame:
 _HEX_LAYER_ID = "hex-layer"
 
 
-def _build_hex_layer(df: pd.DataFrame) -> pdk.Layer:
+def _build_hex_layer(df: pd.DataFrame, opacity: float = 0.7) -> pdk.Layer:
     return pdk.Layer(
         "H3HexagonLayer",
         id=_HEX_LAYER_ID,
@@ -795,7 +794,7 @@ def _build_hex_layer(df: pd.DataFrame) -> pdk.Layer:
         get_fill_color="color",
         auto_highlight=True,
         pickable=True,
-        opacity=0.7,
+        opacity=opacity,
     )
 
 
@@ -866,7 +865,7 @@ def _build_linac_columns(
                     f"<b>{row_data['name']}</b><br/>"
                     + (f"{_city}<br/>" if _city else "")
                     + f"{int(row_data['n_linacs'])} LINAC{'s' if row_data['n_linacs'] != 1 else ''}"
-                    + (f"<br/>Capacity: {int(row_data['capacity']):,} pts/yr" if "capacity" in row_data else "")
+                    + (f"<br/>Capacity: {int(row_data['capacity']):,} pts/yr" if "capacity" in row_data and pd.notna(row_data['capacity']) else "")
                 ),
             })
         ind_df = pd.DataFrame(rows)
@@ -918,7 +917,7 @@ def _build_linac_columns(
                     f"<b>{row_data['name']}</b><br/>"
                     + (f"{_city}<br/>" if _city else "")
                     + f"{int(row_data['n_linacs'])} LINAC{'s' if row_data['n_linacs'] != 1 else ''}"
-                    + (f"<br/>Capacity: {int(row_data['capacity']):,} pts/yr" if "capacity" in row_data else "")
+                    + (f"<br/>Capacity: {int(row_data['capacity']):,} pts/yr" if "capacity" in row_data and pd.notna(row_data['capacity']) else "")
                 ),
             })
 
@@ -1023,12 +1022,12 @@ def _linac_legend_fig(dark: bool = False) -> plt.Figure:
     return fig
 
 
-def _render_discrete_legend(bounds: list, palette: list, unit: str, text_color: str = "black") -> None:
+def _render_discrete_legend(bounds: list, palette: list, unit: str, text_color: str = "black", title: str = "") -> None:
     """Render a discrete colour legend in the current column."""
     n = len(palette)
     def _hex_color(rgba):
         return "#{:02x}{:02x}{:02x}".format(rgba[0], rgba[1], rgba[2])
-    band_h = max(40, int(300 / n))
+    band_h = max(40, int(450 / n))
     items = []
     for i in range(n):
         color = _hex_color(palette[i])
@@ -1041,14 +1040,27 @@ def _render_discrete_legend(bounds: list, palette: list, unit: str, text_color: 
         items.append(
             f"<div style='display:flex;align-items:center;height:{band_h}px'>"
             f"<div style='background:{color};width:16px;height:{band_h - 2}px;flex-shrink:0;border-radius:2px'></div>"
-            f"<span style='font-size:18px;color:{text_color};margin-left:4px;line-height:1.2'>{label}</span></div>"
+            f"<span style='font-size:16px;color:{text_color};margin-left:4px;line-height:1.2'>{label}</span></div>"
         )
     _cr_color = "#aaa" if text_color == "white" else "#888"
     st.markdown(
-        f"<p style='font-size:10px;font-family:monospace;color:{_cr_color};margin:0;text-align:center;'>© RadMaps 2025</p>",
+        # f"<p style='font-size:13px;font-family:monospace;color:{_cr_color};margin:0;text-align:center;'>© RadMaps 2026</p>",
+        f"<p style='font-size:12px;font-family:monospace;color:{_cr_color};margin:-7px;text-align:center;'>© RadMaps 2026</p>",
         unsafe_allow_html=True,
     )
-    st.markdown("<div style='margin-top:8px'>" + "".join(items) + "</div>", unsafe_allow_html=True)
+    title_html = (
+        f"<div style='writing-mode:vertical-rl;transform:rotate(180deg);font-size:20px;"
+        f"color:{text_color};white-space:nowrap;align-self:center;"
+        f"margin-right:-4px'>{title}</div>"
+        if title else ""
+    )
+    st.markdown(
+        f"<div style='display:flex;flex-direction:row;align-items:stretch;margin-top:8px'>"
+        f"{title_html}"
+        f"<div>{''.join(items)}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_map_no_cb(layers, view: pdk.ViewState, dark: bool, on_select=None):
@@ -1068,8 +1080,9 @@ def _render_map_no_cb(layers, view: pdk.ViewState, dark: bool, on_select=None):
         else:
             st.pydeck_chart(deck, use_container_width=True)
     with col_cb:
+        _cr_color_nocb = "#aaa" if dark else "#888"
         st.markdown(
-            "<p style='font-size:10px;font-family:monospace;color:#888;margin:0;text-align:center;'>© RadMaps 2025</p>",
+            f"<p style='font-size:12px;font-family:monospace;color:{_cr_color_nocb};margin:-7px;text-align:center;'>© RadMaps 2026</p>",
             unsafe_allow_html=True,
         )
     return chart_state
@@ -1108,7 +1121,7 @@ def _render_with_colorbar(
     with col_cb:
         _cr_color = "#aaa" if (dark or dark_text) else "#888"
         st.markdown(
-            f"<p style='font-size:10px;font-family:monospace;color:{_cr_color};margin:0;text-align:center;'>© RadMaps 2025</p>",
+            f"<p style='font-size:12px;font-family:monospace;color:{_cr_color};margin:-7px;text-align:center;'>© RadMaps 2026</p>",
             unsafe_allow_html=True,
         )
         fig = _colorbar_fig(cmap_fn, vmin, vmax, cb_label, log_scale=log_scale, text_color="white" if (dark or dark_text) else "black", clamp=clamp)
@@ -1222,6 +1235,8 @@ if "_session_init" not in st.session_state:
             "gdf_out": _cached["gdf_out"],
             "stats": _cached["stats"],
             "region_percountry": True,
+            "linac_locs_tuple": None,
+            "facilities_df": None,
         })
         st.session_state.setdefault("_map_generated", True)
 
@@ -1270,7 +1285,7 @@ with st.sidebar:
         )
     else:
         h3_resolution = st.selectbox(
-            "H3 resolution", options=[7, 6, 5, 4, 3], index=2,
+            "H3 resolution", options=[7, 6, 5, 4, 3], index=3,
             format_func=lambda r: {
                 7: "H7 (~5 km²)", 6: "H6 (~36 km²)",
                 5: "H5 (~253 km²)", 4: "H4 (~1,770 km²)", 3: "H3 (~12,400 km²)",
@@ -1350,9 +1365,10 @@ with st.sidebar:
 
     if use_travel_time:
         if h3_resolution not in _TT_SUPPORTED_RES:
-            st.warning(
-                f"TravelTime H3 API supports resolutions 5–12. "
-                f"Resolution {h3_resolution} is not supported."
+            st.info(
+                f"Resolution {h3_resolution} is not supported by the TravelTime API directly. "
+                "Travel times will be aggregated from a resolution 5 matrix using population-weighted averaging. "
+                "Compute a resolution 5 matrix first if one does not yet exist."
             )
         st.markdown("**TravelTime API credentials** [(get a key)](https://traveltime.com/)")
         _tt_default_app_id = st.secrets.get("traveltime", {}).get("app_id", "")
@@ -1418,7 +1434,7 @@ with st.sidebar:
     if is_access:
         access_display_metric = st.selectbox(
             "RT Access display metric",
-            ["Modelled Access Deficit", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability"],
+            ["Modelled Access Deficit", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability", "RT Demand"],
             index=0,
         )
 
@@ -1443,7 +1459,6 @@ with st.sidebar:
         st.session_state["_map_result"] = None
         st.session_state["_opt_result"] = None
         st.session_state["_last_calc_fingerprint"] = _calc_fingerprint
-        st.session_state["_switch_to_map_tab"] = True
 
     st.divider()
 
@@ -1481,6 +1496,10 @@ with st.sidebar:
             _disc_default, _disc_step = 450.0, 50.0
         elif is_nearest:
             _disc_default, _disc_step = (30.0, 5.0) if use_travel_time else (50.0, 10.0)
+        elif map_type == "Radiotherapy Demand":
+            _disc_default, _disc_step = 100.0, 10.0
+        elif map_type == "Cancer Incidence":
+            _disc_default, _disc_step = 200.0, 20.0
         else:
             _disc_default, _disc_step = 60.0, 5.0
         _disc_key = f"disc_base_{map_type}_{access_display_metric}_{'tt' if (is_nearest and use_travel_time) else 'km'}"
@@ -1497,8 +1516,8 @@ with st.sidebar:
     _binary_threshold = _discrete_base
 
     _count_maps = {"Population Density", "Cancer Incidence", "Radiotherapy Demand"}
-    _count_access_metrics = {"Modelled Access", "Modelled Access Deficit"}
-    _supports_per_km2 = map_type in _count_maps or (is_access and access_display_metric in _count_access_metrics)
+    _count_access_metrics = {"Modelled Accessed", "Modelled Access Deficit"}
+    _supports_per_km2 = map_type in _count_maps or (is_access and access_display_metric in (_count_access_metrics | {"RT Demand"}))
     density_per_km2: bool = False
     _show_cb_controls = not _no_hex
     if _supports_per_km2 and _show_cb_controls:
@@ -1516,10 +1535,16 @@ with st.sidebar:
             cb_vmin_user = st.number_input("Min value", value=0.0, format="%.4g")
             cb_vmax_user = st.number_input("Max value", value=1.0, format="%.4g")
 
+    hex_opacity = st.slider(
+        "Hexagon transparency", min_value=0, max_value=100, value=30,
+        format="%d%%",
+        help="Opacity of the hex fill layer (0 = fully transparent, 100 = fully opaque).",
+    )
+    _hex_opacity_f = (100 - hex_opacity) / 100.0
+
     if st.button("Update Map", use_container_width=True,
                  help="Re-render with current display settings — no recomputation."):
         st.session_state["_map_generated"] = True
-        st.session_state["_switch_to_map_tab"] = True
 
     generate = st.session_state.get("_map_generated", False)
 
@@ -1541,6 +1566,7 @@ with st.sidebar:
         _tower_style_label = st.radio(
             "Tower style",
             ["Individual (tower per centre)", "Stacked (tower per hex)"],
+            index=1,
             horizontal=False,
         )
         linac_tower_style = "individual" if "Individual" in _tower_style_label else "stacked"
@@ -1568,15 +1594,16 @@ CARTO_DARK  = _CARTO_DARK_LABELS  if show_map_labels else _CARTO_DARK_NOLABELS
 # ---------------------------------------------------------------------------
 
 def _color_values(values: np.ndarray, cmap_fn, auto_vmin: float, auto_vmax: float,
-                  invert_binary: bool = False):
+                  invert_binary: bool = False, disc_base: float | None = None):
     """Apply colormap using user or auto range, optionally in log/binary space.
 
     invert_binary: when True, above-threshold = red (for metrics where high = bad).
+    disc_base: override the sidebar _discrete_base for auto-scaled discrete maps.
     """
     vmin = cb_vmin_user if not cb_auto and cb_vmin_user is not None else auto_vmin
     vmax = cb_vmax_user if not cb_auto and cb_vmax_user is not None else auto_vmax
     if _discrete_scale:
-        _bounds = [n * _discrete_base for n in range(1, _discrete_steps)]
+        _bounds = [n * (disc_base if disc_base is not None else _discrete_base) for n in range(1, _discrete_steps)]
         if invert_binary:
             _palette = list(reversed(_DISCRETE_PALETTE[:_discrete_steps]))
         else:
@@ -1609,19 +1636,9 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_map, tab_data, tab_geo, tab_cap, _tab_sep1, tab_intro, tab_method, tab_assumptions, _tab_sep2, tab_toy, tab_model = st.tabs([
-    "🗺️ RT Access", "📊 Data", "🌍 Geography-Only", "⚡ Capacity-Only", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
+tab_data, _tab_sep0, tab_map, tab_cap, tab_geo, _tab_sep1, tab_plan, _tab_sep2, tab_intro, tab_method, tab_assumptions, _tab_sep3, tab_toy, tab_model = st.tabs([
+    "📊 Data", "│", "🗺️ RT Access", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
 ])
-
-if st.session_state.pop("_switch_to_map_tab", False):
-    import streamlit.components.v1 as _components
-    _components.html(
-        "<script>setTimeout(function(){"
-        "var t=window.parent.document.querySelectorAll('[data-baseweb=\"tab\"]');"
-        "if(t.length>0)t[0].click();"
-        "},120);</script>",
-        height=0,
-    )
 
 # ---------------------------------------------------------------------------
 # Data tab — always available, no Generate button required
@@ -2041,7 +2058,7 @@ with tab_map:
 
             df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
             _pop_pitch = 30.0 if (show_linac_markers and map_pitch_on and facilities_df is not None and not facilities_df.empty) else 0.0
-            _pop_layers = [] if _no_hex else [_build_hex_layer(df)]
+            _pop_layers = [] if _no_hex else [_build_hex_layer(df, _hex_opacity_f)]
             if show_linac_markers and facilities_df is not None and not facilities_df.empty:
                 _pop_layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
             if _no_hex:
@@ -2111,7 +2128,8 @@ with tab_map:
 
                     auto_vmin = float(max(plot_vals_c.min(), 0.001))
                     auto_vmax = float(plot_vals_c.max())
-                    colors, vmin, vmax = _color_values(plot_vals_c, cb_cmap_fn, auto_vmin, auto_vmax)
+                    colors, vmin, vmax = _color_values(plot_vals_c, cb_cmap_fn, auto_vmin, auto_vmax,
+                                                       invert_binary=(map_type == "Radiotherapy Demand"))
 
                     gdf = gdf.copy()
                     gdf["color"] = colors
@@ -2141,11 +2159,29 @@ with tab_map:
 
                     df = pd.DataFrame({"h3": gdf["h3"], "color": gdf["color"], "tip": gdf["tip"]})
                     _cancer_pitch = 30.0 if (show_linac_markers and map_pitch_on and facilities_df is not None and not facilities_df.empty) else 0.0
-                    _cancer_layers = [] if _no_hex else [_build_hex_layer(df)]
+                    _cancer_layers = [] if _no_hex else [_build_hex_layer(df, _hex_opacity_f)]
                     if show_linac_markers and facilities_df is not None and not facilities_df.empty:
                         _cancer_layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
+                    _cancer_invert_binary = map_type == "Radiotherapy Demand"
                     if _no_hex:
                         _render_map_no_cb(_cancer_layers, _make_view(gdf, pitch=_cancer_pitch), dark_mode)
+                    elif _discrete_scale:
+                        _canc_map_col, _canc_leg_col = st.columns([7, 1])
+                        with _canc_map_col:
+                            st.pydeck_chart(pdk.Deck(
+                                layers=_cancer_layers,
+                                initial_view_state=_make_view(gdf, pitch=_cancer_pitch),
+                                map_style=CARTO_DARK if dark_mode else CARTO_LIGHT,
+                                tooltip={"html": "{tip}"},
+                            ), use_container_width=True)
+                        with _canc_leg_col:
+                            _canc_disc_palette = list(reversed(_DISCRETE_PALETTE[:_discrete_steps])) if _cancer_invert_binary else _DISCRETE_PALETTE[:_discrete_steps]
+                            _render_discrete_legend(
+                                [n * _discrete_base for n in range(1, _discrete_steps)],
+                                _canc_disc_palette,
+                                "", "white" if (dark_mode or app_dark_mode) else "black",
+                                title=label,
+                            )
                     else:
                         _render_with_colorbar(
                             _cancer_layers,
@@ -2234,26 +2270,58 @@ with tab_map:
                     _tt_cache_file = _TT_CACHE_DIR / f"{_tt_cache_key}_{tt_mode}.npz"
 
                     if not _tt_cache_file.exists():
-                        _tt_progress = st.progress(0, text="Fetching travel times from TravelTime API…")
-                        def _tt_cb(done, total):
-                            _tt_progress.progress(
-                                min(done / max(total, 1), 1.0),
-                                text=f"Travel time API: request {done}/{total}…",
+                        if h3_resolution not in _TT_SUPPORTED_RES:
+                            # Aggregate from resolution 5 — try matching time budget first, then max (10h)
+                            _res5_candidates = [
+                                f"{iso3}_res5_{_tt_max_h}h_{_linac_hash}",
+                                f"{iso3}_res5_10h_{_linac_hash}",
+                            ]
+                            _res5_cache_key = next(
+                                (k for k in _res5_candidates
+                                 if (_TT_CACHE_DIR / f"{k}_{tt_mode}.npz").exists()),
+                                None,
                             )
-                        try:
-                            _, _tt_errors = compute_travel_time_matrix(
-                                _hex_ids, _linac_ll, h3_resolution, tt_mode,
-                                tt_app_id, tt_api_key,
-                                cache_key=_tt_cache_key,
-                                progress_callback=_tt_cb,
-                                max_travel_time_sec=tt_max_travel_time_sec,
-                            )
-                            _tt_progress.empty()
-                            if _tt_errors:
-                                st.warning("Some TravelTime batches failed: " + "; ".join(_tt_errors))
-                        except Exception as _e:
-                            st.error(f"TravelTime API error: {_e}")
-                            st.stop()
+                            if _res5_cache_key is None:
+                                st.error(
+                                    f"No resolution 5 travel time matrix found for {iso3} with these LINACs. "
+                                    "Switch to resolution 5, fetch the matrix, then return to resolution "
+                                    f"{h3_resolution}."
+                                )
+                                st.stop()
+                            with st.spinner(f"Aggregating resolution 5 → {h3_resolution} travel times…"):
+                                from data.travel_time import aggregate_tt_matrix as _aggregate_tt_matrix
+                                _mat_res5 = np.load(_TT_CACHE_DIR / f"{_res5_cache_key}_{tt_mode}.npz")["matrix"]
+                                _gdf_res5 = _load_pop_region(country, 5) if _is_region else _load_pop(country, 5)
+                                _mat_agg = _aggregate_tt_matrix(
+                                    _mat_res5,
+                                    list(_gdf_res5["h3"]),
+                                    _gdf_res5["population"].to_numpy(dtype=np.float64),
+                                    _hex_ids,
+                                    target_resolution=h3_resolution,
+                                )
+                            _TT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                            np.savez_compressed(_tt_cache_file, matrix=_mat_agg)
+                        else:
+                            _tt_progress = st.progress(0, text="Fetching travel times from TravelTime API…")
+                            def _tt_cb(done, total):
+                                _tt_progress.progress(
+                                    min(done / max(total, 1), 1.0),
+                                    text=f"Travel time API: request {done}/{total}…",
+                                )
+                            try:
+                                _, _tt_errors = compute_travel_time_matrix(
+                                    _hex_ids, _linac_ll, h3_resolution, tt_mode,
+                                    tt_app_id, tt_api_key,
+                                    cache_key=_tt_cache_key,
+                                    progress_callback=_tt_cb,
+                                    max_travel_time_sec=tt_max_travel_time_sec,
+                                )
+                                _tt_progress.empty()
+                                if _tt_errors:
+                                    st.warning("Some TravelTime batches failed: " + "; ".join(_tt_errors))
+                            except Exception as _e:
+                                st.error(f"TravelTime API error: {_e}")
+                                st.stop()
 
                     with st.spinner("Computing accessibility…"):
                         gdf_out, stats = _compute_access_travel_time(
@@ -2293,7 +2361,10 @@ with tab_map:
                             weibull_k=float(weibull_k),
                             custom_rtu=access_custom_rtu,
                         )
-                st.session_state["_map_result"] = {"gdf_out": gdf_out, "stats": stats, "region_percountry": _region_percountry}
+                st.session_state["_map_result"] = {
+                    "gdf_out": gdf_out, "stats": stats, "region_percountry": _region_percountry,
+                    "linac_locs_tuple": linac_locs_tuple, "facilities_df": facilities_df,
+                }
 
                 # Persist world default to disk so future sessions load instantly
                 _wp = _WORLD_DEFAULT_PARAMS
@@ -2370,7 +2441,7 @@ with tab_map:
                 )
 
                 _near_df = pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
-                layers = [] if _no_hex else [_build_hex_layer(_near_df)]
+                layers = [] if _no_hex else [_build_hex_layer(_near_df, _hex_opacity_f)]
                 if show_linac_markers:
                     layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
 
@@ -2394,7 +2465,8 @@ with tab_map:
                     with _leg_col:
                         _disc_bounds_near = [n * _discrete_base for n in range(1, _discrete_steps)]
                         _render_discrete_legend(_disc_bounds_near, _DISCRETE_PALETTE[:_discrete_steps], _near_tip_unit,
-                                                "white" if (dark_mode or app_dark_mode) else "black")
+                                                "white" if (dark_mode or app_dark_mode) else "black",
+                                                title=_near_label)
                 else:
                     _near_chart_state = _render_with_colorbar(
                         layers, _make_view(gdf_out, pitch=pitch),
@@ -2507,20 +2579,16 @@ with tab_map:
                     cb_label_access = "RT access deficit"
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
-                    _tip_prefix = "RT access deficit"
-                    _tip_extra = "RT accessed"
-                    _tip_extra_s = s_treated
                     metric_cmap_fn = _rdylgn_reversed_rgb
+                    tip_series = None  # built below in _count_access_metrics block
 
                 elif access_display_metric == "Modelled Accessed":
                     display_vals = gdf_out["rt_treated"].to_numpy(dtype=np.float64)
                     cb_label_access = "RT accessed"
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
-                    _tip_prefix = "RT accessed"
-                    _tip_extra = "RT access deficit"
-                    _tip_extra_s = s_untreated
                     metric_cmap_fn = _rdylgn_rgb
+                    tip_series = None  # built below in _count_access_metrics block
 
                 elif access_display_metric == "Modelled Access Ratio":
                     display_vals = cap_prob
@@ -2535,6 +2603,29 @@ with tab_map:
                         + "Hex area: " + _s_area_acc + " km²"
                     )
                     metric_cmap_fn = _rdylgn_rgb
+
+                elif access_display_metric == "RT Demand":
+                    display_vals = gdf_out["rt_demand"].to_numpy(dtype=np.float64)
+                    cb_label_access = "RT demand"
+                    auto_vmin_a = 0.0
+                    auto_vmax_a = float(np.nanmax(display_vals))
+                    metric_cmap_fn = _rdylgn_reversed_rgb
+                    _s_rt_demand_raw = gdf_out["rt_demand"].round(1).astype(str)
+                    if density_per_km2:
+                        display_vals = display_vals / (_areas_acc / 10)
+                        auto_vmax_a = float(np.nanmax(display_vals))
+                        cb_label_access += " per 10 km²"
+                    else:
+                        cb_label_access += " per hexagon"
+                    tip_series = (
+                        "<b>" + s_h3 + "</b><br/>"
+                        + "RT demand: " + _s_rt_demand_raw + "<br/>"
+                        + "RT accessed: " + s_treated + "<br/>"
+                        + "RT deficit: " + s_untreated + "<br/>"
+                        + "<hr style='margin:3px 0'/>"
+                        + "Population: " + s_pop_fmt + "<br/>"
+                        + "Hex area: " + _s_area_acc + " km²"
+                    )
 
                 else:  # Geographic Access Probability
                     display_vals = prob
@@ -2560,20 +2651,31 @@ with tab_map:
                         cb_label_access += " per 10 km²"
                     else:
                         cb_label_access += " per hexagon"
-                    tip_series = (
-                        "<b>" + s_h3 + "</b><br/>"
-                        + "Demand Accessed: " + s_treated + "<br/>"
-                        + "Total Demand: " + _s_rt_demand_raw + "<br/>"
-                        + "Percent Accessed: " + s_pct + "%<br/>"
-                        + "<hr style='margin:3px 0'/>"
-                        + "Population: " + s_pop_fmt + "<br/>"
-                        + "Hex area: " + _s_area_acc + " km²"
-                    )
+                    if access_display_metric == "Modelled Accessed":
+                        tip_series = (
+                            "<b>" + s_h3 + "</b><br/>"
+                            + "RT accessed: " + s_treated + "<br/>"
+                            + "RT access deficit: " + s_untreated + "<br/>"
+                            + "Percent accessed: " + s_pct + "%<br/>"
+                            + "<hr style='margin:3px 0'/>"
+                            + "Population: " + s_pop_fmt + "<br/>"
+                            + "Hex area: " + _s_area_acc + " km²"
+                        )
+                    else:  # Modelled Access Deficit
+                        tip_series = (
+                            "<b>" + s_h3 + "</b><br/>"
+                            + "RT access deficit: " + s_untreated + "<br/>"
+                            + "RT accessed: " + s_treated + "<br/>"
+                            + "Percent accessed: " + s_pct + "%<br/>"
+                            + "<hr style='margin:3px 0'/>"
+                            + "Population: " + s_pop_fmt + "<br/>"
+                            + "Hex area: " + _s_area_acc + " km²"
+                        )
 
                 _map_default_cmap = _DEFAULT_CMAP.get(map_type, "Green → Red")
                 active_cmap_fn = metric_cmap_fn if cb_cmap_name == _map_default_cmap else cb_cmap_fn
-                # For "Modelled Access Deficit", higher = worse → invert binary colours (above = red)
-                _acc_invert_binary = access_display_metric == "Modelled Access Deficit"
+                # For deficit/demand, higher = worse/more → invert binary colours (above = red)
+                _acc_invert_binary = access_display_metric in ("Modelled Access Deficit", "RT Demand")
                 colors, vmin, vmax = _color_values(display_vals, active_cmap_fn, auto_vmin_a, auto_vmax_a,
                                                    invert_binary=_acc_invert_binary)
 
@@ -2582,7 +2684,7 @@ with tab_map:
                 gdf_out["tip"] = tip_series.values
 
                 _acc_df = pd.DataFrame({"h3": gdf_out["h3"], "color": gdf_out["color"], "tip": gdf_out["tip"]})
-                layers = [] if _no_hex else [_build_hex_layer(_acc_df)]
+                layers = [] if _no_hex else [_build_hex_layer(_acc_df, _hex_opacity_f)]
                 if show_linac_markers:
                     layers.extend(_build_linac_columns(facilities_df, h3_res=h3_resolution, country_span_km=country_span_km, height_scale=tower_height_scale, radius_scale=tower_radius_scale, style=linac_tower_style, color=None if linac_multi_color else _LINAC_BLUE))
 
@@ -2616,7 +2718,8 @@ with tab_map:
                         _disc_palette_acc = list(reversed(_DISCRETE_PALETTE[:_discrete_steps])) if _acc_invert_binary else _DISCRETE_PALETTE[:_discrete_steps]
                         _disc_bounds_acc = [n * _discrete_base for n in range(1, _discrete_steps)]
                         _render_discrete_legend(_disc_bounds_acc, _disc_palette_acc, "",
-                                                "white" if (dark_mode or app_dark_mode) else "black")
+                                                "white" if (dark_mode or app_dark_mode) else "black",
+                                                title=cb_label_access)
                 else:
                     _acc_chart_state = _render_with_colorbar(
                         layers, _make_view(gdf_out, pitch=pitch),
@@ -2751,316 +2854,6 @@ with tab_map:
                 col2d.metric("Deficit ∆",
                              _pct_num((1.0 - _geo_access) * _demand, 1.0 - _geo_access),
                              help="Patients too far from any LINAC · % of RT demand")
-                # ---- Add Additional LINACs ------------------------------------
-                if is_access:
-                    st.divider()
-                    st.subheader("Add Additional LINACs")
-                    _add_tab_custom, _add_tab_opt = st.tabs(["Add Custom LINACs", "Suggest Optimal LINAC Placements"])
-
-                    # ── Custom LINACs tab ───────────────────────────────────────
-                    with _add_tab_custom:
-                        _click_mode_custom = st.toggle(
-                            "Click map to add LINACs", key="click_mode_toggle",
-                            help=(
-                                "Click a hexagon on the map to add a LINAC there, "
-                                "then press Calculate RT Access to recompute."
-                            ) if _PYDECK_CLICK_SUPPORTED else (
-                                "Enter coordinates below. "
-                                "Map-click support requires Streamlit ≥ 1.35 (current: " + st.__version__ + ")."
-                            ),
-                        )
-                        if _click_mode_custom and not _PYDECK_CLICK_SUPPORTED:
-                            _add_name = st.text_input("Name", value="Custom Centre", key="add_linac_name")
-                            _add_lat = st.number_input("Latitude", min_value=-90.0, max_value=90.0,
-                                                       value=0.0, format="%.5f", key="add_linac_lat")
-                            _add_lon = st.number_input("Longitude", min_value=-180.0, max_value=180.0,
-                                                       value=0.0, format="%.5f", key="add_linac_lon")
-                            _add_cap = st.number_input("Capacity (pts/yr)", min_value=1, value=450, step=50,
-                                                       key="add_linac_cap")
-                            if st.button("Add Centre", use_container_width=True, key="add_linac_btn"):
-                                _ex = st.session_state.setdefault("custom_linacs", [])
-                                _ex.append({
-                                    "name": _add_name or f"Custom Centre {len(_ex) + 1}",
-                                    "lat": round(_add_lat, 5),
-                                    "lon": round(_add_lon, 5),
-                                    "capacity": int(_add_cap),
-                                })
-                                st.rerun()
-                        _custom_now_tab = st.session_state.get("custom_linacs", [])
-                        if _custom_now_tab:
-                            st.caption(f"{len(_custom_now_tab)} custom centre(s) added — press **Calculate RT Access** to recompute.")
-                            _edited_custom = st.data_editor(
-                                pd.DataFrame(_custom_now_tab),
-                                column_config={
-                                    "name": st.column_config.TextColumn("Name"),
-                                    "lat": st.column_config.NumberColumn("Lat", format="%.5f"),
-                                    "lon": st.column_config.NumberColumn("Lon", format="%.5f"),
-                                    "capacity": st.column_config.NumberColumn("Capacity (pts/yr)", min_value=1, step=50, format="%d"),
-                                },
-                                num_rows="dynamic",
-                                use_container_width=True,
-                                key="custom_linacs_editor",
-                            )
-                            _cc1, _cc2 = st.columns(2)
-                            if _cc1.button("Apply edits", key="apply_custom_linacs"):
-                                st.session_state["custom_linacs"] = _edited_custom.dropna(subset=["lat", "lon"]).to_dict("records")
-                                st.rerun()
-                            if _cc2.button("Clear all", key="clear_custom_linacs"):
-                                st.session_state["custom_linacs"] = []
-                                st.rerun()
-
-                    # ── Suggest Optimal tab ─────────────────────────────────────
-                    with _add_tab_opt:
-                        _oc1, _oc2 = st.columns(2)
-                        _n_suggest = int(_oc1.number_input(
-                            "New facilities to suggest", min_value=1, max_value=999, value=3, step=1,
-                            key="opt_n",
-                        ))
-                        _machines_per_new = float(_oc2.number_input(
-                            "Machines per new facility", min_value=1, max_value=10, value=1, step=1,
-                            key="opt_machines",
-                        ))
-                        _opt_metric_label = st.radio(
-                            "Optimisation metric",
-                            [
-                                "Unmet RT demand (most patients without access)",
-                                "Geographic isolation (most distant population)",
-                            ],
-                            horizontal=True,
-                            key="opt_metric",
-                        )
-                        _opt_metric = "rt_access" if "Unmet" in _opt_metric_label else "geographic"
-
-                        _snap_to_existing = st.checkbox(
-                            "Add machines to nearest existing facility if it is within the distance threshold "
-                            "(rather than creating a new site)",
-                            key="opt_snap_enabled",
-                            help="When the optimal placement location is within the threshold distance of any "
-                                 "existing or already-suggested facility, the new machines are added there instead.",
-                        )
-                        if _snap_to_existing:
-                            _sc1, _sc2 = st.columns(2)
-                            _snap_km = float(_sc1.number_input(
-                                "Threshold — distance (km)", min_value=1, max_value=500, value=50, step=5,
-                                key="opt_snap_km",
-                            ))
-                            _snap_min = float(_sc2.number_input(
-                                "Threshold — travel time (min)", min_value=1, max_value=300, value=60, step=5,
-                                key="opt_snap_min",
-                                help="Travel-time threshold is only applied when a TravelTime matrix is available.",
-                            ))
-                        else:
-                            _snap_km = None
-                            _snap_min = None
-
-                        if st.button("Run optimisation", key="run_opt", type="primary"):
-                            from pyproj import Geod as _OptGeod
-                            _geod_opt = _OptGeod(ellps="WGS84")
-
-                            # Load TT matrix from cache if available (for snap threshold in minutes)
-                            _opt_tt_matrix = None
-                            if use_travel_time:
-                                _opt_tt_cache_file = _TT_CACHE_DIR / f"{_tt_cache_key}_{tt_mode}.npz"
-                                if _opt_tt_cache_file.exists():
-                                    _opt_tt_matrix = np.load(_opt_tt_cache_file)["matrix"]
-
-                            _opt_locs = list(linac_locs_tuple)
-                            _opt_gdf = gdf_out
-                            _opt_stats = stats
-                            _opt_suggested: list = []
-                            _opt_steps: list = []
-                            _opt_progress = st.progress(0, text="Running optimisation…")
-
-                            for _opt_step in range(_n_suggest):
-                                _olats = _opt_gdf["centroid_lat"].to_numpy()
-                                _olons = _opt_gdf["centroid_lon"].to_numpy()
-                                _opop = _opt_gdf["population"].to_numpy()
-
-                                if _opt_metric == "rt_access":
-                                    _oscores = _opt_gdf["rt_untreated"].to_numpy(dtype=np.float64)
-                                else:
-                                    _odist = _opt_gdf["nearest_linac_km"].fillna(0).to_numpy(dtype=np.float64)
-                                    _oscores = _odist * np.where(_opop > 0, _opop, 0.0)
-
-                                _obest = int(np.argmax(_oscores))
-                                _onew_lat = float(_olats[_obest])
-                                _onew_lon = float(_olons[_obest])
-
-                                # Snap to nearest existing/suggested facility if within threshold
-                                _snap_idx = None
-                                if _snap_km is not None:
-                                    _best_snap_dist_km = np.inf
-                                    for _si, (_sfl, _sfo, _sfw) in enumerate(_opt_locs):
-                                        _, _, _sdm = _geod_opt.inv(_sfo, _sfl, _onew_lon, _onew_lat)
-                                        _sdk = _sdm * 1e-3
-                                        _within = _sdk <= _snap_km
-                                        if not _within and _snap_min is not None and _opt_tt_matrix is not None:
-                                            if _si < _opt_tt_matrix.shape[1]:
-                                                _tt_val = float(_opt_tt_matrix[_obest, _si])
-                                                _within = np.isfinite(_tt_val) and _tt_val <= _snap_min
-                                        if _within and _sdk < _best_snap_dist_km:
-                                            _best_snap_dist_km = _sdk
-                                            _snap_idx = _si
-
-                                if _snap_idx is not None:
-                                    # Merge into existing facility — add machines there
-                                    _sfl, _sfo, _sfw = _opt_locs[_snap_idx]
-                                    _opt_locs[_snap_idx] = (_sfl, _sfo, _sfw + _machines_per_new)
-                                    _onew_lat, _onew_lon = _sfl, _sfo
-                                    _placement_note = f"Merged into existing facility ({_sfl:.3f}, {_sfo:.3f})"
-                                else:
-                                    _opt_locs.append((_onew_lat, _onew_lon, _machines_per_new))
-                                    _placement_note = "New facility"
-
-                                _onew_gdf, _onew_stats = _compute_access(
-                                    country, iso3, tuple(_opt_locs),
-                                    float(lambda_km), access_model, float(max_distance_km),
-                                    capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
-                                    h3_resolution, _is_region, snap_linacs_to_hex,
-                                    weibull_k=float(weibull_k),
-                                    custom_rtu=access_custom_rtu,
-                                )
-                                _oimprove = _onew_stats["total_rt_treated"] - _opt_stats["total_rt_treated"]
-                                _onew_ratio = (
-                                    _onew_stats["total_rt_treated"] / _onew_stats["total_rt_demand"]
-                                    if _onew_stats["total_rt_demand"] > 0 else 0.0
-                                )
-                                _opt_suggested.append({
-                                    "name": f"Suggested {_opt_step + 1}",
-                                    "lat": round(_onew_lat, 4),
-                                    "lon": round(_onew_lon, 4),
-                                    "n_linacs": _machines_per_new,
-                                })
-                                _opt_steps.append({
-                                    "Step": _opt_step + 1,
-                                    "Placement": _placement_note,
-                                    "Latitude": round(_onew_lat, 4),
-                                    "Longitude": round(_onew_lon, 4),
-                                    "RT treated improvement": f"+{_fmt_sigfig(_oimprove)}",
-                                    "Cumulative access ratio": f"{_onew_ratio:.1%}",
-                                })
-                                _opt_gdf = _onew_gdf
-                                _opt_stats = _onew_stats
-                                _opt_progress.progress(
-                                    (_opt_step + 1) / _n_suggest,
-                                    text=f"Step {_opt_step + 1}/{_n_suggest} — +{_fmt_sigfig(_oimprove)} patients treated",
-                                )
-
-                            _opt_progress.empty()
-                            st.session_state["_opt_result"] = {
-                                "suggested": _opt_suggested,
-                                "steps": _opt_steps,
-                                "final_gdf": _opt_gdf,
-                                "final_stats": _opt_stats,
-                                "final_locs": _opt_locs,
-                            }
-
-                        _opt_res = st.session_state.get("_opt_result")
-                        if _opt_res:
-                            _opt_sug = _opt_res["suggested"]
-                            _opt_final_gdf = _opt_res["final_gdf"]
-                            _opt_final_stats = _opt_res["final_stats"]
-                            _opt_final_locs = _opt_res["final_locs"]
-
-                            # Map showing final state — use same metric as the main display
-                            if access_display_metric == "Modelled Access Deficit":
-                                _opt_disp_col = "rt_untreated"
-                                _opt_cmap_fn = _rdylgn_reversed_rgb
-                                _opt_cb_label = "RT access deficit"
-                                _opt_tip_label = "RT access deficit"
-                                _opt_is_ratio = False
-                            elif access_display_metric == "Modelled Accessed":
-                                _opt_disp_col = "rt_treated"
-                                _opt_cmap_fn = _rdylgn_rgb
-                                _opt_cb_label = "RT access"
-                                _opt_tip_label = "RT access"
-                                _opt_is_ratio = False
-                            elif access_display_metric == "Modelled Access Ratio":
-                                _opt_disp_col = "capacity_limited_probability"
-                                _opt_cmap_fn = _rdylgn_rgb
-                                _opt_cb_label = "Modelled Access Ratio"
-                                _opt_tip_label = "Access ratio"
-                                _opt_is_ratio = True
-                            else:  # Geographic Access Probability
-                                _opt_disp_col = "access_probability"
-                                _opt_cmap_fn = _rdylgn_rgb
-                                _opt_cb_label = "Geographic Access Probability"
-                                _opt_tip_label = "Geo. access prob"
-                                _opt_is_ratio = True
-
-                            _opt_raw = _opt_final_gdf[_opt_disp_col].to_numpy(dtype=np.float64)
-                            if _opt_is_ratio:
-                                _opt_vmin, _opt_vmax = 0.0, 1.0
-                            else:
-                                _opt_vmin = float(np.nanmin(_opt_raw[_opt_raw > 0])) if np.any(_opt_raw > 0) else 0.0
-                                _opt_vmax = float(np.nanmax(_opt_raw)) if _opt_raw.size > 0 else 1.0
-                            _opt_colors, _, _ = _color_values(_opt_raw, _opt_cmap_fn, _opt_vmin, _opt_vmax)
-                            _opt_final_gdf = _opt_final_gdf.copy()
-                            _opt_final_gdf["color"] = _opt_colors
-                            if _opt_is_ratio:
-                                _opt_tip_val = (_opt_final_gdf[_opt_disp_col] * 100).round(1).astype(str) + "%"
-                            else:
-                                _opt_tip_val = _opt_final_gdf[_opt_disp_col].round(1).astype(str)
-                            _opt_final_gdf["tip"] = (
-                                "<b>" + _opt_final_gdf["h3"].astype(str) + "</b><br/>"
-                                + _opt_tip_label + " (optimised): " + _opt_tip_val
-                            )
-                            _opt_hex_layer = _build_hex_layer(
-                                pd.DataFrame({
-                                    "h3": _opt_final_gdf["h3"],
-                                    "color": _opt_final_gdf["color"],
-                                    "tip": _opt_final_gdf["tip"],
-                                })
-                            )
-
-                            _opt_existing_df = facilities_df.copy() if facilities_df is not None and not facilities_df.empty else pd.DataFrame()
-                            _opt_new_df = pd.DataFrame(_opt_sug)
-
-                            # Merge existing + new into one dataframe so stacked mode places
-                            # new machines physically on top of existing cylinders at the same site.
-                            _opt_combined_parts = []
-                            if show_linac_markers and not _opt_existing_df.empty:
-                                _ex = _opt_existing_df.copy()
-                                _ex["color"] = [[255, 180, 0, 240]] * len(_ex)   # gold
-                                _ex["_stack_order"] = 0  # existing → bottom of stack
-                                _opt_combined_parts.append(_ex)
-                            if not _opt_new_df.empty:
-                                _nw = _opt_new_df.copy()
-                                _nw["color"] = [[0, 180, 255, 240]] * len(_nw)   # bright blue
-                                _nw["_stack_order"] = 1  # new → top of stack
-                                _opt_combined_parts.append(_nw)
-
-                            _opt_layers = [_opt_hex_layer]
-                            if _opt_combined_parts:
-                                _opt_combined_df = pd.concat(_opt_combined_parts, ignore_index=True)
-                                _opt_layers.extend(_build_linac_columns(
-                                    _opt_combined_df, h3_res=h3_resolution,
-                                    country_span_km=country_span_km,
-                                    height_scale=tower_height_scale,
-                                    radius_scale=tower_radius_scale,
-                                    style=linac_tower_style,
-                                ))
-
-                            st.caption(f"Map shows **{access_display_metric}** after all suggested LINACs are added. Gold = existing facilities, blue = suggested placements.")
-                            _render_with_colorbar(
-                                _opt_layers, _make_view(_opt_final_gdf, pitch=30.0 if (show_linac_markers and map_pitch_on) else 0.0),
-                                _opt_cmap_fn, _opt_vmin, _opt_vmax, _opt_cb_label,
-                                dark=dark_mode, dark_text=app_dark_mode,
-                            )
-
-                            st.markdown(f"**{len(_opt_sug)} suggested placement(s)** — improvement over current configuration:")
-                            st.dataframe(
-                                pd.DataFrame(_opt_res["steps"]),
-                                use_container_width=True, hide_index=True,
-                            )
-
-                            # Before / after summary
-                            _ob_ratio = stats["total_rt_treated"] / stats["total_rt_demand"] if stats["total_rt_demand"] > 0 else 0.0
-                            _oa_ratio = _opt_final_stats["total_rt_treated"] / _opt_final_stats["total_rt_demand"] if _opt_final_stats["total_rt_demand"] > 0 else 0.0
-                            _ocol1, _ocol2, _ocol3 = st.columns(3)
-                            _ocol1.metric("Access ratio — before", f"{_ob_ratio:.1%}")
-                            _ocol2.metric("Access ratio — after", f"{_oa_ratio:.1%}", delta=f"+{(_oa_ratio - _ob_ratio):.1%}")
-                            _ocol3.metric("Additional patients treated", f"+{_fmt_sigfig(_opt_final_stats['total_rt_treated'] - stats['total_rt_treated'])}")
 
 
 # ---------------------------------------------------------------------------
@@ -3235,13 +3028,434 @@ with tab_cap:
         )
 
 # ---------------------------------------------------------------------------
+# Machine Planning tab
+# ---------------------------------------------------------------------------
+
+with tab_plan:
+    st.header("Machine Planning")
+    _plan_result = st.session_state.get("_map_result")
+    if _plan_result is None:
+        st.info("Run **Calculate RT Access** in the sidebar first.")
+    else:
+        _plan_gdf_out       = _plan_result["gdf_out"]
+        _plan_stats         = _plan_result["stats"]
+        _plan_locs_tuple    = _plan_result.get("linac_locs_tuple") or ()
+        _plan_facilities_df = _plan_result.get("facilities_df")
+
+        # If locs weren't cached (e.g. loaded from world default pkl), reload from DIRAC
+        if not _plan_locs_tuple:
+            try:
+                if _is_region:
+                    from data.linacs import load_linacs_for_region as _llr
+                    _plan_locs_raw, _plan_facilities_df = _llr(country)
+                else:
+                    from data.linacs import load_linacs_from_dirac_db as _lldb
+                    _plan_locs_raw, _plan_facilities_df = _lldb(country)
+                _plan_locs_tuple = tuple(_plan_locs_raw)
+            except Exception:
+                _plan_locs_tuple = ()
+
+        # country_span_km — needed for tower rendering
+        _plan_geom = _plan_gdf_out.geometry
+        _plan_lat_span = float(_plan_geom.bounds["maxy"].max() - _plan_geom.bounds["miny"].min())
+        _plan_lon_span = float(_plan_geom.bounds["maxx"].max() - _plan_geom.bounds["minx"].min())
+        _plan_lat_mid  = float((_plan_geom.bounds["maxy"].max() + _plan_geom.bounds["miny"].min()) / 2)
+        _plan_span_km  = max(
+            _plan_lat_span * 111.32,
+            _plan_lon_span * 111.32 * math.cos(math.radians(_plan_lat_mid)),
+        )
+
+        _has_any_additions = bool(
+            st.session_state.get("custom_linacs") or st.session_state.get("_opt_result")
+        )
+        if st.button("🔄 Reset — clear all added LINACs and optimisation results", type="secondary",
+                     use_container_width=True, disabled=not _has_any_additions):
+            st.session_state.pop("custom_linacs", None)
+            st.session_state.pop("_opt_result", None)
+            st.rerun()
+
+        _plan_tab_opt, _plan_tab_custom = st.tabs(["Suggest Optimal Placements", "Add Custom LINACs"])
+
+        # ── Custom LINACs ────────────────────────────────────────────────────
+        with _plan_tab_custom:
+            _click_mode_custom = st.toggle(
+                "Click map to add LINACs", key="click_mode_toggle",
+                help=(
+                    "Click a hexagon on the map to add a LINAC there, "
+                    "then press Calculate RT Access to recompute."
+                ) if _PYDECK_CLICK_SUPPORTED else (
+                    "Enter coordinates below. "
+                    "Map-click support requires Streamlit ≥ 1.35 (current: " + st.__version__ + ")."
+                ),
+            )
+            if _click_mode_custom and not _PYDECK_CLICK_SUPPORTED:
+                _add_name = st.text_input("Name", value="Custom Centre", key="add_linac_name")
+                _add_lat  = st.number_input("Latitude",  min_value=-90.0,  max_value=90.0,  value=0.0, format="%.5f", key="add_linac_lat")
+                _add_lon  = st.number_input("Longitude", min_value=-180.0, max_value=180.0, value=0.0, format="%.5f", key="add_linac_lon")
+                _add_cap  = st.number_input("Capacity (pts/yr)", min_value=1, value=450, step=50, key="add_linac_cap")
+                if st.button("Add Centre", use_container_width=True, key="add_linac_btn"):
+                    _ex = st.session_state.setdefault("custom_linacs", [])
+                    _ex.append({
+                        "name": _add_name or f"Custom Centre {len(_ex) + 1}",
+                        "lat": round(_add_lat, 5), "lon": round(_add_lon, 5),
+                        "capacity": int(_add_cap),
+                    })
+                    st.rerun()
+            _custom_now_tab = st.session_state.get("custom_linacs", [])
+            if _custom_now_tab:
+                st.caption(f"{len(_custom_now_tab)} custom centre(s) added — press **Calculate RT Access** to recompute.")
+                _edited_custom = st.data_editor(
+                    pd.DataFrame(_custom_now_tab),
+                    column_config={
+                        "name": st.column_config.TextColumn("Name"),
+                        "lat": st.column_config.NumberColumn("Lat", format="%.5f"),
+                        "lon": st.column_config.NumberColumn("Lon", format="%.5f"),
+                        "capacity": st.column_config.NumberColumn("Capacity (pts/yr)", min_value=1, step=50, format="%d"),
+                    },
+                    num_rows="dynamic", use_container_width=True, key="custom_linacs_editor",
+                )
+                _cc1, _cc2 = st.columns(2)
+                if _cc1.button("Apply edits", key="apply_custom_linacs"):
+                    st.session_state["custom_linacs"] = _edited_custom.dropna(subset=["lat", "lon"]).to_dict("records")
+                    st.rerun()
+                if _cc2.button("Clear all", key="clear_custom_linacs"):
+                    st.session_state["custom_linacs"] = []
+                    st.rerun()
+
+        # ── Suggest Optimal Placements ────────────────────────────────────────
+        with _plan_tab_opt:
+            if not _plan_locs_tuple:
+                st.warning("No LINAC location data available — recompute RT Access to enable optimisation.")
+            else:
+                # ---- Mode selector
+                _opt_mode = st.radio(
+                    "Optimisation mode", ["Add fixed number of facilities", "Add facilities up to threshold"],
+                    horizontal=True, key="opt_mode",
+                )
+                _oc1, _oc2 = st.columns(2)
+                _machines_per_new = float(_oc2.number_input(
+                    "Machines per new facility", min_value=1, max_value=10, value=1, step=1, key="opt_machines",
+                ))
+                if _opt_mode == "Add fixed number of facilities":
+                    _n_suggest = int(_oc1.number_input(
+                        "New facilities to suggest", min_value=1, max_value=9999, value=3, step=1, key="opt_n",
+                    ))
+                    _thresh_mode = None; _thresh_deficit = None; _thresh_distance = None; _thresh_access = None
+                    _opt_max_steps = _n_suggest
+                else:
+                    _oc1.number_input("Maximum facilities (safety cap)", min_value=1, max_value=9999, value=50, step=1, key="opt_n")
+                    _opt_max_steps = int(st.session_state.get("opt_n", 50))
+                    _thresh_mode = st.radio(
+                        "Threshold:",
+                        [
+                            "Access percentage",
+                            "Deficit per hexagon",
+                            "Distance to nearest LINAC",
+                        ],
+                        horizontal=True, key="opt_thresh_type",
+                    )
+                    _tc1, _tc2 = st.columns(2)
+                    if _thresh_mode == "Access percentage":
+                        _thresh_access   = float(_tc1.number_input("Target RadMaps access (%)", min_value=0.01, max_value=99.99, value=80.0, step=0.01, format="%.2f", key="opt_thresh_access")) / 100.0
+                        _thresh_deficit  = None; _thresh_distance = None
+                        _cur_demand      = float(_plan_stats.get("total_rt_demand", 0))
+                        _remaining_k     = _cur_demand * (1.0 - _thresh_access) / 1000.0
+                        _tc2.caption(f"Remaining deficit at target: **{_remaining_k:.1f} k** patients/yr")
+                    elif _thresh_mode == "Deficit per hexagon":
+                        _thresh_deficit  = float(_tc1.number_input("Max deficit per hexagon (patients/yr)", min_value=0.1, max_value=10000.0, value=10.0, step=1.0, key="opt_thresh_deficit"))
+                        _thresh_distance = None; _thresh_access = None
+                        _tc2.caption("Stops when no hexagon exceeds this unmet RT demand.")
+                    else:
+                        _thresh_distance = float(_tc1.number_input("Max distance to nearest LINAC (km)", min_value=1.0, max_value=2000.0, value=200.0, step=10.0, key="opt_thresh_dist"))
+                        _thresh_deficit  = None; _thresh_access = None
+                        _tc2.caption("Stops when every populated hexagon is within this distance of a LINAC.")
+                    _n_suggest = _opt_max_steps
+
+                _opt_metric_label = st.radio(
+                    "Placement / Optimisation metric",
+                    ["Highest Unmet RT Demand", "Most Geographically Isolated"],
+                    horizontal=True, key="opt_metric",
+                )
+                _opt_metric = "rt_access" if "Unmet" in _opt_metric_label else "geographic"
+
+                _snap_to_existing = st.checkbox(
+                    "Add machines to nearest existing facility if within distance threshold",
+                    key="opt_snap_enabled",
+                    help="When optimal placement is near an existing or already-suggested facility, add machines there instead.",
+                )
+                if _snap_to_existing:
+                    _sc1, _sc2 = st.columns(2)
+                    _snap_km  = float(_sc1.number_input("Threshold — distance (km)", min_value=1, max_value=500, value=50, step=5, key="opt_snap_km"))
+                    _snap_min = float(_sc2.number_input("Threshold — travel time (min)", min_value=1, max_value=300, value=60, step=5, key="opt_snap_min", help="Only applied when a TravelTime matrix is available."))
+                else:
+                    _snap_km = None; _snap_min = None
+
+                if st.button("Run optimisation", key="run_opt", type="primary"):
+                    from pyproj import Geod as _OptGeod
+                    _geod_opt = _OptGeod(ellps="WGS84")
+                    _opt_tt_matrix = None
+                    if use_travel_time and _plan_locs_tuple:
+                        import hashlib as _hl_opt, json as _json_opt
+                        _linac_ll_opt = [(lat, lon) for lat, lon, _ in _plan_locs_tuple]
+                        _linac_hash_opt = _hl_opt.md5(_json_opt.dumps(sorted(_linac_ll_opt)).encode()).hexdigest()[:8]
+                        _tt_max_h_opt = tt_max_travel_time_sec // 3600
+                        _tt_cache_key_opt = f"{iso3}_res{h3_resolution}_{_tt_max_h_opt}h_{_linac_hash_opt}"
+                        _opt_tt_cache_file = _TT_CACHE_DIR / f"{_tt_cache_key_opt}_{tt_mode}.npz"
+                        if _opt_tt_cache_file.exists():
+                            _opt_tt_matrix = np.load(_opt_tt_cache_file)["matrix"]
+
+                    _opt_locs    = list(_plan_locs_tuple)
+                    _opt_gdf     = _plan_gdf_out
+                    _opt_stats   = _plan_stats
+                    _opt_suggested: list = []
+                    _opt_steps:    list = []
+                    _opt_progress = st.progress(0, text="Running optimisation…")
+                    _opt_stop_reason: str = ""
+
+                    for _opt_step in range(_n_suggest):
+                        if _thresh_mode is not None:
+                            if _thresh_deficit is not None:
+                                _cur_max_deficit = float(_opt_gdf["rt_untreated"].max())
+                                if _cur_max_deficit < _thresh_deficit:
+                                    _opt_stop_reason = f"Threshold met after {_opt_step} facilit{'y' if _opt_step == 1 else 'ies'} — max deficit {_cur_max_deficit:.1f} < {_thresh_deficit} pts/hex"
+                                    break
+                            elif _thresh_distance is not None:
+                                _cur_max_dist = float(_opt_gdf["nearest_linac_km"].replace([np.inf], np.nan).dropna().max() if not _opt_gdf["nearest_linac_km"].dropna().empty else np.inf)
+                                if _cur_max_dist < _thresh_distance:
+                                    _opt_stop_reason = f"Threshold met after {_opt_step} facilit{'y' if _opt_step == 1 else 'ies'} — max distance {_cur_max_dist:.0f} km < {_thresh_distance:.0f} km"
+                                    break
+                            elif _thresh_access is not None:
+                                _cur_ratio = (_opt_stats["total_rt_treated"] / _opt_stats["total_rt_demand"]) if _opt_stats["total_rt_demand"] > 0 else 0.0
+                                if _cur_ratio >= _thresh_access:
+                                    _opt_stop_reason = f"Threshold met after {_opt_step} facilit{'y' if _opt_step == 1 else 'ies'} — access {_cur_ratio:.1%} ≥ {_thresh_access:.1%}"
+                                    break
+
+                        _olats = _opt_gdf["centroid_lat"].to_numpy()
+                        _olons = _opt_gdf["centroid_lon"].to_numpy()
+                        _opop  = _opt_gdf["population"].to_numpy()
+                        if _opt_metric == "rt_access":
+                            _oscores = _opt_gdf["rt_untreated"].to_numpy(dtype=np.float64)
+                        else:
+                            _oscores = _opt_gdf["nearest_linac_km"].fillna(0).to_numpy(dtype=np.float64) * np.where(_opop > 0, _opop, 0.0)
+
+                        _obest    = int(np.argmax(_oscores))
+                        _onew_lat = float(_olats[_obest])
+                        _onew_lon = float(_olons[_obest])
+
+                        _snap_idx = None
+                        if _snap_km is not None:
+                            _best_snap_dist_km = np.inf
+                            for _si, (_sfl, _sfo, _sfw) in enumerate(_opt_locs):
+                                _, _, _sdm = _geod_opt.inv(_sfo, _sfl, _onew_lon, _onew_lat)
+                                _sdk = _sdm * 1e-3
+                                _within = _sdk <= _snap_km
+                                if not _within and _snap_min is not None and _opt_tt_matrix is not None:
+                                    if _si < _opt_tt_matrix.shape[1]:
+                                        _tt_val = float(_opt_tt_matrix[_obest, _si])
+                                        _within = np.isfinite(_tt_val) and _tt_val <= _snap_min
+                                if _within and _sdk < _best_snap_dist_km:
+                                    _best_snap_dist_km = _sdk
+                                    _snap_idx = _si
+
+                        if _snap_idx is not None:
+                            _sfl, _sfo, _sfw = _opt_locs[_snap_idx]
+                            _opt_locs[_snap_idx] = (_sfl, _sfo, _sfw + _machines_per_new)
+                            _onew_lat, _onew_lon = _sfl, _sfo
+                            _placement_note = f"Merged into existing ({_sfl:.3f}, {_sfo:.3f})"
+                        else:
+                            _opt_locs.append((_onew_lat, _onew_lon, _machines_per_new))
+                            _placement_note = "New facility"
+
+                        _onew_gdf, _onew_stats = _compute_access(
+                            country, iso3, tuple(_opt_locs),
+                            float(lambda_km), access_model, float(max_distance_km),
+                            capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
+                            h3_resolution, _is_region, snap_linacs_to_hex,
+                            weibull_k=float(weibull_k), custom_rtu=access_custom_rtu,
+                        )
+                        _oimprove  = _onew_stats["total_rt_treated"] - _opt_stats["total_rt_treated"]
+                        _onew_ratio = _onew_stats["total_rt_treated"] / _onew_stats["total_rt_demand"] if _onew_stats["total_rt_demand"] > 0 else 0.0
+                        _opt_suggested.append({
+                            "name": f"Suggested {_opt_step + 1}",
+                            "lat": round(_onew_lat, 4), "lon": round(_onew_lon, 4),
+                            "n_linacs": _machines_per_new,
+                            "capacity": _machines_per_new * capacity_per_machine_per_year,
+                        })
+                        _opt_steps.append({
+                            "Step": _opt_step + 1, "Placement": _placement_note,
+                            "Latitude": round(_onew_lat, 4), "Longitude": round(_onew_lon, 4),
+                            "RT treated improvement": f"+{_fmt_sigfig(_oimprove)}",
+                            "Cumulative access ratio": f"{_onew_ratio:.1%}",
+                        })
+                        _opt_gdf   = _onew_gdf
+                        _opt_stats = _onew_stats
+                        _pct_done  = (_opt_step + 1) / _n_suggest
+                        if _thresh_deficit is not None:
+                            _thresh_text = f" — max deficit {float(_opt_gdf['rt_untreated'].max()):.1f} pts/hex"
+                        elif _thresh_distance is not None:
+                            _cur_dist_now = float(_opt_gdf["nearest_linac_km"].replace([np.inf], np.nan).dropna().max() if not _opt_gdf["nearest_linac_km"].dropna().empty else np.inf)
+                            _thresh_text = f" — max distance {_cur_dist_now:.0f} km"
+                        elif _thresh_access is not None:
+                            _cur_ratio_now = (_opt_stats["total_rt_treated"] / _opt_stats["total_rt_demand"]) if _opt_stats["total_rt_demand"] > 0 else 0.0
+                            _thresh_text = f" — access {_cur_ratio_now:.1%} / {_thresh_access:.1%}"
+                        else:
+                            _thresh_text = f" — +{_fmt_sigfig(_oimprove)} patients treated"
+                        _opt_progress.progress(_pct_done, text=f"Step {_opt_step + 1}/{_n_suggest}{_thresh_text}")
+
+                    _opt_progress.empty()
+                    if _opt_stop_reason:
+                        st.success(_opt_stop_reason)
+                    st.session_state["_opt_result"] = {
+                        "suggested": _opt_suggested, "steps": _opt_steps,
+                        "final_gdf": _opt_gdf, "final_stats": _opt_stats,
+                        "final_locs": _opt_locs, "baseline_stats": _plan_stats,
+                    }
+
+                _opt_res = st.session_state.get("_opt_result")
+                if _opt_res:
+                    _opt_sug          = _opt_res["suggested"]
+                    _opt_final_gdf    = _opt_res["final_gdf"]
+                    _opt_final_stats  = _opt_res["final_stats"]
+                    _opt_baseline     = _opt_res.get("baseline_stats", _plan_stats)
+
+                    # ── Map ──────────────────────────────────────────────────
+                    _opt_raw    = _opt_final_gdf["rt_untreated"].to_numpy(dtype=np.float64)
+                    _opt_vmin   = 0.0
+                    _opt_vmax   = float(np.nanmax(_opt_raw)) if _opt_raw.size > 0 else 1.0
+                    _opt_colors, _, _ = _color_values(_opt_raw, _rdylgn_reversed_rgb, _opt_vmin, _opt_vmax, invert_binary=True)
+                    _opt_final_gdf = _opt_final_gdf.copy()
+                    _opt_final_gdf["color"] = _opt_colors
+                    _opt_final_gdf["tip"] = (
+                        "<b>" + _opt_final_gdf["h3"].astype(str) + "</b><br/>"
+                        + "RT deficit (optimised): " + _opt_final_gdf["rt_untreated"].round(1).astype(str)
+                    )
+                    _opt_hex_layer = _build_hex_layer(pd.DataFrame({
+                        "h3": _opt_final_gdf["h3"], "color": _opt_final_gdf["color"], "tip": _opt_final_gdf["tip"],
+                    }), _hex_opacity_f)
+                    _opt_existing_df = _plan_facilities_df.copy() if _plan_facilities_df is not None and not _plan_facilities_df.empty else pd.DataFrame()
+                    _opt_new_df = pd.DataFrame(_opt_sug)
+                    _opt_combined_parts = []
+                    if show_linac_markers and not _opt_existing_df.empty:
+                        _ex = _opt_existing_df.copy()
+                        _ex["color"] = [[0, 140, 255, 240]] * len(_ex)
+                        _ex["_stack_order"] = 0
+                        _opt_combined_parts.append(_ex)
+                    if not _opt_new_df.empty:
+                        _nw = _opt_new_df.copy()
+                        _nw["color"] = [[160, 32, 240, 240]] * len(_nw)
+                        _nw["_stack_order"] = 1
+                        _opt_combined_parts.append(_nw)
+                    _opt_layers = [_opt_hex_layer]
+                    if _opt_combined_parts:
+                        _opt_layers.extend(_build_linac_columns(
+                            pd.concat(_opt_combined_parts, ignore_index=True),
+                            h3_res=h3_resolution, country_span_km=_plan_span_km,
+                            height_scale=tower_height_scale, radius_scale=tower_radius_scale,
+                            style=linac_tower_style,
+                        ))
+                    st.caption("RT Access Deficit after suggested placements. Blue = existing facilities, purple = suggested placements.")
+                    _opt_view = _make_view(_opt_final_gdf, pitch=30.0 if (show_linac_markers and map_pitch_on) else 0.0)
+                    if _discrete_scale:
+                        _opt_map_col, _opt_leg_col = st.columns([7, 1])
+                        with _opt_map_col:
+                            st.pydeck_chart(pdk.Deck(layers=_opt_layers, initial_view_state=_opt_view,
+                                                     map_style=CARTO_DARK if dark_mode else CARTO_LIGHT,
+                                                     tooltip={"html": "{tip}"}), use_container_width=True)
+                        with _opt_leg_col:
+                            _render_discrete_legend(
+                                [n * _discrete_base for n in range(1, _discrete_steps)],
+                                list(reversed(_DISCRETE_PALETTE[:_discrete_steps])),
+                                "", "white" if (dark_mode or app_dark_mode) else "black",
+                                title="RT access deficit per hexagon",
+                            )
+                    else:
+                        _render_with_colorbar(
+                            _opt_layers, _opt_view,
+                            _rdylgn_reversed_rgb, _opt_vmin, _opt_vmax, "RT access deficit",
+                            dark=dark_mode, dark_text=app_dark_mode,
+                        )
+
+                    # ── Step table ───────────────────────────────────────────
+                    st.markdown(f"**{len(_opt_sug)} placement(s)** — step-by-step improvement:")
+                    st.dataframe(pd.DataFrame(_opt_res["steps"]), use_container_width=True, hide_index=True)
+
+                    # ── Summary metrics ──────────────────────────────────────
+                    st.divider()
+                    st.markdown("**Summary**")
+                    _ob  = _opt_baseline
+                    _oa  = _opt_final_stats
+                    _dem = _oa["total_rt_demand"]
+
+                    # Counts
+                    _n_fac_before  = int(_ob["n_facilities"])
+                    _n_fac_after   = int(_oa["n_facilities"])
+                    _n_mac_before  = int(_ob["total_machines"])
+                    _n_mac_after   = int(_oa["total_machines"])
+                    _n_new_fac     = _n_fac_after - _n_fac_before
+                    _n_new_mac     = _n_mac_after - _n_mac_before
+
+                    # Access ratios
+                    _ob_radmaps   = _ob["total_rt_treated"] / _ob["total_rt_demand"] if _ob["total_rt_demand"] > 0 else 0.0
+                    _oa_radmaps   = _oa["total_rt_treated"] / _dem if _dem > 0 else 0.0
+                    _ob_cap       = min(_ob["total_national_capacity"] / _ob["total_rt_demand"], 1.0) if _ob["total_rt_demand"] > 0 else 0.0
+                    _oa_cap       = min(_oa["total_national_capacity"] / _dem, 1.0) if _dem > 0 else 0.0
+                    _ob_geo       = _ob.get("mean_access_probability", 0.0)
+                    _oa_geo       = _oa.get("mean_access_probability", 0.0)
+
+                    _sm1, _sm2, _sm3, _sm4 = st.columns(4)
+                    _sm1.metric("New facilities", f"+{_n_new_fac}")
+                    _sm2.metric("New machines", f"+{_n_new_mac}")
+                    _sm3.metric("Total facilities", _n_fac_after, delta=f"+{_n_new_fac}")
+                    _sm4.metric("Total machines", _n_mac_after, delta=f"+{_n_new_mac}")
+
+                    _ob_treated   = _ob["total_rt_treated"]
+                    _oa_treated   = _oa["total_rt_treated"]
+                    _ob_cap_pts   = min(_ob["total_national_capacity"], _dem)
+                    _oa_cap_pts   = min(_oa["total_national_capacity"], _dem)
+                    _oa_cap_def   = max(_dem - _oa["total_national_capacity"], 0.0)
+
+                    st.divider()
+                    st.markdown("**RT Demand**")
+                    _sd1, _sd2 = st.columns(2)
+                    _sd1.metric("RT Demand", _fmt_k(_dem), help="Unchanged by adding facilities")
+                    _sd2.metric("RT Treated (before)", _pct_num(_ob_treated, _ob_radmaps))
+
+                    st.divider()
+                    st.markdown("**RadMaps Access**")
+                    _sr1, _sr2, _sr3 = st.columns(3)
+                    _sr1.metric("Before", _pct_num(_ob_treated, _ob_radmaps))
+                    _sr2.metric("After",  _pct_num(_oa_treated, _oa_radmaps),
+                                delta=f"+{(_oa_radmaps - _ob_radmaps):.1%}")
+                    _sr3.metric("Additional treated",
+                                _pct_num(_oa_treated - _ob_treated, _oa_radmaps - _ob_radmaps))
+
+                    st.markdown("**Capacity-only Access**")
+                    _sc1b, _sc2b, _sc3b = st.columns(3)
+                    _sc1b.metric("Before", _pct_num(_ob_cap_pts, _ob_cap))
+                    _sc2b.metric("After",  _pct_num(_oa_cap_pts, _oa_cap),
+                                 delta=f"+{(_oa_cap - _ob_cap):.1%}")
+                    _sc3b.metric("Capacity deficit (after)", _pct_num(_oa_cap_def, 1.0 - _oa_cap))
+
+                    st.markdown("**Geography-only Access**")
+                    _sg1, _sg2 = st.columns(2)
+                    _sg1.metric("Before", _pct_num(_ob_geo * _dem, _ob_geo))
+                    _sg2.metric("After",  _pct_num(_oa_geo * _dem, _oa_geo),
+                                delta=f"+{(_oa_geo - _ob_geo):.1%}")
+
+# ---------------------------------------------------------------------------
 # Method tab
 # ---------------------------------------------------------------------------
+
+with _tab_sep0:
+    pass
 
 with _tab_sep1:
     pass
 
 with _tab_sep2:
+    pass
+
+with _tab_sep3:
     pass
 
 # ---------------------------------------------------------------------------
@@ -3347,7 +3561,7 @@ with tab_method:
     import os as _os
     _flowchart_path = _os.path.join(_os.path.dirname(__file__), "assets", "flowchart.png")
     if _os.path.exists(_flowchart_path):
-        st.image(_flowchart_path, width="stretch")
+        st.image(_flowchart_path, use_container_width=True)
 
     st.markdown(
         """

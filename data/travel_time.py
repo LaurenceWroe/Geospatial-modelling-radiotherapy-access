@@ -275,6 +275,45 @@ def compute_travel_time_matrix(
     return matrix, failed_batches
 
 
+def aggregate_tt_matrix(
+    matrix_res5: np.ndarray,
+    hex_ids_res5: List[str],
+    pops_res5: np.ndarray,
+    hex_ids_target: List[str],
+    target_resolution: int,
+) -> np.ndarray:
+    """Aggregate a res-5 TT matrix to a coarser resolution using population-weighted mean.
+
+    For each target hex, finds its res-5 children present in the matrix and
+    computes the population-weighted average travel time to each LINAC.
+    Hexes with no reachable children remain np.inf.
+    """
+    n_target = len(hex_ids_target)
+    n_linacs = matrix_res5.shape[1]
+    target_idx = {hid: i for i, hid in enumerate(hex_ids_target)}
+
+    weighted_sum = np.zeros((n_target, n_linacs), dtype=np.float64)
+    weight_sum   = np.zeros((n_target, n_linacs), dtype=np.float64)
+
+    for row_i, (hid, pop) in enumerate(zip(hex_ids_res5, pops_res5)):
+        parent = h3.cell_to_parent(hid, target_resolution)
+        t_idx = target_idx.get(parent)
+        if t_idx is None:
+            continue
+        tts = matrix_res5[row_i].astype(np.float64)
+        valid = np.isfinite(tts)
+        if not valid.any():
+            continue
+        w = max(float(pop), 1.0)
+        weighted_sum[t_idx, valid] += w * tts[valid]
+        weight_sum[t_idx, valid]   += w
+
+    result = np.full((n_target, n_linacs), np.inf, dtype=np.float32)
+    has_data = weight_sum > 0
+    result[has_data] = (weighted_sum[has_data] / weight_sum[has_data]).astype(np.float32)
+    return result
+
+
 def clear_cache(cache_key: str, mode: str) -> None:
     """Delete a cached travel time file."""
     p = _cache_path(cache_key, mode)
