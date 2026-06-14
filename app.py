@@ -70,6 +70,15 @@ st.markdown(
     <style>
     [data-testid="stMetricValue"] > div { font-size: 1.5rem !important; }
     [data-testid="stMetricLabel"] > div { font-size: 1rem !important; }
+    /* Separator tabs — non-interactive */
+    [role="tablist"] > button:nth-child(4),
+    [role="tablist"] > button:nth-child(6),
+    [role="tablist"] > button:nth-child(8),
+    [role="tablist"] > button:nth-child(12) {
+        pointer-events: none !important;
+        cursor: default !important;
+        opacity: 0.35 !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -282,6 +291,64 @@ def _selection_options() -> list[str]:
 
 # Keep old name as alias so cached calls referencing it still work
 _globocan_country_list = _selection_options
+
+
+@st.cache_data(show_spinner=False)
+def _country_options() -> list[str]:
+    """Sorted list of country display names available in GLOBOCAN (regions excluded)."""
+    da = xr.open_dataarray(XARRAY_PATH)
+    iso3_set = {str(v) for v in da.coords["ISO3"].values}
+    names = []
+    for iso3 in iso3_set:
+        if iso3 in REGION_GLOBOCAN_CODES:
+            continue
+        try:
+            names.append(pycountry.countries.get(alpha_3=iso3).name)
+        except AttributeError:
+            pass
+    return sorted(names)
+
+
+@st.cache_data(show_spinner=False)
+def _region_options() -> list[str]:
+    """List of region display names."""
+    return [r.display_name for r in REGIONS]
+
+
+@st.cache_data(show_spinner=False)
+def _region_country_summary(region_name: str) -> pd.DataFrame:
+    """Per-country GLOBOCAN + DIRAC summary table for the data tab (per-country mode)."""
+    reg = get_region(region_name)
+    rows = []
+    for alpha2 in reg.member_alpha2:
+        c_obj = pycountry.countries.get(alpha_2=alpha2)
+        if c_obj is None:
+            continue
+        c_name = c_obj.name
+        c_iso3 = c_obj.alpha_3
+        c_cancer = 0
+        try:
+            c_cases = get_national_cases(c_iso3, ["All cancers excl. NMSC"])
+            c_cancer = int(round(c_cases.get("All cancers excl. NMSC", 0.0)))
+        except Exception:
+            pass
+        c_linacs = 0
+        try:
+            _, c_fac = load_linacs_from_dirac_db(c_name)
+            if c_fac is not None and len(c_fac) > 0:
+                c_linacs = int(c_fac["n_linacs"].sum())
+        except Exception:
+            pass
+        rows.append({
+            "Country": c_name,
+            "ISO3": c_iso3,
+            "Cancer incidence (excl. NMSC)": c_cancer,
+            "LINACs (DIRAC)": c_linacs,
+        })
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Cancer incidence (excl. NMSC)", ascending=False).reset_index(drop=True)
+    return df
 
 
 @st.cache_data(show_spinner=False)
@@ -1241,37 +1308,35 @@ if "_session_init" not in st.session_state:
         st.session_state.setdefault("_map_generated", True)
 
 
+# Dark modes — read from session state so they're available before sidebar and tabs render
+app_dark_mode: bool = st.session_state.get("_app_dark_mode", False)
+dark_mode: bool = st.session_state.get("_map_dark_mode", False)
+_apply_app_dark_mode(app_dark_mode)
+
 with st.sidebar:
     st.title("🏥 RadMaps")
+    st.subheader("Modelling Settings")
 
-    # ── Region and Resolution ─────────────────────────────────────────────
-    st.subheader("Region and Resolution")
-
-    _all_options = _selection_options()
-    country = st.selectbox(
-        "Country / Region",
-        options=_all_options,
-        index=_all_options.index("World") if "World" in _all_options else 0,
+    # ── Location ──────────────────────────────────────────────────────────
+    _location_type = st.radio(
+        "", ["Country", "Region"],
+        index=1,  # default to Region (World)
+        horizontal=True, key="_loc_type_radio", label_visibility="collapsed",
     )
-    _is_region = is_region(country)
+    if _location_type == "Region":
+        _reg_opts = _region_options()
+        _default_reg_idx = _reg_opts.index("World") if "World" in _reg_opts else 0
+        country = st.selectbox("Region", options=_reg_opts, index=_default_reg_idx)
+        _is_region = True
+    else:
+        _ctry_opts = _country_options()
+        _default_ctry = "United Kingdom"
+        _default_ctry_idx = _ctry_opts.index(_default_ctry) if _default_ctry in _ctry_opts else 0
+        country = st.selectbox("Country", options=_ctry_opts, index=_default_ctry_idx)
+        _is_region = False
 
-    # Regional mode selector — only shown when a region is selected
-    _region_percountry = False
-    if _is_region:
-        _reg_mode = st.radio(
-            "Regional mode",
-            ["Uniform", "Per-country"],
-            index=1,
-            horizontal=True,
-            key="region_mode_radio",
-            help=(
-                "**Uniform**: single regional cancer profile (GLOBOCAN aggregate), "
-                "all LINACs pooled across the region.\n\n"
-                "**Per-country**: each country's own cancer data and LINACs; "
-                "countries with no LINACs contribute full unmet demand."
-            ),
-        )
-        _region_percountry = _reg_mode == "Per-country"
+    # Regions always use per-country mode (individual country cancer data + LINACs)
+    _region_percountry = _is_region
 
     if _is_region:
         _reg_def = get_region(country)
@@ -1295,14 +1360,43 @@ with st.sidebar:
 
     st.divider()
 
+    # ── Map to View ───────────────────────────────────────────────────────
+    st.subheader("Map to View")
+    map_type = st.selectbox(
+        "Map type", MAP_TYPES, index=MAP_TYPES.index("Radiotherapy Access"), key="_map_type_select",
+    )
+    _is_pop_data = map_type == "Population Data"
+    if _is_pop_data:
+        map_type = st.selectbox(
+            "Display metric", _POP_DATA_METRICS, index=0, key="_pop_metric_select",
+        )
+
+    is_rt_demand_map = map_type == "Radiotherapy Demand"
+    is_cancer = map_type in ("Cancer Incidence", "Radiotherapy Demand")
+    is_access = map_type == "Radiotherapy Access"
+    is_nearest = map_type == "Nearest Linac"
+    needs_linac = is_access or is_nearest
+
+    access_display_metric: str = "Modelled Access Ratio"
+    if is_access:
+        access_display_metric = st.selectbox(
+            "RT Access display metric",
+            ["Modelled Access Deficit", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability", "RT Demand"],
+            index=2,  # default: Modelled Access Ratio
+        )
+
+    show_map_labels = st.checkbox("Show place names", value=False)
+
+    st.divider()
+
     # ── Radiotherapy Demand Calculation ──────────────────────────────────
     rt_method: str = "optimal"
     rt_fraction: float = 0.25
 
-    st.subheader("Radiotherapy Demand Calculation")
+    st.subheader("Radiotherapy Utilisation Rate (RTU)")
     _rt_label = st.radio(
         "RT demand method",
-        ["Optimal RTU", "Custom RTU", "Proportional RTU"],
+        ["Optimal", "Custom", "Proportional"],
         horizontal=False, key="rt_demand_method_radio", label_visibility="collapsed",
     )
     if "Custom" in _rt_label:
@@ -1350,7 +1444,7 @@ with st.sidebar:
     capacity_per_machine_per_year = float(st.slider(
         "Capacity per LINAC (patients/yr)", min_value=50, max_value=1000, value=450, step=50,
     ))
-    
+
     st.caption('Individual facilities capacities can be modified in the Data tab.')
 
     st.markdown("**Geographic**")
@@ -1411,33 +1505,6 @@ with st.sidebar:
     )
     snap_linacs_to_hex = not _use_latlng
 
-    st.divider()
-
-    # ── Map to View ───────────────────────────────────────────────────────
-    st.subheader("Map to View")
-    map_type = st.selectbox(
-        "Map type", MAP_TYPES, index=MAP_TYPES.index("Radiotherapy Access"), key="_map_type_select",
-    )
-    _is_pop_data = map_type == "Population Data"
-    if _is_pop_data:
-        map_type = st.selectbox(
-            "Display metric", _POP_DATA_METRICS, index=0, key="_pop_metric_select",
-        )
-
-    is_rt_demand_map = map_type == "Radiotherapy Demand"
-    is_cancer = map_type in ("Cancer Incidence", "Radiotherapy Demand")
-    is_access = map_type == "Radiotherapy Access"
-    is_nearest = map_type == "Nearest Linac"
-    needs_linac = is_access or is_nearest
-
-    access_display_metric: str = "Modelled Access Deficit"
-    if is_access:
-        access_display_metric = st.selectbox(
-            "RT Access display metric",
-            ["Modelled Access Deficit", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability", "RT Demand"],
-            index=0,
-        )
-
     _fac_cap_ss_key = f"facility_cap_{country}"
     _calc_fingerprint = (
         country, h3_resolution, access_model,
@@ -1467,8 +1534,8 @@ with st.sidebar:
     # but its value must be known when building the map layers with on_select.
     click_mode: bool = bool(st.session_state.get("click_mode_toggle", False)) if is_access else False
 
+    # ── Colourbar ─────────────────────────────────────────────────────────
     st.subheader("Colourbar")
-    
 
     _default_cmap_name = _DEFAULT_CMAP.get(map_type, "Purple → Yellow (Viridis)")
     _cmap_options = list(COLORMAPS.keys())
@@ -1485,7 +1552,7 @@ with st.sidebar:
     _discrete_steps = 4
     _scale_opts = ["Linear", "Log", "Discrete", "No hex"]
     _scale_default_idx = 1 if _default_log else 0
-    _scale_type = st.radio("Scale", _scale_opts, index=_scale_default_idx, horizontal=True, key="scale_type_radio")
+    _scale_type = st.selectbox("Scale", _scale_opts, index=_scale_default_idx, key="scale_type_select")
     cb_log = _scale_type == "Log"
     _discrete_scale = _scale_type == "Discrete"
     _no_hex = _scale_type == "No hex"
@@ -1546,18 +1613,36 @@ with st.sidebar:
                  help="Re-render with current display settings — no recomputation."):
         st.session_state["_map_generated"] = True
 
+    _dm_c1, _dm_c2 = st.columns(2)
+    with _dm_c1:
+        if st.button(
+            "☀️ App" if app_dark_mode else "🌙 App",
+            key="_sb_app_dm", use_container_width=True,
+            help="Toggle dark/light app background",
+        ):
+            st.session_state["_app_dark_mode"] = not app_dark_mode
+            st.rerun()
+    with _dm_c2:
+        if st.button(
+            "🔆 Map" if dark_mode else "🌑 Map",
+            key="_sb_map_dm", use_container_width=True,
+            help="Toggle dark/light map tiles",
+        ):
+            st.session_state["_map_dark_mode"] = not dark_mode
+            st.rerun()
+
     generate = st.session_state.get("_map_generated", False)
 
-    # ── Plot Settings ─────────────────────────────────────────────────────
-    st.subheader("Linac View Settings")
+    # ── Show Radiotherapy Facilities ──────────────────────────────────────
+    st.subheader("Show Radiotherapy Facilities")
 
-    show_linac_markers: bool = True
+    show_linac_markers: bool = False
     tower_height_scale: float = 1.0
     tower_radius_scale: float = 1.0
     linac_tower_style: str = "stacked"
     linac_multi_color: bool = False
 
-    show_linac_markers = st.checkbox("Show LINAC locations", value=needs_linac)
+    show_linac_markers = st.checkbox("Show LINAC locations", value=False)
     map_pitch_on: bool = False
     if show_linac_markers:
         tower_height_scale = float(st.slider("Tower height scale", 0.05, 5.0, 1.0, step=0.05))
@@ -1572,18 +1657,6 @@ with st.sidebar:
         linac_tower_style = "individual" if "Individual" in _tower_style_label else "stacked"
         linac_multi_color = st.checkbox("Multiple colours", value=False,
                                         help="Assign a distinct colour to each facility; otherwise all shown in blue.")
-
-    st.divider()
-
-    st.subheader("App View")
-
-    app_dark_mode: bool = False
-    dark_mode: bool = False
-
-    app_dark_mode = st.toggle("Dark background", value=False)
-    _apply_app_dark_mode(app_dark_mode)
-    dark_mode = st.checkbox("Dark map", value=False)
-    show_map_labels = st.checkbox("Show place names", value=False)
 
 CARTO_LIGHT = _CARTO_LIGHT_LABELS if show_map_labels else _CARTO_LIGHT_NOLABELS
 CARTO_DARK  = _CARTO_DARK_LABELS  if show_map_labels else _CARTO_DARK_NOLABELS
@@ -1636,8 +1709,8 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_data, _tab_sep0, tab_map, tab_cap, tab_geo, _tab_sep1, tab_plan, _tab_sep2, tab_intro, tab_method, tab_assumptions, _tab_sep3, tab_toy, tab_model = st.tabs([
-    "📊 Data", "│", "🗺️ RT Access", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
+tab_map, tab_cap, tab_geo, _tab_sep0, tab_data, _tab_sep1, tab_plan, _tab_sep2, tab_intro, tab_method, tab_assumptions, _tab_sep3, tab_toy, tab_model = st.tabs([
+    "🗺️ Access Maps", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "📊 Data", "│", "🔧 Machine Planning", "│", "💡 Introduction", "📖 Method", "⚠️ Assumptions", "│", "🧪 Toy Example", "📐 Probability Models",
 ])
 
 # ---------------------------------------------------------------------------
@@ -1646,6 +1719,28 @@ tab_data, _tab_sep0, tab_map, tab_cap, tab_geo, _tab_sep1, tab_plan, _tab_sep2, 
 
 with tab_data:
     st.header(f"Data — {country}")
+
+    # ---- Per-country summary (shown when per-country regional mode is active) ----
+    if _is_region and _region_percountry:
+        st.subheader(f"Per-Country Summary — {country}")
+        st.caption(
+            "Cancer incidence from GLOBOCAN; LINAC counts from DIRAC. "
+            "Sorted by cancer incidence (descending)."
+        )
+        with st.spinner("Loading per-country summary…"):
+            _pc_summary_df = _region_country_summary(country)
+        if _pc_summary_df.empty:
+            st.info("No per-country data available for this region.")
+        else:
+            st.dataframe(
+                _pc_summary_df.style.format({
+                    "Cancer incidence (excl. NMSC)": "{:,}",
+                    "LINACs (DIRAC)": "{:,}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        st.divider()
 
     # ---- Population --------------------------------------------------------
     st.subheader(f"Population — {country}")
@@ -1907,14 +2002,6 @@ with tab_model:
             line_dash="dash",
             line_color="red",
             annotation_text=f"Cut-off: {_pm_cutoff} km",
-            annotation_position="top right",
-        )
-    elif _pm_model == "Exponential decay":
-        _fig_pm.add_vline(
-            x=_pm_lambda,
-            line_dash="dash",
-            line_color="orange",
-            annotation_text=f"λ = {_pm_lambda} km  (P ≈ 37%)",
             annotation_position="top right",
         )
     elif _pm_model == "Weibull":
