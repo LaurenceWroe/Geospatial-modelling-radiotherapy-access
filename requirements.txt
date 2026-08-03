@@ -10,7 +10,7 @@ pyogrio>=0.7.0     # geopandas file I/O backend (replaces fiona; ships with GDAL
 numpy>=1.24.0
 pandas>=2.0.0
 xarray>=2023.1.0
-# scipy>=1.10.0    # not used by the Streamlit app
+scipy>=1.10.0      # xarray netCDF3 backend — reads the GLOBOCAN .nc (do not remove)
 openpyxl>=3.1.0    # reading .xlsx LINAC files
 
 # Visualisation
