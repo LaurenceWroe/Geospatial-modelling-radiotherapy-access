@@ -125,6 +125,29 @@ def _region_cache_path(globocan_code: str, resolution: int) -> Path:
     return REGION_CACHE_DIR / f"{globocan_code}_res{resolution}.parquet"
 
 
+def _region_skipped_path(globocan_code: str, resolution: int) -> Path:
+    return REGION_CACHE_DIR / f"{globocan_code}_res{resolution}_skipped.json"
+
+
+def get_region_skipped_countries(region_name: str, resolution: int) -> list[str]:
+    """Return alpha-2 codes of countries skipped when this region cache was built.
+
+    Empty list if the cache was complete or hasn't been built yet.
+    """
+    import json
+    from data.regions import get_region
+
+    reg = get_region(region_name)
+    effective_res = min(resolution, reg.max_resolution)
+    p = _region_skipped_path(reg.globocan_code, effective_res)
+    if not p.exists():
+        return []
+    try:
+        return json.loads(p.read_text())
+    except Exception:
+        return []
+
+
 def load_region_population(
     region_name: str,
     target_resolution: int = 3,
@@ -162,7 +185,11 @@ def load_region_population(
         return gdf
 
     # --- slow path: merge all member countries ---
+    import json
+    import logging
+
     gdfs = []
+    skipped: list[str] = []
     alpha2_list = reg.member_alpha2
     total = len(alpha2_list)
 
@@ -172,11 +199,17 @@ def load_region_population(
         try:
             country_obj = pycountry.countries.get(alpha_2=alpha2)
             if country_obj is None:
+                skipped.append(alpha2)
                 continue
             gdf_c = load_population_at_resolution(country_obj.name, effective_res)
             gdfs.append(gdf_c[["h3", "population"]])
-        except Exception:
-            continue  # file not available — skip silently
+        except Exception as exc:
+            skipped.append(alpha2)
+            logging.warning(
+                "load_region_population: skipping %s (%s): %s",
+                alpha2, region_name, exc,
+            )
+            continue
 
     if progress_callback:
         progress_callback(total, total, "")
@@ -191,9 +224,18 @@ def load_region_population(
     )
     result = gpd.GeoDataFrame(merged, geometry="geometry", crs="EPSG:4326")
 
-    # --- persist to disk cache ---
+    # --- persist to disk cache, recording any incompleteness alongside ---
     REGION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     result.to_parquet(cache_path)
+    skipped_path = _region_skipped_path(reg.globocan_code, effective_res)
+    if skipped:
+        skipped_path.write_text(json.dumps(sorted(skipped)))
+        logging.warning(
+            "load_region_population: region %s cached WITHOUT %d countries: %s",
+            region_name, len(skipped), ", ".join(sorted(skipped)),
+        )
+    else:
+        skipped_path.unlink(missing_ok=True)
 
     return result
 

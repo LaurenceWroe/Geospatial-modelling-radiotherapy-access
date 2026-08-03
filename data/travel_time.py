@@ -86,6 +86,12 @@ def _next_wednesday_8am_utc() -> str:
     return target.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
+# Max walking time (seconds) within a public transport journey. TravelTime's
+# default is 900 s; we allow 30 min. Without a cap the journey can degenerate
+# into hours of pure walking, which overstates realistic patient access.
+_PT_MAX_WALKING_SEC = 1800
+
+
 def _transportation(mode: str, max_travel_time_sec: int) -> dict:
     if mode == "driving":
         # "driving" uses TravelTime's typical road-speed model (no real-time traffic).
@@ -93,7 +99,7 @@ def _transportation(mode: str, max_travel_time_sec: int) -> dict:
     elif mode == "public_transport":
         return {
             "type": "public_transport",
-            "walking_time": max_travel_time_sec,
+            "walking_time": min(_PT_MAX_WALKING_SEC, max_travel_time_sec),
         }
     raise ValueError(f"Unsupported mode: {mode!r}")
 
@@ -281,12 +287,21 @@ def aggregate_tt_matrix(
     pops_res5: np.ndarray,
     hex_ids_target: List[str],
     target_resolution: int,
+    unreachable_fill_min: Optional[float] = None,
 ) -> np.ndarray:
     """Aggregate a res-5 TT matrix to a coarser resolution using population-weighted mean.
 
-    For each target hex, finds its res-5 children present in the matrix and
-    computes the population-weighted average travel time to each LINAC.
-    Hexes with no reachable children remain np.inf.
+    For each target hex, computes the population-weighted average travel time
+    of its res-5 children to each LINAC.
+
+    Parameters
+    ----------
+    unreachable_fill_min : float, optional
+        Travel time (minutes) to assign to *unreachable* children in the
+        average — typically the fetch cut-off. Without it, a coarse hex where
+        only one corner is road-connected inherits that corner's travel time
+        for its entire population, biasing access optimistically. Children
+        remain np.inf only when a hex has no reachable children at all.
     """
     n_target = len(hex_ids_target)
     n_linacs = matrix_res5.shape[1]
@@ -294,6 +309,7 @@ def aggregate_tt_matrix(
 
     weighted_sum = np.zeros((n_target, n_linacs), dtype=np.float64)
     weight_sum   = np.zeros((n_target, n_linacs), dtype=np.float64)
+    any_reachable = np.zeros((n_target, n_linacs), dtype=bool)
 
     for row_i, (hid, pop) in enumerate(zip(hex_ids_res5, pops_res5)):
         parent = h3.cell_to_parent(hid, target_resolution)
@@ -302,14 +318,23 @@ def aggregate_tt_matrix(
             continue
         tts = matrix_res5[row_i].astype(np.float64)
         valid = np.isfinite(tts)
-        if not valid.any():
-            continue
         w = max(float(pop), 1.0)
-        weighted_sum[t_idx, valid] += w * tts[valid]
-        weight_sum[t_idx, valid]   += w
+        if unreachable_fill_min is not None:
+            # Count unreachable children at the cut-off time so sparsely
+            # connected hexes aren't credited with their best corner.
+            filled = np.where(valid, tts, unreachable_fill_min)
+            weighted_sum[t_idx] += w * filled
+            weight_sum[t_idx]   += w
+            any_reachable[t_idx] |= valid
+        else:
+            if not valid.any():
+                continue
+            weighted_sum[t_idx, valid] += w * tts[valid]
+            weight_sum[t_idx, valid]   += w
+            any_reachable[t_idx, valid] = True
 
     result = np.full((n_target, n_linacs), np.inf, dtype=np.float32)
-    has_data = weight_sum > 0
+    has_data = (weight_sum > 0) & any_reachable
     result[has_data] = (weighted_sum[has_data] / weight_sum[has_data]).astype(np.float32)
     return result
 

@@ -254,9 +254,11 @@ def load_linacs_from_dirac_db(
         & country_df["Longitude"].between(-180, 180)
     ]
 
+    # Blank machine count = facility exists but count unrecorded → assume 1.
+    # An explicit 0 means no photon/electron machines → excluded below.
     country_df["n_linacs"] = (
         pd.to_numeric(country_df["He Photon And Electron Beam Rt"], errors="coerce")
-        .fillna(0)
+        .fillna(1)
     )
     country_df = country_df[country_df["n_linacs"] > 0]
 

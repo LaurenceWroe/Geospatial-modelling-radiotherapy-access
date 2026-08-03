@@ -54,3 +54,9 @@ b_cancer_incidence/cancer_type_maps/optimally_treated/
 # Test/scratch outputs
 /tmp/
 travel_time_cache/
+
+# Archived experiments and scratch data (not part of the app)
+Old_Tests/
+
+# One-off analysis / dev scripts (not app code)
+scripts/
