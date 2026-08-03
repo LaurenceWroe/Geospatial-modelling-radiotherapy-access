@@ -1182,12 +1182,14 @@ def _build_linac_columns(
 
 
 def _fmt_sigfig(value: float, sig: int = 3) -> str:
-    """Format a number to 1 decimal place with k/M suffix."""
+    """Format a number to 1 decimal place with k/M/B suffix (e.g. 11.0 M, not 10994.6 k)."""
     if value is None:
         return "N/A"
     value = float(value)
     if value == 0:
         return "0"
+    if abs(value) >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f} B"
     if abs(value) >= 1_000_000:
         return f"{value / 1_000_000:.1f} M"
     if abs(value) >= 1_000:
@@ -3173,7 +3175,7 @@ with tab_map:
 
                 def _fmt_k(v) -> str:
                     if v is None: return "N/A"
-                    return f"{float(v) / 1000:.1f} k"
+                    return _fmt_sigfig(float(v))
 
                 def _pct_num(number, pct):
                     return f"{_fmt_k(number)} ({pct:.1%})"
@@ -3563,8 +3565,8 @@ with tab_plan:
                         _thresh_access   = float(_tc1.number_input("Target RadMaps access (%)", min_value=0.01, max_value=99.99, value=80.0, step=0.01, format="%.2f", key="opt_thresh_access")) / 100.0
                         _thresh_deficit  = None; _thresh_distance = None
                         _cur_demand      = float(_plan_stats.get("total_rt_demand", 0))
-                        _remaining_k     = _cur_demand * (1.0 - _thresh_access) / 1000.0
-                        _tc2.caption(f"Remaining deficit at target: **{_remaining_k:.1f} k** patients/yr")
+                        _remaining       = _cur_demand * (1.0 - _thresh_access)
+                        _tc2.caption(f"Remaining deficit at target: **{_fmt_sigfig(_remaining)}** patients/yr")
                     elif _thresh_mode == "Deficit per hexagon":
                         _thresh_deficit  = float(_tc1.number_input("Max deficit per hexagon (patients/yr)", min_value=0.1, max_value=10000.0, value=10.0, step=1.0, key="opt_thresh_deficit"))
                         _thresh_distance = None; _thresh_access = None
@@ -3939,7 +3941,9 @@ with tab_sensitivity:
             _lx = np.concatenate([[0.0], _cum_pop / _tot_pop])
             _ly = np.concatenate([[0.0], _cum_served / _tot_served])
             # Gini = 1 - 2 * area under Lorenz curve
-            _gini = 1.0 - 2.0 * float(np.trapz(_ly, _lx))
+            # np.trapz was renamed np.trapezoid in numpy 2.0 (removed in newer builds)
+            _trapz_fn = getattr(np, "trapezoid", None) or np.trapz
+            _gini = 1.0 - 2.0 * float(_trapz_fn(_ly, _lx))
         else:
             _lx = np.array([0.0, 1.0]); _ly = np.array([0.0, 1.0]); _gini = 0.0
 
