@@ -28,6 +28,20 @@ from data.cancer import (
 from data.travel_time import CACHE_DIR as _TT_CACHE_DIR
 from analysis.accessibility import compute_accessibility, aggregate_access_gdf
 
+# Disk cache for apportioned regional cancer GeoDataFrames.  Mirrors the region
+# *population* parquet cache (data.population.REGION_CACHE_DIR) so that the
+# expensive per-country apportionment loop survives app restarts, redeploys, and
+# LRU eviction of the in-memory st.cache_data — not just a single session.
+_REGION_CANCER_CACHE_DIR = Path("H3_region_cache")
+
+
+def _region_cancer_cache_path(globocan_code: str, resolution: int,
+                              cancers: tuple, use_actual: bool) -> Path:
+    """Stable on-disk path for one (region, resolution, cancers, actual) result."""
+    key = json.dumps({"c": sorted(cancers), "a": bool(use_actual)}, sort_keys=True)
+    digest = hashlib.sha1(key.encode()).hexdigest()[:8]
+    return _REGION_CANCER_CACHE_DIR / f"{globocan_code}_res{resolution}_cancer_{digest}.parquet"
+
 
 @st.cache_data(show_spinner=False)
 def _country_options() -> list[str]:
@@ -97,25 +111,38 @@ def _load_pop_region(region_name: str, h3_res: int = 3):
     return load_region_population(region_name, target_resolution=h3_res)
 
 
-@st.cache_data(show_spinner=False, max_entries=4)
+@st.cache_data(show_spinner=False, max_entries=8)
 def _load_cancer(country: str, iso3: str, cancers: tuple, use_actual: bool,
                  h3_res: int = 8, region_flag: bool = False):
     gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
     return apportion_cancer_to_h3(gdf, iso3, list(cancers), use_actual_rt=use_actual)
 
 
-@st.cache_data(show_spinner=False, max_entries=2)
+@st.cache_data(show_spinner=False, max_entries=4)
 def _load_cancer_region_percountry(region_name: str, cancers: tuple, use_actual: bool, h3_res: int = 3):
     """Build a cancer GeoDataFrame for a region using per-country GLOBOCAN data.
 
     Each country's cancer cases are apportioned to its own hexes using that
     country's iso3, then all country GDFs are concatenated.  Border hex
     duplicates are resolved by keeping the row with higher total cancer value.
+
+    Result is persisted to a parquet disk cache (mirroring the region-population
+    cache) so the ~200-country apportionment loop is not repeated on restart,
+    redeploy, or after the in-memory cache evicts.
     """
     import geopandas as gpd
     from data.regions import get_region as _get_region
 
     reg = _get_region(region_name)
+
+    # --- fast path: load from disk cache ---
+    cache_path = _region_cancer_cache_path(reg.globocan_code, h3_res, cancers, use_actual)
+    if cache_path.exists():
+        try:
+            return gpd.read_parquet(cache_path)
+        except Exception:
+            pass  # corrupt/partial file -> fall through and rebuild
+
     cancer_list = list(cancers)
     all_gdfs = []
 
@@ -149,7 +176,16 @@ def _load_cancer_region_percountry(region_name: str, cancers: tuple, use_actual:
     else:
         combined = combined.drop_duplicates("h3")
     combined = combined.reset_index(drop=True)
-    return gpd.GeoDataFrame(combined, geometry="geometry")
+    result = gpd.GeoDataFrame(combined, geometry="geometry", crs="EPSG:4326")
+
+    # --- persist to disk cache ---
+    try:
+        _REGION_CANCER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        result.to_parquet(cache_path)
+    except Exception:
+        pass  # non-fatal: disk cache is an optimisation, not correctness
+
+    return result
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
