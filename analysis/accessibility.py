@@ -446,4 +446,12 @@ def aggregate_access_gdf(gdf: gpd.GeoDataFrame, target_resolution: int) -> gpd.G
     out["geometry"] = out["h3"].apply(
         lambda h: _Polygon([(lon, lat) for lat, lon in h3.cell_to_boundary(h)])
     )
+
+    # Re-derive parent-cell centroids (dropped by the groupby) so downstream
+    # consumers — notably the machine-planning optimiser — can rely on them
+    # being present on every accessibility gdf, aggregated or not.
+    _centroids = out["h3"].apply(lambda h: h3.cell_to_latlng(h))
+    out["centroid_lat"] = _centroids.apply(lambda c: c[0])
+    out["centroid_lon"] = _centroids.apply(lambda c: c[1])
+
     return gpd.GeoDataFrame(out, geometry="geometry", crs="EPSG:4326")

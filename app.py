@@ -3003,6 +3003,14 @@ with tab_plan:
                     _opt_locs    = list(_plan_locs_tuple)
                     _opt_gdf     = _plan_gdf_out
                     _opt_stats   = _plan_stats
+                    # Older cached results (e.g. world_default.pkl) may predate
+                    # centroid columns on aggregated gdfs — derive if missing.
+                    if "centroid_lat" not in _opt_gdf.columns:
+                        import h3 as _h3_opt
+                        _cent_opt = _opt_gdf["h3"].apply(lambda _h: _h3_opt.cell_to_latlng(_h))
+                        _opt_gdf = _opt_gdf.copy()
+                        _opt_gdf["centroid_lat"] = _cent_opt.apply(lambda c: c[0])
+                        _opt_gdf["centroid_lon"] = _cent_opt.apply(lambda c: c[1])
                     _opt_suggested: list = []
                     _opt_steps:    list = []
                     _opt_progress = st.progress(0, text="Running optimisation…")
