@@ -88,9 +88,9 @@ st.markdown(
     /* Separator tabs — non-interactive */
     [role="tablist"] > button:nth-child(2),
     [role="tablist"] > button:nth-child(5),
-    [role="tablist"] > button:nth-child(8),
     [role="tablist"] > button:nth-child(10),
-    [role="tablist"] > button:nth-child(15) {
+    [role="tablist"] > button:nth-child(12),
+    [role="tablist"] > button:nth-child(17) {
         pointer-events: none !important;
         cursor: default !important;
         opacity: 0.35 !important;
@@ -1420,8 +1420,8 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_intro, _tab_sep0, tab_map, tab_data, _tab_sep1, tab_cap, tab_geo, _tab_sep2, tab_plan, _tab_sep3, tab_method, tab_assumptions, tab_toy, tab_model, _tab_sep4, tab_sensitivity, tab_convergence, tab_choropleth = st.tabs([
-    "💡 Introduction", "│", "🗺️ Access Maps", "📊 Data", "│", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example", "📐 Probability Models", "│", "📉 Sensitivity", "🔬 Convergence", "🗺️ World Choropleth",
+tab_intro, _tab_sep0, tab_map, tab_data, _tab_sep1, tab_choropleth, tab_country, tab_cap, tab_geo, _tab_sep2, tab_plan, _tab_sep3, tab_method, tab_assumptions, tab_toy, tab_model, _tab_sep4, tab_sensitivity, tab_convergence = st.tabs([
+    "💡 Introduction", "│", "🗺️ Access Maps", "📊 Data", "│", "🌐 World Choropleth", "📈 Country Analysis", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example", "📐 Probability Models", "│", "📉 Sensitivity", "🔬 Convergence",
 ], default="🗺️ Access Maps")
 
 # ---------------------------------------------------------------------------
@@ -3787,6 +3787,107 @@ with tab_choropleth:
             "Countries we can't compute (no GLOBOCAN cancer data) are shown in grey. "
             + ("Driving times for countries TravelTime does not cover use a fitted "
                "distance proxy (flagged on hover)." if _chor_is_time else "")
+        )
+
+# ---------------------------------------------------------------------------
+# Country Analysis tab — supply vs access bottleneck across all countries
+# ---------------------------------------------------------------------------
+
+with tab_country:
+    st.header("📈 Country Analysis")
+    st.caption(
+        "Every country's radiotherapy access split into its two constraints, as a "
+        "fraction of national RT demand: **supply adequacy** $A_C$ and **geographic "
+        "reach** $A_G$. Realised treatment $A_{RM}$ is bounded by both — where it falls "
+        "below the lower ceiling, supply and reachable demand sit in different places "
+        "(*spatial mismatch*)."
+    )
+
+    _cam = _load_country_metrics()
+    if _cam is None or _cam.empty:
+        st.info(
+            "Country metrics lookup not found. Generate it with "
+            "`python scripts/build_country_metrics.py`."
+        )
+    else:
+        _ca_thr = st.radio(
+            "Threshold", ["50 km", "100 km", "200 km", "30 min", "60 min", "120 min"],
+            index=5, horizontal=True, key="ca_thr",
+            help="Distance or driving-time cut-off applied to A_G and A_RM. "
+                 "A_C (supply) is threshold-free.",
+        )
+        _ca_unit = _ca_thr.replace(" ", "")          # "50km" / "120min"
+        _ca_gcol, _ca_rcol = f"A_G_{_ca_unit}", f"A_RM_{_ca_unit}"
+
+        _ca = _cam[["iso3", "name", "n_machines", "A_C", _ca_gcol, _ca_rcol]].copy()
+        _ca = _ca.rename(columns={_ca_gcol: "A_G", _ca_rcol: "A_RM"}).dropna(subset=["A_G", "A_RM"])
+        _ca["mismatch"] = _ca[["A_C", "A_G"]].min(axis=1) - _ca["A_RM"]
+
+        import plotly.express as px
+        import plotly.graph_objects as _go
+
+        # ---- Scatter: A_C vs A_G, colour = A_RM ----
+        _fig_sc = px.scatter(
+            _ca, x="A_C", y="A_G", color="A_RM",
+            color_continuous_scale="Viridis", range_color=[0, 1],
+            hover_name="name",
+            hover_data={"A_C": ":.0%", "A_G": ":.0%", "A_RM": ":.0%"},
+            labels={"A_C": "A_C — supply adequacy", "A_G": "A_G — geographic reach",
+                    "A_RM": "A_RM"},
+        )
+        _fig_sc.update_traces(marker=dict(size=9, line=dict(width=0.5, color="rgba(0,0,0,0.4)")))
+        _fig_sc.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                          line=dict(color="grey", dash="dash", width=1))
+        _fig_sc.add_annotation(x=0.97, y=0.03, text="supply-limited", showarrow=False,
+                               font=dict(size=11, color="#888"), xanchor="right")
+        _fig_sc.add_annotation(x=0.03, y=0.97, text="access-limited", showarrow=False,
+                               font=dict(size=11, color="#888"), xanchor="left")
+        _fig_sc.update_layout(
+            title=f"Where is the bottleneck? (within {_ca_thr})",
+            xaxis=dict(range=[-0.02, 1.03], tickformat=".0%"),
+            yaxis=dict(range=[-0.02, 1.03], tickformat=".0%"),
+            coloraxis_colorbar=dict(title="A_RM", tickformat=".0%"),
+            height=560, margin=dict(l=0, r=0, t=40, b=0),
+        )
+        st.plotly_chart(_fig_sc, use_container_width=True)
+
+        # ---- Bar chart: A_RM bars with A_C / A_G ceilings, all countries ----
+        st.subheader("Demand, ceilings & realised treatment")
+        _sort_desc = st.checkbox("Sort best-access first", value=False, key="ca_sortdesc")
+        _cab = _ca.sort_values("A_RM", ascending=not _sort_desc)
+        _C_REAL, _C_SUP, _C_ACC = "#2c7fb8", "#d95f02", "#1b9e77"
+
+        _fig_bar = _go.Figure()
+        _fig_bar.add_trace(_go.Bar(
+            y=_cab["name"], x=_cab["A_RM"], orientation="h",
+            marker_color=_C_REAL, name="A_RM realised",
+            hovertemplate="<b>%{y}</b><br>A_RM realised: %{x:.0%}<extra></extra>",
+        ))
+        _fig_bar.add_trace(_go.Scatter(
+            y=_cab["name"], x=_cab["A_C"], mode="markers", name="A_C supply ceiling",
+            marker=dict(symbol="line-ns", color=_C_SUP, size=11,
+                        line=dict(width=2.5, color=_C_SUP)),
+            hovertemplate="<b>%{y}</b><br>A_C supply ceiling: %{x:.0%}<extra></extra>",
+        ))
+        _fig_bar.add_trace(_go.Scatter(
+            y=_cab["name"], x=_cab["A_G"], mode="markers", name="A_G access ceiling",
+            marker=dict(symbol="line-ns", color=_C_ACC, size=11,
+                        line=dict(width=2.5, color=_C_ACC)),
+            hovertemplate="<b>%{y}</b><br>A_G access ceiling: %{x:.0%}<extra></extra>",
+        ))
+        _fig_bar.update_layout(
+            barmode="overlay",
+            xaxis=dict(title="fraction of national RT demand", range=[0, 1.02], tickformat=".0%"),
+            yaxis=dict(autorange="reversed", title=None, automargin=True, tickfont=dict(size=10)),
+            height=max(500, len(_cab) * 17),
+            margin=dict(r=0, t=10, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.005, xanchor="right", x=1),
+        )
+        st.plotly_chart(_fig_bar, use_container_width=True)
+        st.caption(
+            "Bars = realised treatment $A_{RM}$; ticks = the supply ($A_C$, orange) and "
+            "access ($A_G$, green) ceilings. A bar short of its nearest tick is spatial "
+            "mismatch. $A_C$ is threshold-free, so its ticks don't move with the selector."
         )
 
 # ---------------------------------------------------------------------------
