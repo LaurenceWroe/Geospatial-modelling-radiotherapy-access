@@ -415,6 +415,59 @@ def _build_borders_layer(dark: bool) -> Optional[pdk.Layer]:
     )
 
 
+@st.cache_data(show_spinner=False)
+def _no_data_fill_geojson():
+    """FeatureCollection of countries with no GLOBOCAN cancer data.
+
+    Used as a grey underlay on region/world maps: because it sits *beneath* the
+    hex layer it only shows through where a country has no hexes — i.e. exactly
+    the countries we can't compute demand/access for — while staying hidden on
+    the population map (where those countries do have hexes).
+    """
+    gj = _load_country_borders()
+    if gj is None:
+        return None
+    feats = []
+    for f in gj.get("features", []):
+        a2 = f.get("properties", {}).get("iso_a2")
+        if not a2 or a2 == "-99":
+            continue
+        obj = pycountry.countries.get(alpha_2=a2)
+        if obj is not None and has_globocan_data(obj.alpha_3):
+            continue  # has data — leave it to the hex layers
+        name = obj.name if obj is not None else a2
+        nf = dict(f)
+        nf["properties"] = {**f.get("properties", {}), "tip": f"{name}: no cancer data"}
+        feats.append(nf)
+    return {"type": "FeatureCollection", "features": feats}
+
+
+def _build_no_data_fill_layer():
+    """Grey fill layer for no-GLOBOCAN countries (None if there are none)."""
+    gj = _no_data_fill_geojson()
+    if gj is None or not gj["features"]:
+        return None
+    return pdk.Layer(
+        "GeoJsonLayer",
+        id="no-data-fill",
+        data=gj,
+        stroked=False,
+        filled=True,
+        get_fill_color=[158, 158, 158, 190],
+        pickable=True,
+    )
+
+
+def _maybe_add_no_data_fill(layers: list) -> list:
+    """Prepend the no-data grey fill (bottom layer) on region/world maps only."""
+    if not globals().get("_is_region", False):
+        return layers
+    ndl = _build_no_data_fill_layer()
+    if ndl is None:
+        return layers
+    return [ndl] + list(layers)
+
+
 _LINAC_BLUE = [30, 120, 220, 220]
 
 # Discrete colour scale: red → orange → yellow → green → dark green (up to 5 bands)
@@ -745,6 +798,7 @@ def _render_map_no_cb(layers, view: pdk.ViewState, dark: bool, on_select=None, m
     """Render a pydeck map with an empty right column (matching _render_with_colorbar layout)."""
     if not isinstance(layers, list):
         layers = [layers]
+    layers = _maybe_add_no_data_fill(layers)
     layers = _maybe_add_borders(layers, dark)
     deck = pdk.Deck(
         layers=layers,
@@ -788,6 +842,7 @@ def _render_with_colorbar(
 ):
     if not isinstance(layers, list):
         layers = [layers]
+    layers = _maybe_add_no_data_fill(layers)
     layers = _maybe_add_borders(layers, dark)
     deck = pdk.Deck(
         layers=layers,
