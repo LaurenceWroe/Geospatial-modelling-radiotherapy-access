@@ -1260,9 +1260,9 @@ with st.sidebar:
     ))
 
     hex_opacity = st.slider(
-        "Hexagon transparency", min_value=0, max_value=100, value=30,
+        "Hexagon transparency", min_value=0, max_value=100, value=0,
         format="%d%%",
-        help="Opacity of the hex fill layer (0 = fully transparent, 100 = fully opaque).",
+        help="Transparency of the hex fill layer (0% = fully opaque, 100% = fully transparent).",
     )
     _hex_opacity_f = (100 - hex_opacity) / 100.0
 
@@ -1365,8 +1365,8 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_intro, _tab_sep0, tab_map, tab_data, _tab_sep1, tab_cap, tab_geo, _tab_sep2, tab_plan, _tab_sep3, tab_method, tab_assumptions, tab_toy, tab_model, _tab_sep4, tab_sensitivity, tab_convergence = st.tabs([
-    "💡 Introduction", "│", "🗺️ Access Maps", "📊 Data", "│", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example", "📐 Probability Models", "│", "📉 Sensitivity", "🔬 Convergence",
+tab_intro, _tab_sep0, tab_map, tab_data, _tab_sep1, tab_cap, tab_geo, _tab_sep2, tab_plan, _tab_sep3, tab_method, tab_assumptions, tab_toy, tab_model, _tab_sep4, tab_sensitivity, tab_convergence, tab_choropleth = st.tabs([
+    "💡 Introduction", "│", "🗺️ Access Maps", "📊 Data", "│", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example", "📐 Probability Models", "│", "📉 Sensitivity", "🔬 Convergence", "🗺️ World Choropleth",
 ], default="🗺️ Access Maps")
 
 # ---------------------------------------------------------------------------
@@ -3598,6 +3598,123 @@ with tab_convergence:
             for _c in ("A_C", "A_G", "A_RM"):
                 _conv_show[_c] = (_conv_show[_c] * 100).round(1)
             st.dataframe(_conv_show, use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# World Choropleth tab — global per-country overview from the precomputed lookup
+# ---------------------------------------------------------------------------
+
+_COUNTRY_METRICS_PATH = Path(__file__).resolve().parent / "data" / "country_metrics.parquet"
+
+
+@st.cache_data(show_spinner=False)
+def _load_country_metrics():
+    """Load the precomputed per-country access lookup (or None if absent)."""
+    if not _COUNTRY_METRICS_PATH.exists():
+        return None
+    return pd.read_parquet(_COUNTRY_METRICS_PATH)
+
+
+with tab_choropleth:
+    st.header("🗺️ World Choropleth")
+    st.caption(
+        "One value per country — the **national, demand-weighted** access metric. "
+        "This is a coarser view than the per-hexagon Access Maps (which resolve access "
+        "*within* a country); here each country is a single number. Precomputed at H3 "
+        "resolution 5 from the corrected DIRAC facilities and cached driving-time matrices."
+    )
+
+    _cm = _load_country_metrics()
+    if _cm is None or _cm.empty:
+        st.info(
+            "Country metrics lookup not found. Generate it with "
+            "`python scripts/build_country_metrics.py`."
+        )
+    else:
+        _cc1, _cc2 = st.columns([1.1, 1.4])
+        _chor_metric = _cc1.radio(
+            "Metric", ["Capacity", "Geography", "RadMaps"],
+            horizontal=True, key="chor_metric",
+            help="Capacity = supply adequacy A_C = min(1, machines·450 / demand). "
+                 "Geography = demand-weighted geographic reach A_G. "
+                 "RadMaps = realised treatment A_RM (supply × access).",
+        )
+        _chor_is_cap = _chor_metric == "Capacity"
+        _chor_thr = _cc2.radio(
+            "Threshold", ["50 km", "100 km", "200 km", "30 min", "60 min", "120 min"],
+            index=5, horizontal=True, key="chor_thr", disabled=_chor_is_cap,
+            help="Distance or driving-time cut-off. Not applicable to Capacity — "
+                 "supply adequacy is threshold-free.",
+        )
+
+        # Resolve the column + a human title.
+        if _chor_is_cap:
+            _chor_col = "A_C"
+            _chor_title = "Capacity — supply adequacy (A_C)"
+            _chor_is_time = False
+        else:
+            _chor_code = {"Geography": "A_G", "RadMaps": "A_RM"}[_chor_metric]
+            _chor_unit = _chor_thr.replace(" ", "")           # "50km" / "120min"
+            _chor_col = f"{_chor_code}_{_chor_unit}"
+            _chor_is_time = _chor_unit.endswith("min")
+            _chor_metric_full = {"Geography": "Geographic reach (A_G)",
+                                 "RadMaps": "Realised treatment (A_RM)"}[_chor_metric]
+            _chor_title = f"{_chor_metric_full} within {_chor_thr}"
+
+        _cdf = _cm[["iso3", "name", "n_machines", "time_source", _chor_col]].copy()
+        _cdf = _cdf.rename(columns={_chor_col: "value"}).dropna(subset=["value"])
+        _cdf["pct"] = (_cdf["value"] * 100).round(1)
+
+        # Discrete 5-band colouring, reusing the app's discrete palette (honours the
+        # colour-blind-safe toggle via _DISCRETE_PALETTE). Bands are fixed 20% steps.
+        _band_edges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0001]
+        _band_labels = ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"]
+        _cdf["band"] = pd.cut(_cdf["value"], bins=_band_edges, labels=_band_labels,
+                              include_lowest=True).astype(str)
+        _pal = _DISCRETE_PALETTE[:5]
+        _band_color = {lab: f"rgb({c[0]},{c[1]},{c[2]})" for lab, c in zip(_band_labels, _pal)}
+
+        # Per-country hover note.
+        def _chor_note(r):
+            if r["n_machines"] == 0:
+                return "no radiotherapy facilities"
+            if _chor_is_time and r["time_source"] == "proxy":
+                return "driving time estimated (distance proxy)"
+            return ""
+        _cdf["note"] = _cdf.apply(_chor_note, axis=1)
+
+        import plotly.express as px
+        _fig_chor = px.choropleth(
+            _cdf, locations="iso3", locationmode="ISO-3",
+            color="band", color_discrete_map=_band_color,
+            category_orders={"band": _band_labels},
+            hover_name="name",
+            hover_data={"pct": ":.1f", "note": True, "band": False, "iso3": False},
+            title=_chor_title,
+        )
+        _fig_chor.update_traces(
+            hovertemplate="<b>%{hovertext}</b><br>value: %{customdata[0]:.1f}%"
+                          "<br>%{customdata[1]}<extra></extra>",
+        )
+        _fig_chor.update_layout(
+            legend_title_text="Access band",
+            margin=dict(l=0, r=0, t=40, b=0),
+            height=560,
+            geo=dict(showframe=False, showcoastlines=False,
+                     landcolor="#e5e5e5", projection_type="natural earth",
+                     bgcolor="rgba(0,0,0,0)"),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(_fig_chor, use_container_width=True)
+
+        _n_grey = int((_cdf["n_machines"] == 0).sum())
+        _mean_v = float(_cdf["value"].mean())
+        st.caption(
+            f"{len(_cdf)} countries with GLOBOCAN data · mean = {_mean_v*100:.0f}% · "
+            f"{_n_grey} have no radiotherapy facilities (shown at 0%). "
+            "Countries with no cancer-incidence data are unshaded (grey). "
+            + ("Driving times for countries TravelTime does not cover use a fitted "
+               "distance proxy (flagged on hover)." if _chor_is_time else "")
+        )
 
 # ---------------------------------------------------------------------------
 # Footer
