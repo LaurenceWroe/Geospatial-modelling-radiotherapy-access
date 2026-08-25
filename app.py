@@ -3851,10 +3851,16 @@ with tab_country:
         )
         st.plotly_chart(_fig_sc, use_container_width=True)
 
-        # ---- Bar chart: A_RM bars with A_C / A_G ceilings, all countries ----
+        # ---- Bar chart: A_RM bars with A_C / A_G ceilings ----
         st.subheader("Demand, ceilings & realised treatment")
-        _sort_desc = st.checkbox("Sort best-access first", value=False, key="ca_sortdesc")
-        _cab = _ca.sort_values("A_RM", ascending=not _sort_desc)
+        _bc1, _bc2 = st.columns([2, 1])
+        _worst_first = _bc2.toggle("Worst access first", value=True, key="ca_worst")
+        _ca_n = _bc1.slider(
+            "Countries to show", min_value=10, max_value=len(_ca),
+            value=min(25, len(_ca)), step=5, key="ca_n",
+            help="Ranked by realised access (A_RM). Slide to the maximum to see every country.",
+        )
+        _cab = _ca.sort_values("A_RM", ascending=_worst_first).head(_ca_n)
         _C_REAL, _C_SUP, _C_ACC = "#2c7fb8", "#d95f02", "#1b9e77"
 
         _fig_bar = _go.Figure()
@@ -3878,13 +3884,15 @@ with tab_country:
         _fig_bar.update_layout(
             barmode="overlay",
             xaxis=dict(title="fraction of national RT demand", range=[0, 1.02], tickformat=".0%"),
-            yaxis=dict(autorange="reversed", title=None, automargin=True, tickfont=dict(size=10)),
-            height=max(500, len(_cab) * 17),
+            yaxis=dict(autorange="reversed", title=None, automargin=True, tickfont=dict(size=11)),
+            height=max(400, len(_cab) * 24),
             margin=dict(r=0, t=10, b=0),
             legend=dict(orientation="h", yanchor="bottom", y=1.005, xanchor="right", x=1),
         )
         st.plotly_chart(_fig_bar, use_container_width=True)
         st.caption(
+            f"Showing {len(_cab)} of {len(_ca)} countries "
+            f"({'lowest' if _worst_first else 'highest'} access first). "
             "Bars = realised treatment $A_{RM}$; ticks = the supply ($A_C$, orange) and "
             "access ($A_G$, green) ceilings. A bar short of its nearest tick is spatial "
             "mismatch. $A_C$ is threshold-free, so its ticks don't move with the selector."
