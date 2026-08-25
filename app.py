@@ -3666,12 +3666,14 @@ with tab_choropleth:
 
         # Discrete 5-band colouring, reusing the app's discrete palette (honours the
         # colour-blind-safe toggle via _DISCRETE_PALETTE). Bands are fixed 20% steps.
+        _NO_DATA = "No data"
         _band_edges = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0001]
         _band_labels = ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"]
         _cdf["band"] = pd.cut(_cdf["value"], bins=_band_edges, labels=_band_labels,
                               include_lowest=True).astype(str)
         _pal = _DISCRETE_PALETTE[:5]
         _band_color = {lab: f"rgb({c[0]},{c[1]},{c[2]})" for lab, c in zip(_band_labels, _pal)}
+        _band_color[_NO_DATA] = "rgb(158,158,158)"   # matches the map's no-data land grey
 
         # Per-country hover note.
         def _chor_note(r):
@@ -3681,19 +3683,32 @@ with tab_choropleth:
                 return "driving time estimated (distance proxy)"
             return ""
         _cdf["note"] = _cdf.apply(_chor_note, axis=1)
+        _cdf["hlabel"] = _cdf.apply(
+            lambda r: f"<b>{r['name']}</b><br>value: {r['pct']:.1f}%"
+                      + (f"<br>{r['note']}" if r["note"] else ""), axis=1)
+
+        # Add every other world country as an explicit "No data" band so it renders
+        # grey *and* gets a hover ("no GLOBOCAN cancer data"), instead of being a
+        # silent hole on the base map.
+        _have_iso3 = set(_cdf["iso3"])
+        _missing_rows = [
+            {"iso3": c.alpha_3, "name": c.name, "band": _NO_DATA, "pct": float("nan"),
+             "hlabel": f"<b>{c.name}</b><br>no GLOBOCAN cancer data — not computed"}
+            for c in pycountry.countries
+            if getattr(c, "alpha_3", None) and c.alpha_3 not in _have_iso3
+        ]
+        _full = pd.concat([_cdf, pd.DataFrame(_missing_rows)], ignore_index=True)
 
         import plotly.express as px
         _fig_chor = px.choropleth(
-            _cdf, locations="iso3", locationmode="ISO-3",
+            _full, locations="iso3", locationmode="ISO-3",
             color="band", color_discrete_map=_band_color,
-            category_orders={"band": _band_labels},
-            hover_name="name",
-            hover_data={"pct": ":.1f", "note": True, "band": False, "iso3": False},
+            category_orders={"band": _band_labels + [_NO_DATA]},
+            custom_data=["hlabel"],
             title=_chor_title,
         )
         _fig_chor.update_traces(
-            hovertemplate="<b>%{hovertext}</b><br>value: %{customdata[0]:.1f}%"
-                          "<br>%{customdata[1]}<extra></extra>",
+            hovertemplate="%{customdata[0]}<extra></extra>",
         )
         _fig_chor.update_layout(
             legend_title_text="Access band",
