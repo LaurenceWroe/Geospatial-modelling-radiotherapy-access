@@ -3700,8 +3700,11 @@ with tab_choropleth:
             margin=dict(l=0, r=0, t=40, b=0),
             height=560,
             geo=dict(showframe=False, showcoastlines=False,
-                     landcolor="#e5e5e5", projection_type="natural earth",
-                     bgcolor="rgba(0,0,0,0)"),
+                     showcountries=True, countrycolor="white", countrywidth=0.5,
+                     # Clear mid-grey for countries we can't compute (no GLOBOCAN
+                     # data) — distinct from the ocean so "no data" reads as such.
+                     landcolor="#9e9e9e", showland=True,
+                     projection_type="natural earth", bgcolor="rgba(0,0,0,0)"),
             paper_bgcolor="rgba(0,0,0,0)",
         )
         st.plotly_chart(_fig_chor, use_container_width=True)
@@ -3711,7 +3714,7 @@ with tab_choropleth:
         st.caption(
             f"{len(_cdf)} countries with GLOBOCAN data · mean = {_mean_v*100:.0f}% · "
             f"{_n_grey} have no radiotherapy facilities (shown at 0%). "
-            "Countries with no cancer-incidence data are unshaded (grey). "
+            "Countries we can't compute (no GLOBOCAN cancer data) are shown in grey. "
             + ("Driving times for countries TravelTime does not cover use a fitted "
                "distance proxy (flagged on hover)." if _chor_is_time else "")
         )
