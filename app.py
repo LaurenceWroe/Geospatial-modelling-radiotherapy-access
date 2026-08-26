@@ -3810,7 +3810,9 @@ with tab_country:
             "`python scripts/build_country_metrics.py`."
         )
     else:
-        _ca_thr = st.radio(
+        _ctl1, _ctl2 = st.columns([1, 2])
+        _ca_region = _ctl1.selectbox("Region", _region_options(), index=0, key="ca_region")
+        _ca_thr = _ctl2.radio(
             "Threshold", ["50 km", "100 km", "200 km", "30 min", "60 min", "120 min"],
             index=5, horizontal=True, key="ca_thr",
             help="Distance or driving-time cut-off applied to A_G and A_RM. "
@@ -3819,12 +3821,17 @@ with tab_country:
         _ca_unit = _ca_thr.replace(" ", "")          # "50km" / "120min"
         _ca_gcol, _ca_rcol = f"A_G_{_ca_unit}", f"A_RM_{_ca_unit}"
 
-        _ca = _cam[["iso3", "name", "n_machines", "A_C", _ca_gcol, _ca_rcol]].copy()
+        # Filter to the selected region's member countries (World = all).
+        _reg_iso3 = {o.alpha_3 for a2 in get_region(_ca_region).member_alpha2
+                     if (o := pycountry.countries.get(alpha_2=a2)) is not None}
+        _ca = _cam[_cam["iso3"].isin(_reg_iso3)][
+            ["iso3", "name", "n_machines", "demand", "A_C", _ca_gcol, _ca_rcol]].copy()
         _ca = _ca.rename(columns={_ca_gcol: "A_G", _ca_rcol: "A_RM"}).dropna(subset=["A_G", "A_RM"])
-        _ca["mismatch"] = _ca[["A_C", "A_G"]].min(axis=1) - _ca["A_RM"]
+        _ca["ceiling"] = _ca[["A_C", "A_G"]].min(axis=1)
+        _ca["mismatch"] = _ca["ceiling"] - _ca["A_RM"]
+        _ca["bound"] = np.where(_ca["A_C"] <= _ca["A_G"], "supply-bound (A_C)", "access-bound (A_G)")
 
         import plotly.express as px
-        import plotly.graph_objects as _go
 
         # ---- Scatter: A_C vs A_G, colour = A_RM ----
         _fig_sc = px.scatter(
@@ -3851,51 +3858,40 @@ with tab_country:
         )
         st.plotly_chart(_fig_sc, use_container_width=True)
 
-        # ---- Bar chart: A_RM bars with A_C / A_G ceilings ----
-        st.subheader("Demand, ceilings & realised treatment")
-        _bc1, _bc2 = st.columns([2, 1])
-        _worst_first = _bc2.toggle("Worst access first", value=True, key="ca_worst")
-        _ca_n = _bc1.slider(
-            "Countries to show", min_value=10, max_value=len(_ca),
-            value=min(25, len(_ca)), step=5, key="ca_n",
-            help="Ranked by realised access (A_RM). Slide to the maximum to see every country.",
+        # ---- Mismatch scatter: access lost to poor distribution vs realised access ----
+        st.subheader("Redistribution opportunity")
+        _fig_mm = px.scatter(
+            _ca, x="A_RM", y="mismatch", color="bound",
+            color_discrete_map={"supply-bound (A_C)": "#d95f02",
+                                "access-bound (A_G)": "#1b9e77"},
+            hover_name="name",
+            hover_data={"A_RM": ":.0%", "mismatch": ":.0%", "ceiling": ":.0%",
+                        "A_C": ":.0%", "A_G": ":.0%", "demand": ":,.0f", "bound": False},
+            labels={"A_RM": "A_RM — realised access",
+                    "mismatch": "mismatch  =  min(A_C, A_G) − A_RM",
+                    "bound": "ceiling set by"},
         )
-        _cab = _ca.sort_values("A_RM", ascending=_worst_first).head(_ca_n)
-        _C_REAL, _C_SUP, _C_ACC = "#2c7fb8", "#d95f02", "#1b9e77"
-
-        _fig_bar = _go.Figure()
-        _fig_bar.add_trace(_go.Bar(
-            y=_cab["name"], x=_cab["A_RM"], orientation="h",
-            marker_color=_C_REAL, name="A_RM realised",
-            hovertemplate="<b>%{y}</b><br>A_RM realised: %{x:.0%}<extra></extra>",
-        ))
-        _fig_bar.add_trace(_go.Scatter(
-            y=_cab["name"], x=_cab["A_C"], mode="markers", name="A_C supply ceiling",
-            marker=dict(symbol="line-ns", color=_C_SUP, size=11,
-                        line=dict(width=2.5, color=_C_SUP)),
-            hovertemplate="<b>%{y}</b><br>A_C supply ceiling: %{x:.0%}<extra></extra>",
-        ))
-        _fig_bar.add_trace(_go.Scatter(
-            y=_cab["name"], x=_cab["A_G"], mode="markers", name="A_G access ceiling",
-            marker=dict(symbol="line-ns", color=_C_ACC, size=11,
-                        line=dict(width=2.5, color=_C_ACC)),
-            hovertemplate="<b>%{y}</b><br>A_G access ceiling: %{x:.0%}<extra></extra>",
-        ))
-        _fig_bar.update_layout(
-            barmode="overlay",
-            xaxis=dict(title="fraction of national RT demand", range=[0, 1.02], tickformat=".0%"),
-            yaxis=dict(autorange="reversed", title=None, automargin=True, tickfont=dict(size=11)),
-            height=max(400, len(_cab) * 24),
-            margin=dict(r=0, t=10, b=0),
+        _fig_mm.update_traces(marker=dict(size=10, line=dict(width=0.5, color="rgba(0,0,0,0.4)")))
+        # y = x guide: above it, a country loses more to mismatch than it currently delivers.
+        _fig_mm.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
+                          line=dict(color="grey", dash="dot", width=1))
+        _mm_max = float(_ca["mismatch"].max())
+        _fig_mm.update_layout(
+            title=f"Access lost to spatial mismatch (within {_ca_thr})",
+            xaxis=dict(range=[-0.02, 1.03], tickformat=".0%"),
+            yaxis=dict(range=[-0.005, max(0.05, _mm_max * 1.18)], tickformat=".0%"),
+            height=520, margin=dict(l=0, r=0, t=40, b=0),
             legend=dict(orientation="h", yanchor="bottom", y=1.005, xanchor="right", x=1),
         )
-        st.plotly_chart(_fig_bar, use_container_width=True)
+        st.plotly_chart(_fig_mm, use_container_width=True)
         st.caption(
-            f"Showing {len(_cab)} of {len(_ca)} countries "
-            f"({'lowest' if _worst_first else 'highest'} access first). "
-            "Bars = realised treatment $A_{RM}$; ticks = the supply ($A_C$, orange) and "
-            "access ($A_G$, green) ceilings. A bar short of its nearest tick is spatial "
-            "mismatch. $A_C$ is threshold-free, so its ticks don't move with the selector."
+            "**y** = access lost to spatial mismatch, min(A_C, A_G) − A_RM: demand that existing "
+            "machines could serve if better distributed — no new capacity or coverage needed. "
+            "**x** = access realised today (A_RM). **Top-left** = poor access that is mostly a "
+            "*distribution* problem (redistribution is the high-leverage fix); **bottom** = little "
+            "mismatch, so the limit is real supply/coverage and needs *investment*. Colour = which "
+            "ceiling (supply A_C or access A_G) caps the country. Above the dotted line, a country "
+            "loses more to mismatch than it currently delivers."
         )
 
 # ---------------------------------------------------------------------------
