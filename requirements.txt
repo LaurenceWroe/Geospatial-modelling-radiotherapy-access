@@ -8,7 +8,7 @@ pyogrio>=0.7.0     # geopandas file I/O backend (replaces fiona; ships with GDAL
 
 # Data processing
 numpy>=1.24.0
-pandas>=2.0.0
+pandas>=2.0.0,<3   # <3: cache/world_default.pkl is a pandas pickle; pandas 3 pickles do not load on pandas 2
 xarray>=2023.1.0
 scipy>=1.10.0      # xarray netCDF3 backend — reads the GLOBOCAN .nc (do not remove)
 openpyxl>=3.1.0    # reading .xlsx LINAC files
@@ -25,3 +25,4 @@ pycountry>=22.3.5
 
 # Optional (for netCDF4 / GLOBOCAN tensor loading)
 # netCDF4>=1.6.0   # if xarray cannot read .nc without it
+timezonefinder>=6.5,<7  # local departure times (6.x keeps numpy<2)

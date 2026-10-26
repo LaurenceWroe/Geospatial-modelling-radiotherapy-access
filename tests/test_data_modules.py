@@ -58,8 +58,10 @@ def test_incidence_proportional_to_population():
     assert inc[2] / inc[0] == pytest.approx(3.0, rel=1e-3)
 
 
-def test_nan_national_cases_become_zero():
-    """Vagina cancer has NaN for the World aggregate; must resolve to 0, not NaN."""
+def test_nan_national_cases_become_zero(monkeypatch):
+    """Vagina cancer has NaN for the World aggregate in GLOBOCAN 2022; must resolve to 0, not NaN."""
+    import data.cancer
+    monkeypatch.setattr(data.cancer, "XARRAY_PATH", data.cancer.GLOBOCAN_FILES["2022"])
     cases = get_national_cases("WLD", ["Vagina"])
     assert np.isfinite(cases["Vagina"])
     assert cases["Vagina"] == 0.0
@@ -107,3 +109,20 @@ def test_aggregate_tt_all_unreachable_stays_inf():
         unreachable_fill_min=120.0,
     )
     assert not np.isfinite(result[0, 0])
+
+
+def test_region_code_missing_from_globocan_sums_members():
+    """Northern America ("NAR") is not in the GLOBOCAN file; it must equal CAN + PRI + USA, not Namibia."""
+    from data.cancer import get_national_cases
+    k = "All cancers excl. NMSC"
+    total = sum(get_national_cases(c, [k])[k] for c in ("CAN", "PRI", "USA"))
+    assert get_national_cases("NAR", [k])[k] == pytest.approx(total)
+    assert get_national_cases("NAM", [k])[k] < 1e4  # Namibia
+
+
+def test_minutes_to_proxy_km():
+    from compute import minutes_to_proxy_km
+    assert minutes_to_proxy_km(120.0) == pytest.approx(64.4)
+    assert minutes_to_proxy_km(60.0) == pytest.approx(28.4)
+    assert minutes_to_proxy_km(240.0) == pytest.approx(128.8)
+    assert minutes_to_proxy_km(None) is None

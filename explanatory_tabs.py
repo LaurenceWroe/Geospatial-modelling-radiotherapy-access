@@ -51,16 +51,17 @@ def render_introduction():
         """
         | Tab | Contents |
         |---|---|
-        | **🗺️ Access Maps** | Interactive H3 hexagon maps — population density, cancer burden, RT demand, geographic access probability, and capacity-limited access. Select a country or region in the sidebar and click **Calculate RT Access**. |
-        | **📊 Data** | Country-level data tables — cancer incidence by site (GLOBOCAN 2022), LINAC locations (DIRAC), and RT utilisation rates. |
+        | **🗺️ Access Maps** | Interactive H3 hexagon maps — population density, cancer burden, RT demand, geographic access probability, capacity-limited access, and workload (treatment fractions) demand and deficit. Select a country or region in the sidebar and click **Calculate RT Access**. |
+        | **📊 Data** | Country-level data tables — cancer incidence by site (GLOBOCAN 2024), LINAC locations (DIRAC), and RT utilisation rates. |
         | **⚡ Capacity-Only** | Headline LINAC gap estimates (optimal RTU, proportional, and population benchmarks) without geographic constraints. |
         | **🌍 Geography-Only** | Distance/travel-time distributions to nearest LINAC after running Calculate RT Access. |
         | **🔧 Machine Planning** | Suggest optimal placements for new LINACs, or add custom facilities and re-evaluate access. |
         | **📖 Method** | Full pipeline description with flowchart, data sources, and step-by-step methodology. |
         | **⚠️ Assumptions** | Tabulated model assumptions and limitations, ranked by likely impact, with suggested improvements. |
         | **🧪 Toy Example** | Step-by-step worked example showing how each pipeline stage transforms inputs into access outputs. |
-        | **📐 Probability Models** | Explanation and visualisation of the four distance-decay models (exponential, Weibull, step function, uniform) used to compute geographic access probability. |
+        | **📐 Probability Models** | Explanation and visualisation of the six decay models (step, Weibull, exponential, Gaussian, power-law, uniform) used to compute geographic access probability, with published parameterisations as presets. |
         | **📉 Sensitivity** | Equity (Lorenz curve / access Gini) and a ±parameter sweep showing how robust the headline figures are. |
+        | **🔁 Benchmark** | Compare the RadMaps nearest-first allocation with proportional (balanced-FCA) and optimal rationing, and with conventional 2SFCA / E2SFCA / 3SFCA / gravity accessibility indices (also mappable as ratios or implied deficits). |
         | **🔬 Convergence** | How access estimates depend on H3 resolution (res 3–8), for both distance and driving time. |
         """
     )
@@ -92,7 +93,7 @@ def render_introduction():
         RadMaps draws on three global datasets, each with its own coverage limits. Results for
         the affected countries should be read with these gaps in mind.
 
-        **Cancer incidence — GLOBOCAN 2022.** National incidence is available for ~185 countries.
+        **Cancer incidence — GLOBOCAN 2024.** National incidence is available for 186 countries and territories (Sung et al. 2026).
         **31 smaller territories and dependencies are not covered** and cannot be selected as a
         country (and are omitted from regional/world totals). The most notable are **Hong Kong,
         Taiwan, Macao, Mongolia, North Korea, Puerto Rico**, and the French overseas departments
@@ -131,9 +132,10 @@ def render_introduction():
            population file (~1–60 seconds depending on country size); subsequent loads are
            instant.
 
-        5. **Explore the access model** — under *Radiotherapy Access*, adjust the distance-
-           decay model (exponential, step, or uniform), the decay parameter λ, and the
-           capacity per machine to see how results change.
+        5. **Explore the access model** — under *Radiotherapy Access*, adjust the decay
+           model (step, Weibull, exponential, Gaussian, power-law, or uniform), its
+           parameters, the capacity per machine, and the allocation rule to see how
+           results change.
 
         6. **Check the Data tab** for country-level cancer and LINAC statistics, and the
            **⚡ Capacity-Only** tab for a headline capacity gap estimate independent of
@@ -165,39 +167,75 @@ def render_method():
            represents an area unit for all subsequent calculations.
 
         2. **Cancer incidence** — national cancer incidence figures are taken from
-           [GLOBOCAN 2022](https://gco.iarc.fr/today/) (IARC). These are apportioned to
+           [GLOBOCAN 2024](https://gco.iarc.fr/today/) (IARC). These are apportioned to
            individual hexagons in proportion to their population, under the assumption of
            spatially uniform cancer incidence rates (see Assumptions below).
 
         3. **Radiotherapy demand** — the number of patients requiring RT in each hexagon is
-           estimated either by applying site-specific optimal RT utilisation fractions
-           (Delaney *et al.* 2005) to each cancer type, or by applying a user-specified
-           proportional rate to all cancers excluding non-melanoma skin cancer (NMSC, RT
-           utilisation ≈ 0%).
+           estimated either by applying cancer-type-specific optimal RT utilisation rates
+           to each cancer type, or by applying a user-specified proportional rate to all
+           cancers excluding non-melanoma skin cancer (NMSC, RT utilisation ≈ 0%). The
+           default optimal rates are the updated CCORE 2012 model (Barton *et al.* 2014,
+           per-site values as tabulated by Wong *et al.* 2016; 48.4 % of all cancers). The
+           Delaney *et al.* (2005) rates used for the RadMaps preprint (52.3 %) remain
+           selectable. Both sets cover first-course external-beam indications of **both
+           curative and palliative** intent: about 77 % of first courses are radical and
+           23 % palliative, and Jacob *et al.* (2010) put the palliative share at about
+           14 % of all new patients. Every rate can be overridden in the Data tab.
 
         4. **Linac locations and capacity** — facility locations and machine counts are
            sourced from the
-           [DIRAC database](https://dirac.iaea.org/) (IAEA). Each linac is assumed to treat
-           a fixed number of patients per year (default: 450), giving a total national
-           capacity.
+           [DIRAC database](https://dirac.iaea.org/) (IAEA). By default each linac is
+           assumed to treat a fixed number of patients per year (450). Optionally the
+           capacity can instead be expressed as **fractions per linac per year** and
+           converted to patients using the evidence-based fractions per first course of
+           Wong *et al.* (2016; 19.4 overall, 2.0 for kidney to 29.1 for brain) weighted
+           by the country's own cancer-type mix, with a hypofractionation factor to
+           shorten every course. Fractions *per course* are used, not fractions *per
+           patient*, because the demand already carries the utilisation rate.
 
         5. **Geographic access probability** — for each hexagon, the probability that a
            patient reaches *any* facility is computed as:
 
-           $$P_{\\text{geo}} = 1 - \\prod_{i} \\left(1 - p(d_i)\\right)$$
+           $$P_{\\text{geo}} = 1 - \\prod_{i} \\left(1 - p(x_i)\\right)$$
 
-           where $d_i$ is the straight-line distance to facility $i$ and $p(d_i)$ is the
-           probability model (exponential decay, step function, or uniform). This metric
-           is independent of capacity.
+           where $x_i$ is the straight-line distance, driving time or public-transport
+           time to facility $i$ and $p(x_i)$ is the decay model (step, Weibull,
+           exponential, Gaussian, power-law or uniform). Each facility counts once
+           regardless of its machine count. This metric is independent of capacity.
 
-        6. **Capacity-limited (modelled) access** — linac capacity is allocated using a
-           ring-based proportional algorithm: for each facility, hexagons are grouped into
-           concentric rings of equal distance. Each ring is served in full before moving
-           outward; if a ring would exhaust the facility's remaining capacity, that capacity
-           is distributed *proportionally* across all hexagons in the ring by their demand
-           weight. No hexagon receives more than its outstanding demand.
-           The resulting ratio of treated to total demand per hexagon gives the **Modelled
-           Access Probability**.
+        6. **Capacity-limited (modelled) access** — the default *nearest-first* rule
+           allocates capacity in distance rings across **all facilities at once**: every
+           hexagon–facility pair is assigned to a ring one hexagon wide, rings are processed
+           from nearest to farthest, and within a ring each facility serves the demand it
+           can reach, weighted by $D_h \\, p(x_{hi})$, until its remaining capacity is
+           exhausted. If a ring would exhaust a facility's capacity, that capacity is split
+           proportionally across the hexagons in the ring. Because all facilities advance
+           ring by ring together, the result does not depend on the order facilities appear
+           in the input file (same-ring ties are broken by a fixed coordinate sort). No
+           hexagon receives more than its outstanding demand, and no facility exceeds its
+           capacity. The ratio of treated to total demand per hexagon is the **Modelled
+           Access Ratio**.
+
+        7. **Workload in treatment fractions** — every demand and allocation figure is also
+           expressed as treatment fractions, $F_h = \\sum_i D_{h,i}\\, f_i$, using the
+           evidence-based fractions per first course $f_i$ of Wong *et al.* (2016) for each
+           cancer type (editable in the Data tab for hypofractionation scenarios). Delivered
+           fractions follow the patient allocation at each hexagon's mean course length, and
+           the fraction deficit divided by the fractions one linac delivers per year gives
+           the **LINAC-equivalents short**: the machines the unmet workload represents at
+           benchmark throughput, if they could be placed within reach. With national
+           incidence rates the cancer mix is uniform within a country, so fraction and
+           patient access ratios coincide; the two diverge once sub-national incidence or
+           site-specific fractionation is introduced.
+
+           Two alternative rationing rules are available for comparison in the sidebar and
+           the Benchmark tab: *proportional*, where each hexagon's accessible demand is split
+           across the facilities it can reach and every facility serves its share at the
+           ratio $\\min(1, \\text{capacity}/\\text{demand received})$ (a capacity-capped
+           balanced floating catchment); and *optimal*, a linear programme that maximises
+           the total number of patients treated and shows how much capacity nearest-first
+           allocation leaves stranded where catchments overlap.
         """
     )
 
@@ -229,8 +267,8 @@ def render_assumptions():
         },
         {
             "Assumption": "Distance-ranked allocation",
-            "Limitation": "Capacity is allocated to the nearest patients first (globally, across all facilities, so the result is independent of facility ordering). Real referral patterns depend on clinical pathways, waiting times, and patient choice.",
-            "To Improve": "Travel-time routing; incorporate referral pathway data where available.",
+            "Limitation": "Capacity is allocated to the nearest patients first (globally, across all facilities, so the result is independent of facility ordering). Real referral patterns depend on clinical pathways, waiting times, and patient choice: roughly a fifth to a third of patients in England bypass their nearest centre (Aggarwal et al. 2017), more in the US and France. Nearest-first rationing can also leave capacity unused where catchments overlap.",
+            "To Improve": "Compare with the proportional and optimal rules in the Benchmark tab; incorporate referral pathway data where available.",
         },
         {
             "Assumption": "National boundaries as hard limits (regional analysis)",
@@ -314,8 +352,9 @@ def render_toy_example():
         (
             "CancerCasesRequiringRT.png",
             "Step 3 — Cancer Cases Requiring Radiotherapy",
-            "Each cancer type is multiplied by its site-specific optimal radiotherapy "
-            "utilisation fraction (Delaney et al. 2005) and the results summed per hexagon. "
+            "Each cancer type is multiplied by its type-specific optimal radiotherapy "
+            "utilisation rate (Delaney et al. 2005 in this illustration; the CCORE 2012 "
+            "update is the tool default) and the results summed per hexagon. "
             "This gives the estimated number of patients in each cell who require RT annually.",
         ),
         (
@@ -328,10 +367,12 @@ def render_toy_example():
         (
             "LinacCapacity.png",
             "Step 5 — Linac Capacity Allocation",
-            "Machine capacity is distributed using a greedy nearest-first algorithm. Each "
-            "linac fills its annual capacity by serving the nearest hexagons first, working "
-            "outward until capacity is exhausted. The proportion of demand met in each "
-            "hexagon gives the Modelled Access Ratio.",
+            "Machine capacity is distributed nearest-first in distance rings processed "
+            "across all facilities together: the nearest ring of every facility is served "
+            "before any facility moves to its next ring, so a patient close to one centre "
+            "is never displaced by a patient far from another. Within a ring, a facility "
+            "that cannot meet all the demand shares its remaining capacity proportionally. "
+            "The proportion of demand met in each hexagon gives the Modelled Access Ratio.",
         ),
         (
             "Untreated.png",

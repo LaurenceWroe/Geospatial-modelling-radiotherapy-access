@@ -43,17 +43,42 @@ from data.regions import is_region, get_region, REGIONS, REGION_GLOBOCAN_CODES
 from data.cancer import (
     get_cancer_types, apportion_cancer_to_h3, has_globocan_data,
     get_national_cases, get_optimal_rt_fractions, DERIVED_CANCER_TYPES,
-    XARRAY_PATH,
+    XARRAY_PATH, list_rtu_sets, rtu_set_info, DEFAULT_RTU_SET,
+    get_fractions_per_course, DEFAULT_FRACTIONS_PER_LINAC_PER_YEAR, DEFAULT_FRACTIONS_PER_COURSE,
 )
-from analysis.accessibility import compute_accessibility, aggregate_access_gdf
+from analysis.accessibility import compute_accessibility, aggregate_access_gdf, ALLOCATION_RULES
+from analysis.decay import DECAY_LABELS, decay_probability, describe_model, default_cutoff
+from analysis.fca import FCA_LABELS
 from compute import (
     _country_options, _region_options, _region_country_summary, _load_pop, _load_pop_region, _load_cancer, _load_cancer_region_percountry, _compute_access, _compute_access_travel_time, _compute_access_one_country_for_region, _compute_access_region_percountry, _load_dirac, _data_tab_cancer, _data_tab_rt_need, _run_convergence_cached,
+    _effective_capacity, _compute_fca_cached, _facility_quality,
     _AGGREGATE_CANCER_KEYS,
 )
+
+# Display metric -> (allocation view, internal metric used by the renderer)
+_DISPLAY_METRICS = {
+    "Nearest-first access ratio": ("nf", "Modelled Access Ratio"),
+    "Nearest-first deficit": ("nf", "Modelled Access Deficit"),
+    "Capped 3SFCA access ratio": ("fca", "Modelled Access Ratio"),
+    "Capped 3SFCA deficit": ("fca", "Modelled Access Deficit"),
+    "3SFCA ratio": ("nf", "3SFCA ratio"),
+}
+
+_ALLOCATION_LABELS = {
+    "nearest_first": "Nearest-first (RadMaps default)",
+    "proportional": "Proportional (capacity-capped balanced FCA)",
+    "optimal": "Optimal (max patients treated, LP)",
+}
+_MANIFEST_PATH = Path(__file__).resolve().parent / "data" / "manifest.json"
 from explanatory_tabs import (
     render_introduction, render_method, render_assumptions, render_toy_example,
 )
 from data.travel_time import compute_travel_time_matrix, CACHE_DIR as _TT_CACHE_DIR, MAX_TRAVEL_TIME_BY_RES as _TT_MAX_BY_RES, TT_SUPPORTED_RESOLUTIONS as _TT_SUPPORTED_RES
+from data.tt_store import store_matrix
+from compute import combine_allocations, allocation_view, minutes_to_proxy_km
+
+# Largest dense travel-time matrix the app will build (USA at res 6 is ~1.7 GB).
+_TT_DENSE_MAX_BYTES = 800e6
 
 # Countries with no TravelTime driving-network coverage (confirmed via API error 16/17):
 # China, Russia, North Korea, South Korea, Macao. Driving-time analysis is unavailable here.
@@ -966,11 +991,14 @@ _POP_DATA_METRICS = ["Population Density", "Cancer Incidence", "Radiotherapy Dem
 # ---------------------------------------------------------------------------
 
 _WORLD_DEFAULT_CACHE = Path(__file__).resolve().parent / "cache" / "world_default.pkl"
+# The paper's main configuration: Gaussian decay, 120 min driving catchment,
+# computed per country at H3 resolution 5 and shown at resolution 3.
 _WORLD_DEFAULT_PARAMS = {
     "country": "World",
     "iso3": "WLD",
-    "model": "step",
-    "max_distance_km": 200.0,
+    "model": "gaussian",
+    "max_distance_km": 120.0,
+    "tt_mode": "driving",
     "h3_res": 3,
     "rt_method": "optimal",
     "capacity": 450.0,
@@ -1007,6 +1035,7 @@ if "_session_init" not in st.session_state:
             "region_percountry": True,
             "linac_locs_tuple": None,
             "facilities_df": None,
+            "location": "World",
         })
         st.session_state.setdefault("_map_generated", True)
 
@@ -1053,9 +1082,9 @@ with st.sidebar:
         )
     else:
         h3_resolution = st.selectbox(
-            "H3 resolution", options=[7, 6, 5, 4, 3], index=3,
+            "H3 resolution", options=[6, 5, 4, 3], index=2,
             format_func=lambda r: {
-                7: "H7 (~5 km²)", 6: "H6 (~36 km²)",
+                6: "H6 (~36 km²)",
                 5: "H5 (~253 km²)", 4: "H4 (~1,770 km²)", 3: "H3 (~12,400 km²)",
             }[r],
             key="h3_res_country",
@@ -1081,12 +1110,19 @@ with st.sidebar:
     needs_linac = is_access or is_nearest
 
     access_display_metric: str = "Modelled Access Ratio"
+    access_display_label: str = "Nearest-first access ratio"
+    access_alloc_view: str = "nf"
     if is_access:
-        access_display_metric = st.selectbox(
-            "Display metric",
-            ["Modelled Access Deficit", "Modelled Accessed", "Modelled Access Ratio", "Geographic Access Probability", "RT Demand"],
-            index=2,  # default: Modelled Access Ratio
+        access_display_label = st.selectbox(
+            "Display metric", list(_DISPLAY_METRICS), index=0,
+            help="Both allocation rules of the paper are computed on every run. Nearest-first rations "
+                 "capacity to the closest patients first; capped 3SFCA splits each hexagon's demand "
+                 "across the facilities it can reach and treats the same fraction min(1, C/Q) of every "
+                 "share a facility receives. The access ratio is patients treated / RT demand per hexagon "
+                 "and the deficit the patients left untreated. The 3SFCA ratio is the conventional "
+                 "uncapped index (Wan et al. 2012): capacity available per patient of demand within reach.",
         )
+        access_alloc_view, access_display_metric = _DISPLAY_METRICS[access_display_label]
 
     # ── Radiotherapy Utilisation Rate (part of Calculation Settings) ──────
     rt_method: str = "optimal"
@@ -1094,20 +1130,14 @@ with st.sidebar:
 
     _rt_label = st.radio(
         "Radiotherapy Utilisation Rate (RTU)",
-        ["Optimal", "Custom", "Proportional"],
-        horizontal=False, key="rt_demand_method_radio",
+        ["Optimal", "Custom"],
+        horizontal=True, key="rt_demand_method_radio",
+        help="Optimal: the evidence-based optimal RTU of each cancer site used in the RadMaps paper "
+             f"({rtu_set_info(DEFAULT_RTU_SET)['label']}). "
+             "Custom: start from those values and edit them per cancer site in the Data tab.",
     )
-    if "Custom" in _rt_label:
-        rt_method = "custom"
-    elif "Optimal" in _rt_label:
-        rt_method = "optimal"
-    else:
-        rt_method = "proportional"
-    if rt_method == "proportional":
-        rt_fraction = st.slider(
-            "Fraction of cancer cases needing RT",
-            min_value=0.01, max_value=1.0, value=0.25, step=0.01, format="%.2f",
-        )
+    rt_method = "custom" if _rt_label == "Custom" else "optimal"
+    rtu_set: str = DEFAULT_RTU_SET  # the paper's optimal RTUs
 
     # Proportional uses all cancers excl. NMSC; optimal/custom uses per-cancer utilisation rates
     selected_cancers: List[str] = ["All cancers excl. NMSC"] if rt_method == "proportional" else ["All cancers"]
@@ -1120,6 +1150,12 @@ with st.sidebar:
         access_custom_rtu: tuple = tuple(sorted(st.session_state[_custom_rtu_ss_key].items()))
     else:
         access_custom_rtu = ()
+    # Per-cancer-type fractions per course (editable in the Data tab); only
+    # entries that differ from the Wong et al. 2016 table are passed on.
+    _site_fractions: tuple = tuple(sorted(
+        (k, float(v)) for k, v in st.session_state.get(f"custom_fractions_{country}", {}).items()
+        if v is not None and float(v) > 0
+    ))
 
     # ── Access calculation parameters (part of Calculation Settings) ──────
     lambda_km: float = 30.0
@@ -1134,6 +1170,9 @@ with st.sidebar:
     tt_max_travel_time_sec: int = 18000
     snap_linacs_to_hex: bool = False
 
+    capacity_basis: str = "patients"
+    fractions_per_linac: Optional[float] = None
+    hypofractionation: float = 1.0
     capacity_per_machine_per_year = float(st.slider(
         "Capacity per LINAC (patients/yr)", min_value=50, max_value=1000, value=450, step=50,
         help="Individual facility capacities can be modified in the Data tab.",
@@ -1141,52 +1180,52 @@ with st.sidebar:
 
     tt_method = st.radio(
         "Geographic Decay Metric",
-        ["Straight-line distance", "Driving time", "Public transport time"],
-        index=0, horizontal=True,
-    )
-    use_travel_time = tt_method != "Straight-line distance"
-    tt_mode = "driving" if tt_method == "Driving time" else "public_transport"
-
-    if use_travel_time:
-        if h3_resolution not in _TT_SUPPORTED_RES:
-            st.info(
-                f"Resolution {h3_resolution} is not supported by the TravelTime API directly. "
-                "Travel times will be aggregated from a resolution 5 matrix using population-weighted averaging. "
-                "Compute a resolution 5 matrix first if one does not yet exist."
-            )
-        st.markdown("**TravelTime API credentials** [(get a key)](https://traveltime.com/)")
-        _tt_default_app_id = st.secrets.get("traveltime", {}).get("app_id", "")
-        _tt_default_api_key = st.secrets.get("traveltime", {}).get("api_key", "")
-        tt_app_id = st.text_input("App ID", value=_tt_default_app_id, key="tt_app_id")
-        tt_api_key = st.text_input("API Key", value=_tt_default_api_key, key="tt_api_key", type="password")
-        _tt_res_cap_sec = _TT_MAX_BY_RES.get(h3_resolution, 36000)
-        _tt_res_cap_h = _tt_res_cap_sec // 3600
-        tt_max_travel_time_hours = st.slider(
-            "Travel time cut-off (hours)",
-            min_value=1, max_value=_tt_res_cap_h, value=min(5, _tt_res_cap_h), step=1,
-            help=(
-                f"Shorter cut-offs fetch fewer hexagons and use fewer API credits. "
-                f"Resolution {h3_resolution} hard cap: {_tt_res_cap_h}h "
-                f"({'documented' if h3_resolution >= 6 else 'empirical'})."
-            ),
-        )
-        tt_max_travel_time_sec = tt_max_travel_time_hours * 3600
-
-    model_label = st.radio(
-        "Access Decay model",
-        ["Weibull", "Step function", "Uniform (no decay)"],
+        ["Straight-line distance", "Driving time"],
         index=1, horizontal=True,
+        help="Driving times are read from the stored TravelTime data (fetched at H3 resolution 6, "
+             "Wednesday 08:00 local-time departure) and reach up to 120 min. Countries TravelTime does not cover "
+             "(China, Russia, North and South Korea) use the calibrated straight-line equivalent "
+             "(120 min ≈ 64 km).",
     )
-    access_model = {"Weibull": "weibull", "Step function": "step", "Uniform (no decay)": "uniform"}[model_label]
+    use_travel_time = tt_method == "Driving time"
+    tt_mode = "driving"
+    tt_max_travel_time_sec = 7200
+
+    # The four decay functions of the RadMaps paper
+    _decay_order = ["step", "exponential", "gaussian", "power"]
+    access_model = st.radio(
+        "Access Decay model", _decay_order, index=_decay_order.index("gaussian"),
+        format_func=lambda m: DECAY_LABELS[m], horizontal=True,
+        help=(
+            "Step: full access within the catchment and none beyond. Exponential: smooth decay "
+            "with scale λ. Gaussian: 1 at the facility falling to 0 at the catchment edge. "
+            "Power law: full access within the plateau, then decaying as (x/plateau)^−β. "
+            "See the Probability Models tab for curves and published parameterisations."
+        ),
+    )
     _unit = "min" if use_travel_time else "km"
-    if access_model == "weibull":
-        lambda_km = float(st.slider(f"Scale λ ({_unit})  —  P(λ) = 37%", 5, 200, 60 if use_travel_time else 150, step=5))
-        weibull_k = float(st.slider("Shape k  —  steeper at higher k (k=1 → exponential)", 1.0, 6.0, 4.0, step=0.5))
-    elif access_model == "step":
-        max_distance_km = float(st.slider(
-            f"Max treatment {'time' if use_travel_time else 'distance'} ({_unit})",
-            10, 500, 60 if use_travel_time else 200, step=10,
+    cutoff_km: Optional[float] = None
+    if access_model in ("exponential", "power"):
+        _lam_default = 10 if access_model == "power" else (60 if use_travel_time else 150)
+        lambda_km = float(st.slider(
+            f"{'Plateau radius' if access_model == 'power' else 'Scale λ'} ({_unit})"
+            + ("" if access_model == "power" else "  —  P(λ) = 37%"),
+            5, 120 if use_travel_time else 200, _lam_default, step=5,
         ))
+        if access_model == "power":
+            weibull_k = float(st.slider("Exponent β  —  P = (x/plateau)^−β beyond the plateau", 0.5, 3.0, 1.5, step=0.1))
+    else:
+        max_distance_km = float(st.slider(
+            f"{'Catchment' if access_model == 'gaussian' else 'Max treatment'} "
+            f"{'time' if use_travel_time else 'distance'} ({_unit})",
+            10, 120 if use_travel_time else 500,
+            120 if use_travel_time else 200, step=10,
+            help="120 min driving is the catchment of the RadMaps paper and of Wawrzuta et al. 2025.",
+        ))
+
+    # Both allocation rules of the paper are computed on every run (see the display metric).
+    allocation_rule: str = "nearest_first"
+    size_weighting: bool = True
 
     _use_latlng = st.checkbox(
         "Use lat/long coords", value=True,
@@ -1194,13 +1233,29 @@ with st.sidebar:
              "When disabled, each facility is projected to the H3 hex centroid.",
     )
     snap_linacs_to_hex = not _use_latlng
+    merge_colocated: bool = st.checkbox(
+        "Merge co-located facilities", value=False,
+        help="Collapse DIRAC rows sharing identical coordinates into one facility with the summed "
+             "machine count.",
+    )
+
+    # Keyword arguments shared by every access computation this run
+    _access_kwargs = dict(
+        rtu_set=rtu_set, allocation=allocation_rule,
+        size_weighting=size_weighting, cutoff_km=cutoff_km,
+        site_fractions=_site_fractions, hypofractionation=hypofractionation,
+        fractions_per_linac=fractions_per_linac,
+    )
 
     _fac_cap_ss_key = f"facility_cap_{country}"
     _calc_fingerprint = (
         country, h3_resolution, access_model,
         round(lambda_km, 2), round(max_distance_km, 2), round(weibull_k, 2),
-        round(capacity_per_machine_per_year, 1),
-        rt_method, round(rt_fraction, 3),
+        cutoff_km,
+        round(capacity_per_machine_per_year, 1), capacity_basis, fractions_per_linac, hypofractionation,
+        _site_fractions,
+        rt_method, round(rt_fraction, 3), rtu_set,
+        allocation_rule, size_weighting, merge_colocated,
         snap_linacs_to_hex, use_travel_time, tt_mode, tt_max_travel_time_sec,
         access_custom_rtu,
         tuple(sorted(st.session_state.get(_fac_cap_ss_key, {}).items())),
@@ -1257,7 +1312,8 @@ with st.sidebar:
     _discrete_scale = _scale_type == "Discrete"
     _no_hex = _scale_type == "No hex"
     if _discrete_scale:
-        if is_access and access_display_metric in ("Modelled Access Ratio", "Geographic Access Probability"):
+        if is_access and (access_display_metric in ("Modelled Access Ratio", "Geographic Access Probability")
+                          or access_display_metric in _fca_metrics):
             _disc_default, _disc_step = 0.2, 0.05
         elif is_access:
             _disc_default, _disc_step = 450.0, 50.0
@@ -1280,7 +1336,12 @@ with st.sidebar:
 
     _count_maps = {"Population Density", "Cancer Incidence", "Radiotherapy Demand"}
     _count_access_metrics = {"Modelled Accessed", "Modelled Access Deficit"}
-    _supports_per_km2 = map_type in _count_maps or (is_access and access_display_metric in (_count_access_metrics | {"RT Demand"}))
+    _workload_metrics = {"Workload Deficit (fractions)", "Workload Demand (fractions)"}
+    _fca_metrics = {"2SFCA ratio": "2sfca", "E2SFCA ratio": "e2sfca", "3SFCA ratio": "3sfca", "Gravity ratio": "gravity"}
+    _fca_deficit_metrics = {"2SFCA implied deficit": "2sfca", "E2SFCA implied deficit": "e2sfca",
+                            "3SFCA implied deficit": "3sfca", "Gravity implied deficit": "gravity"}
+    _supports_per_km2 = map_type in _count_maps or (is_access and access_display_metric in (
+        _count_access_metrics | {"RT Demand"} | _workload_metrics | set(_fca_deficit_metrics)))
     density_per_km2: bool = False
     _show_cb_controls = not _no_hex
     if _supports_per_km2 and _show_cb_controls:
@@ -1420,8 +1481,27 @@ else:
         st.error(f"Could not resolve country: {country!r}")
         st.stop()
 
-tab_intro, _tab_sep0, tab_map, tab_data, _tab_sep1, tab_choropleth, tab_country, tab_cap, tab_geo, _tab_sep2, tab_plan, _tab_sep3, tab_method, tab_assumptions, tab_toy, tab_model, _tab_sep4, tab_sensitivity, tab_convergence = st.tabs([
-    "💡 Introduction", "│", "🗺️ Access Maps", "📊 Data", "│", "🌐 World Choropleth", "📈 Country Analysis", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example", "📐 Probability Models", "│", "📉 Sensitivity", "🔬 Convergence",
+# Fractions-based capacity: resolve the country-specific patients/LINAC now
+# that iso3 is known. Regions resolve it per member country inside compute.
+_cap_basis_info: Optional[dict] = None
+if capacity_basis == "fractions" and not _is_region and has_globocan_data(iso3):
+    try:
+        _cap_basis_info = _effective_capacity(iso3, fractions_per_linac, rtu_set, hypofractionation, _site_fractions)
+        capacity_per_machine_per_year = float(_cap_basis_info["patients_per_linac"])
+    except Exception:
+        _cap_basis_info = None
+with st.sidebar:
+    if capacity_basis == "fractions":
+        if _cap_basis_info is not None:
+            st.caption(
+                f"→ **{capacity_per_machine_per_year:.0f} patients/LINAC/yr** for {country} "
+                f"(mean {_cap_basis_info['mean_fractions_per_course']:.1f} fractions per course)."
+            )
+        elif _is_region:
+            st.caption("→ patients/LINAC resolved per country from each country's cancer mix.")
+
+tab_intro, _tab_sep0, tab_map, tab_data, _tab_sep1, tab_choropleth, tab_country, tab_cap, tab_geo, _tab_sep2, tab_plan, _tab_sep3, tab_method, tab_assumptions, tab_toy, tab_model, _tab_sep4, tab_sensitivity, tab_benchmark, tab_convergence = st.tabs([
+    "💡 Introduction", "│", "🗺️ Access Maps", "📊 Data", "│", "🌐 World Choropleth", "📈 Country Analysis", "⚡ Capacity-Only", "🌍 Geography-Only", "│", "🔧 Machine Planning", "│", "📖 Method", "⚠️ Assumptions", "🧪 Toy Example", "📐 Probability Models", "│", "📉 Sensitivity", "🔁 Benchmark", "🔬 Convergence",
 ], default="🗺️ Access Maps")
 
 # ---------------------------------------------------------------------------
@@ -1483,7 +1563,7 @@ with tab_data:
         _excl_nmsc_n = int(_agg_rows.loc["all cancers excl. nmsc", "New cases"]) if "all cancers excl. nmsc" in _agg_rows.index else _all_cancers_n
 
         # --- Build RTU% column based on rt_method chosen in sidebar ---
-        _opt_fracs = get_optimal_rt_fractions()
+        _opt_fracs = get_optimal_rt_fractions(rtu_set)
         _opt_fracs_norm = {k.strip().lower(): v for k, v in _opt_fracs.items()}
         _rtu_col_label = {
             "optimal": "RTU (optimal) %",
@@ -1529,8 +1609,8 @@ with tab_data:
             delta_color="off",
         )
 
-        # --- Cancer site table ---
-        st.markdown("**Cancer site breakdown**")
+        # --- Cancer type table ---
+        st.markdown("**Cancer type breakdown**")
         if rt_method == "custom":
             # No key: state managed entirely via session_state so editor diffs don't conflict
             # across reruns when multiple cells are edited sequentially.
@@ -1567,19 +1647,111 @@ with tab_data:
             st.dataframe(_display_df, use_container_width=True, hide_index=True)
 
             if rt_method == "optimal":
+                _rsi = rtu_set_info(rtu_set)
                 st.caption(
-                    "Optimal RTU Source: Delaney et al. (2005). " 
-                    "Cancer. 2005;104(6):1129–37. "
-                    "[doi:10.1002/cncr.21324](https://doi.org/10.1002/cncr.21324)"
+                    f"Optimal RTU Source: {_rsi['source']} "
+                    + (f"[doi]({_rsi['url']}). " if _rsi.get("url") else ". ")
+                    + f"**Intent coverage:** {_rsi['intent_coverage']}"
                 )
-        
-        st.caption("Cancer Incidence Source: [GLOBOCAN 2022](https://gco.iarc.who.int/today/), International Agency for Research on Cancer (IARC).")
+        _other_sets = [s for s in list_rtu_sets(include_incomplete=True) if s["complete"] != "true"]
+        if _other_sets:
+            st.caption(
+                "Not yet selectable (per-type values still to be transcribed): "
+                + "; ".join(f"{s['label']} ({s['year']})" for s in _other_sets)
+                + ". Add them to `cancer_data/rt_utilisation_sets.csv`."
+            )
+
+        st.caption("Cancer Incidence Source: [GLOBOCAN 2024](https://gco.iarc.who.int/today/), International Agency for Research on Cancer (IARC).")
+
+        # --- Side-by-side comparison of the published RTU sets ---
+        _all_sets = list_rtu_sets()
+        if len(_all_sets) > 1:
+            with st.expander("Compare optimal RTU sets for this country", expanded=False):
+                st.markdown(
+                    "Per-type optimal utilisation rates from each published set and the RT demand they imply for "
+                    f"**{country}**'s cancer mix. The sidebar *Optimal RTU source* selects which one drives the model."
+                )
+                _cmp_rows = []
+                _set_fracs = {s["set_id"]: {k.strip().lower(): v for k, v in get_optimal_rt_fractions(s["set_id"]).items()}
+                              for s in _all_sets}
+                _short = {"delaney_2005": "2005 as published", "delaney_2005_corrected": "2005 corrected", "barton_2014": "CCORE 2012"}
+                for _, _r in _site_df.iterrows():
+                    _ct = _r["Cancer type"]; _n = int(_r["New cases"])
+                    row = {"Cancer type": _ct, "New cases": _n}
+                    for sid in _set_fracs:
+                        f = _set_fracs[sid].get(_ct.strip().lower(), 0.0)
+                        row[f"{_short.get(sid, sid)} RTU"] = round(100 * f, 1)
+                        row[f"{_short.get(sid, sid)} RT cases"] = int(round(_n * f))
+                    _cmp_rows.append(row)
+                _cmp_df = pd.DataFrame(_cmp_rows)
+                _tot = {"Cancer type": "TOTAL", "New cases": int(_cmp_df["New cases"].sum())}
+                for sid in _set_fracs:
+                    k = f"{_short.get(sid, sid)} RT cases"
+                    _tot[k] = int(_cmp_df[k].sum())
+                    _tot[f"{_short.get(sid, sid)} RTU"] = round(100 * _tot[k] / max(_tot["New cases"], 1), 1)
+                _cmp_df = pd.concat([_cmp_df, pd.DataFrame([_tot])], ignore_index=True)
+                st.dataframe(_cmp_df, use_container_width=True, hide_index=True)
+                st.caption(
+                    "The TOTAL row's RTU is the effective national rate (RT cases ÷ incidence excl. aggregates). "
+                    "Differences between '2005 as published' and '2005 corrected' are transcription corrections "
+                    "(thyroid, colorectum, ovary, head-and-neck subsites); differences between 2005 and CCORE 2012 are "
+                    "genuine evidence updates. Provenance for each set is in `cancer_data/rt_utilisation_sources.csv`."
+                )
+
+        # --- Fractions per course (workload + case-mix capacity) ---
+        with st.expander("Fractions per treatment course (workload & case-mix capacity)", expanded=False):
+            st.markdown(
+                "Evidence-based optimal fractions per **first course**, by cancer type "
+                "(Wong, Delaney & Barton 2016, Table 1). These convert patients into treatment "
+                "fractions for the Workload metrics and, in *Fractions per LINAC* capacity mode, "
+                "set how many patients one machine treats for this country's cancer mix. Edit a "
+                "value to model a site-specific hypofractionation scenario (e.g. breast 5, prostate 5)."
+            )
+            _fx_map_default, _, _ = get_fractions_per_course()
+            _fx_ss_key = f"custom_fractions_{country}"
+            if _fx_ss_key not in st.session_state:
+                st.session_state[_fx_ss_key] = {}
+            _fx_rows = []
+            for _, _r in _site_df.iterrows():
+                _ct = _r["Cancer type"]
+                _pub = _fx_map_default.get("".join(ch for ch in _ct.lower() if ch.isalnum()))
+                _cur = st.session_state[_fx_ss_key].get(_ct, _pub)
+                _fx_rows.append({"Cancer type": _ct, "Cases needing RT": int(_r["_cases_rt"]),
+                                 "Published (Wong 2016)": _pub,
+                                 "Fractions per course": _cur})
+            _fx_in = pd.DataFrame(_fx_rows)
+            _fx_edited = st.data_editor(
+                _fx_in,
+                column_config={
+                    "Cancer type": st.column_config.TextColumn(disabled=True),
+                    "Cases needing RT": st.column_config.NumberColumn(disabled=True, format="%d"),
+                    "Published (Wong 2016)": st.column_config.NumberColumn(disabled=True, format="%.1f"),
+                    "Fractions per course": st.column_config.NumberColumn(
+                        min_value=0.0, max_value=50.0, step=0.5, format="%.1f",
+                        help="Blank = no RT indication (Liver, NMSC); edit to override the published value.",
+                    ),
+                },
+                use_container_width=True, hide_index=True, key=f"_fx_editor_{country}",
+            )
+            _overrides = {}
+            for _, _r in _fx_edited.iterrows():
+                _v, _p = _r["Fractions per course"], _r["Published (Wong 2016)"]
+                if pd.notna(_v) and _v > 0 and (pd.isna(_p) or abs(float(_v) - float(_p)) > 1e-9):
+                    _overrides[_r["Cancer type"]] = float(_v)
+            st.session_state[_fx_ss_key] = _overrides
+            _fx_w = float((_fx_edited["Cases needing RT"] * _fx_edited["Fractions per course"].fillna(0)).sum())
+            _fx_d = float(_fx_edited["Cases needing RT"].sum())
+            st.caption(
+                f"Demand-weighted mean for {country}: **{(_fx_w / _fx_d if _fx_d > 0 else 0):.1f} fractions per course** "
+                f"(published overall mean 19.4). {len(_overrides)} type(s) overridden"
+                + (" — press **Calculate RT Access** to apply." if _overrides else ".")
+            )
 
     st.divider()
 
     # ---- LINAC facilities --------------------------------------------------
     st.subheader(f"Radiotherapy Facilities with Linacs — {country}")
-    _linac_result = _load_dirac(country)
+    _linac_result = _load_dirac(country, merge_colocated)
     if _linac_result[0] is None:
         st.info(f"No Linacs data found for **{country}** in the DIRAC database.")
     else:
@@ -1611,20 +1783,84 @@ with tab_data:
             use_container_width=True,
             hide_index=True,
         )
-        # Persist edits to session state
+        # Persist only genuine edits, so unedited facilities follow the capacity slider
         st.session_state[_fac_cap_key] = {
             row["Facility"]: int(row["Capacity (pts/yr)"])
             for _, row in _linac_edited.iterrows()
+            if int(row["Capacity (pts/yr)"]) != int(row["LINACs"] * capacity_per_machine_per_year)
         }
         st.caption(
-            f"**{int(_linac_df['n_linacs'].sum())} LINACs** across **{len(_linac_df)} facilities**. "
+            f"**{int(_linac_df['n_linacs'].sum())} LINACs** across **{len(_linac_df)} facilities**"
+            + (" (co-located rows merged)" if merge_colocated else "") + ". "
             "Edit Capacity to override per-facility throughput. "
             "Press **Calculate RT Access** to apply changes.  \n"
             "Source: [IAEA DIRAC Database](https://dirac.iaea.org/). "
             "Coordinates corrected via OpenStreetMap geocoding where missing or erroneous."
         )
 
-    
+    # ---- Facility data quality (single country) ---------------------------
+    if not _is_region:
+        _fq = _facility_quality(country)
+        if _fq is not None:
+            with st.expander("Facility data quality (DIRAC record audit)", expanded=False):
+                _q1, _q2, _q3, _q4 = st.columns(4)
+                _q1.metric("DIRAC rows", f"{_fq['rows']:,}",
+                           help="All operators listed for this country, including those without photon/electron machines.")
+                _q2.metric("Usable facilities", f"{_fq['rows_usable']:,}",
+                           help="Rows with valid coordinates and ≥1 photon/electron machine (or a blank count, assumed 1).")
+                _q3.metric("Zero-machine rows excluded", f"{_fq['rows_zero_machines']:,}")
+                _q4.metric("Blank count → assumed 1", f"{_fq['rows_blank_machines_assumed_one']:,}")
+                _q5, _q6, _q7, _q8 = st.columns(4)
+                _n_geo = _fq["rows_geocoded_missing"] + _fq["rows_geocoded_outside_bbox"]
+                _q5.metric("Coordinates geocoded", f"{_n_geo:,}",
+                           help=f"{_fq['rows_geocoded_missing']} had no coordinates in DIRAC; "
+                                f"{_fq['rows_geocoded_outside_bbox']} were outside the country's bounding box.")
+                _q6.metric("Geocoding failed (placed by hand)", f"{_fq['rows_geocode_failed']:,}",
+                           help=", ".join(_fq["geocode_failed_names"][:8]) or "—")
+                _q7.metric("Co-located rows", f"{_fq['colocated_extra_rows']:,}",
+                           help=f"{_fq['colocated_sites']} coordinates shared by more than one row. "
+                                "Enable 'Merge co-located facilities' in the sidebar to combine them.")
+                if _fq["last_update_median"] is not None:
+                    _q8.metric("DIRAC 'Last Update' (median)", f"{_fq['last_update_median']:.0f}",
+                               help=f"Range {_fq['last_update_min']}–{_fq['last_update_max']}. "
+                                    "Reporting to DIRAC is voluntary; older records may not reflect openings, closures or downtime.")
+                if _fq.get("geocode_methods"):
+                    st.caption("Geocoding methods: " + ", ".join(f"{k} × {v}" for k, v in _fq["geocode_methods"].items()))
+                if _fq.get("last_update_counts"):
+                    _lu = pd.DataFrame({"Last update": list(_fq["last_update_counts"].keys()),
+                                        "Rows": list(_fq["last_update_counts"].values())})
+                    st.bar_chart(_lu.set_index("Last update"), height=160)
+                st.caption(
+                    f"Other modalities listed (not modelled): proton rows {_fq.get('proton_rows', 0)}, "
+                    f"orthovoltage rows {_fq.get('orthovoltage_rows', 0)}, brachytherapy rows {_fq.get('brachy_rows', 0)}. "
+                    "Full geocoding log: `linac_data/fix_report.csv`."
+                )
+
+    # ---- Dataset provenance ----------------------------------------------
+    try:
+        import json as _json
+        _manifest = _json.loads(_MANIFEST_PATH.read_text()) if _MANIFEST_PATH.exists() else None
+    except Exception:
+        _manifest = None
+    if _manifest:
+        with st.expander("Dataset versions and provenance", expanded=False):
+            _rows_m = []
+            for _k, _d in _manifest.get("datasets", {}).items():
+                _rows_m.append({
+                    "Dataset": _d.get("name", _k),
+                    "Version": _d.get("version", ""),
+                    "Accessed": _d.get("accessed", ""),
+                    "Local path": _d.get("local_path", ""),
+                    "Refresh": _d.get("refresh", _d.get("status", "")),
+                })
+            st.dataframe(pd.DataFrame(_rows_m), use_container_width=True, hide_index=True)
+            st.caption(
+                f"Manifest last updated {_manifest.get('last_updated', '—')}. "
+                "Update inputs with `python scripts/refresh_data.py` (see its docstring); GLOBOCAN and DIRAC "
+                "start from a manual export because neither has a bulk API."
+            )
+
+
 # ---------------------------------------------------------------------------
 # Probability Model tab
 # ---------------------------------------------------------------------------
@@ -1632,108 +1868,121 @@ with tab_data:
 with tab_model:
     st.header("Probability Model")
     st.markdown(
-        "This tab illustrates how the selected probability model translates "
-        "distance from a LINAC facility into a probability of treatment."
+        "This tab illustrates how each decay model translates distance or travel time "
+        "from a LINAC facility into a probability of treatment. The curves are drawn by the "
+        "same function the access engine uses (`analysis/decay.py`), so what you see here is "
+        "exactly what the allocation applies."
     )
 
-    _pm_model = st.selectbox(
-        "Probability model",
-        ["Weibull", "Step function", "Uniform (no decay)"],
-        key="pm_model",
-    )
+    # Published parameterisations, expressed in the same (model, scale, shape, threshold) terms.
+    _PM_PRESETS = {
+        "Custom": None,
+        "RadMaps global analysis — 200 km step": dict(model="step", threshold=200.0, unit="km"),
+        "RadMaps national analyses / Wawrzuta et al. 2025 — 2 h driving step": dict(model="step", threshold=120.0, unit="min"),
+        "Luo & Qi 2009 E2SFCA — Gaussian, 30 min catchment": dict(model="gaussian", threshold=30.0, unit="min"),
+        "Philippine RT study 2025 — Gaussian, 120 min catchment": dict(model="gaussian", threshold=120.0, unit="min"),
+        "Classic gravity model — power law β = 1.5": dict(model="power", scale=10.0, shape=1.5, unit="km", cutoff=1000.0),
+    }
+    _pm_preset = st.selectbox("Preset", list(_PM_PRESETS.keys()), key="pm_preset",
+                              help="Published parameterisations from the spatial-accessibility and radiotherapy-access literature.")
+    _pre = _PM_PRESETS[_pm_preset]
+
+    if _pre is None:
+        _pm_c1, _pm_c2 = st.columns([2, 1])
+        _pm_model = _pm_c1.selectbox("Decay model", _decay_order, format_func=lambda m: DECAY_LABELS[m], key="pm_model")
+        _pm_unit = _pm_c2.radio("x is", ["km", "min"], horizontal=True, key="pm_unit")
+        _pm_scale, _pm_shape, _pm_thr, _pm_cut = 150.0, 4.0, 100.0, None
+        if _pm_model in ("weibull", "exponential", "power"):
+            _pm_scale = float(st.slider(
+                f"{'Plateau radius' if _pm_model == 'power' else 'Scale λ'} ({_pm_unit})",
+                5, 500, 10 if _pm_model == "power" else 150, step=5, key="pm_scale"))
+            if _pm_model == "weibull":
+                _pm_shape = float(st.slider("Shape k", 1.0, 6.0, 4.0, step=0.5, key="pm_wk"))
+            elif _pm_model == "power":
+                _pm_shape = float(st.slider("Exponent β", 0.5, 3.0, 1.5, step=0.1, key="pm_beta"))
+            _pm_cut = float(st.slider(f"Hard cut-off ({_pm_unit})", 10, 3000,
+                                      int(min(default_cutoff(_pm_model, _pm_scale, _pm_thr), 3000)), step=10, key="pm_cut"))
+        elif _pm_model in ("step", "gaussian"):
+            _pm_thr = float(st.slider(f"{'Catchment' if _pm_model == 'gaussian' else 'Max treatment'} ({_pm_unit})",
+                                      10, 1000, 100, step=10, key="pm_thr"))
+    else:
+        _pm_model = _pre["model"]
+        _pm_unit = _pre["unit"]
+        _pm_scale = float(_pre.get("scale", 150.0))
+        _pm_shape = float(_pre.get("shape", 4.0))
+        _pm_thr = float(_pre.get("threshold", 100.0))
+        _pm_cut = _pre.get("cutoff")
 
     st.divider()
+    st.markdown("### Formula")
+    _pm_formulae = {
+        "step": r"P(x) = \begin{cases} 1 & x \leq x_{\max} \\ 0 & x > x_{\max} \end{cases}",
+        "uniform": r"P(x) = 1 \quad \forall\, x",
+        "weibull": r"P(x) = \exp\!\left(-\left(\frac{x}{\lambda}\right)^k\right)",
+        "exponential": r"P(x) = \exp\!\left(-\frac{x}{\lambda}\right)",
+        "gaussian": r"P(x) = \frac{e^{-\frac{1}{2}(x/x_{\max})^2} - e^{-\frac{1}{2}}}{1 - e^{-\frac{1}{2}}} \quad (x \leq x_{\max}),\;\; 0 \text{ otherwise}",
+        "power": r"P(x) = \min\!\left(1, \left(\frac{x}{x_0}\right)^{-\beta}\right)",
+    }
+    st.latex(_pm_formulae[_pm_model])
+    _pm_notes = {
+        "step": "A binary catchment: everyone inside is treated identically, everyone outside is unreachable. This is the classic 2SFCA catchment (Luo & Wang 2003) and the model used for the RadMaps paper results.",
+        "uniform": "Distance has no effect. Capacity constraints still apply, so this isolates the capacity-only picture.",
+        "weibull": r"$\lambda$ is the scale at which $P = e^{-1} \approx 37\%$ for any $k$. $k = 1$ is exponential decay; larger $k$ gives a plateau near the facility and a steeper drop, approaching a step at $\lambda$ as $k \to \infty$. $P$ is forced to 0 beyond the hard cut-off.",
+        "exponential": r"Memoryless decay; $\lambda$ is the distance or time at which $P \approx 37\%$. $P$ is forced to 0 beyond the hard cut-off.",
+        "gaussian": "The enhanced-2SFCA kernel (Luo & Qi 2009; Dai 2010): 1 at the facility, falling smoothly to 0 at the catchment edge. The Luo & Qi band weights of about 1.00 / 0.68 / 0.22 for a 30-min catchment are this curve sampled at band midpoints.",
+        "power": r"Gravity-model impedance (Hansen 1959; Joseph & Bantock 1982). $\beta$ is hard to justify clinically and the curve has a heavy tail, so it is offered as a benchmark rather than a default; the plateau $x_0$ removes the singularity at $x = 0$.",
+    }
+    st.markdown(_pm_notes[_pm_model])
+    st.markdown("When several facilities are reachable the engine combines them as a coverage probability "
+                "(each centre counts once, independent of its machine count):")
+    st.latex(r"P_{\text{geo}} = 1 - \prod_{i}\!\left(1 - P(x_i)\right)")
 
-    if _pm_model == "Weibull":
-        _pm_wlambda = st.slider("Scale λ (km)  —  P(λ) = 37%", 5, 500, 150, step=5, key="pm_wlambda")
-        _pm_wk = st.slider("Shape k  —  higher = steeper", 1.0, 6.0, 4.0, step=0.5, key="pm_wk")
-
-        st.markdown("### Formula")
-        st.latex(r"P(\text{treatment} \mid d) = \exp\!\left(-\left(\frac{d}{\lambda}\right)^k\right)")
-        st.markdown(
-            r"$\lambda$ is the scale (km) at which $P = e^{-1} \approx 37\%$ for any $k$. "
-            r"$k$ controls shape: $k = 1$ is identical to exponential decay; "
-            r"$k > 1$ gives an S-curve with a flat plateau near the facility then a steeper drop-off. "
-            "When multiple facilities exist, contributions are combined as:"
-        )
-        st.latex(r"P_{\text{total}} = 1 - \prod_{i}\!\left(1 - e^{-(d_i/\lambda)^k}\right)^{w_i}")
-        _p_at_lambda = float(np.exp(-1))
-        _p_at_half = float(np.exp(-(0.5 ** _pm_wk)))
-        st.markdown(
-            f"At the current settings (λ = {_pm_wlambda} km, k = {_pm_wk}): "
-            f"P({_pm_wlambda} km) = **{_p_at_lambda:.1%}**, "
-            f"P({_pm_wlambda//2} km) = **{_p_at_half:.1%}**."
-        )
-
-        _pm_dist = np.linspace(0, 1000, 500)
-        _pm_prob = np.exp(-np.power(_pm_dist / _pm_wlambda, _pm_wk))
-
-    elif _pm_model == "Step function":
-        _pm_cutoff = st.slider("Max treatment distance (km)", 10, 1000, 100, step=10, key="pm_cutoff")
-
-        st.markdown("### Formula")
-        st.latex(
-            r"P(\text{treatment} \mid d) = \begin{cases} 1 & d \leq d_{\max} \\ 0 & d > d_{\max} \end{cases}"
-        )
-        st.markdown(
-            f"Patients within **{_pm_cutoff} km** of a LINAC are assumed to have "
-            "100% probability of treatment; those beyond have 0%."
-        )
-
-        _pm_dist = np.linspace(0, 1000, 500)
-        _pm_prob = (_pm_dist <= _pm_cutoff).astype(float)
-
-    else:  # Uniform
-        st.markdown("### Formula")
-        st.latex(r"P(\text{treatment} \mid d) = 1 \quad \forall\, d")
-        st.markdown(
-            "Distance has no effect on access. All patients are assumed to have "
-            "equal probability of treatment regardless of their distance from a LINAC. "
-            "Capacity constraints still apply."
-        )
-
-        _pm_dist = np.linspace(0, 1000, 500)
-        _pm_prob = np.ones(500)
+    _pm_xmax = 1000.0 if _pm_unit == "km" else 600.0
+    _pm_x = np.linspace(0, _pm_xmax, 600)
+    _pm_prob = decay_probability(_pm_x, _pm_model, scale=_pm_scale, shape=_pm_shape,
+                                 threshold=_pm_thr, cutoff=_pm_cut)
+    st.caption("Current curve: " + describe_model(_pm_model, scale=_pm_scale, shape=_pm_shape,
+                                                   threshold=_pm_thr, cutoff=_pm_cut, unit=_pm_unit))
 
     # ---- Plot ---------------------------------------------------------------
     _fig_pm = go.Figure()
-    _fig_pm.add_trace(
-        go.Scatter(
-            x=_pm_dist,
-            y=_pm_prob * 100,
-            mode="lines",
-            line=dict(color="#1f77b4", width=2.5),
-            name="P(treatment)",
-        )
-    )
-
-    if _pm_model == "Step function":
-        _fig_pm.add_vline(
-            x=_pm_cutoff,
-            line_dash="dash",
-            line_color="red",
-            annotation_text=f"Cut-off: {_pm_cutoff} km",
-            annotation_position="top right",
-        )
-    elif _pm_model == "Weibull":
-        _fig_pm.add_vline(
-            x=_pm_wlambda,
-            line_dash="dash",
-            line_color="orange",
-            annotation_text=f"λ = {_pm_wlambda} km  (P ≈ 37%)",
-            annotation_position="top right",
-        )
-
+    _fig_pm.add_trace(go.Scatter(x=_pm_x, y=_pm_prob * 100, mode="lines",
+                                 line=dict(color="#1f77b4", width=2.5), name="P(treatment)"))
+    if _pm_model in ("step", "gaussian"):
+        _fig_pm.add_vline(x=_pm_thr, line_dash="dash", line_color="red",
+                          annotation_text=f"Catchment: {_pm_thr:.0f} {_pm_unit}", annotation_position="top right")
+    elif _pm_model in ("weibull", "exponential"):
+        _fig_pm.add_vline(x=_pm_scale, line_dash="dash", line_color="orange",
+                          annotation_text=f"λ = {_pm_scale:.0f} {_pm_unit}  (P ≈ 37%)", annotation_position="top right")
     _fig_pm.update_layout(
-        xaxis_title="Distance from nearest LINAC (km)",
-        xaxis=dict(range=[0, 1000]),
+        xaxis_title=f"{'Distance' if _pm_unit == 'km' else 'Travel time'} from LINAC ({_pm_unit})",
+        xaxis=dict(range=[0, _pm_xmax]),
         yaxis_title="Probability of treatment (%)",
         yaxis=dict(range=[0, 105], ticksuffix="%"),
-        height=420,
-        margin=dict(l=60, r=30, t=30, b=60),
-        hovermode="x unified",
+        height=420, margin=dict(l=60, r=30, t=30, b=60), hovermode="x unified",
     )
     st.plotly_chart(_fig_pm, use_container_width=True)
+
+    with st.expander("What the evidence says about distance and radiotherapy uptake", expanded=False):
+        st.markdown(
+            """
+            There is no empirically fitted decay curve for radiotherapy uptake, which is why the model is
+            configurable. Published findings that bound the plausible shapes:
+
+            | Study | Setting | Finding |
+            |---|---|---|
+            | Athas et al. 2000 (J Natl Cancer Inst) | New Mexico, breast RT after BCS | Uptake fell significantly only beyond ~75 miles vs < 10 miles; intermediate bands not significant. |
+            | Schroen et al. 2005 (J Clin Oncol) | Virginia, breast | Women > 10 miles from RT more likely to choose mastectomy over BCS + RT. |
+            | Jones et al. 2008 (Health & Place) | Northern England, breast | Longer travel time to RT associated with lower BCS uptake. |
+            | Goyal et al. 2014 (Ann Surg Oncol) | US, breast | Patients > 9.2 miles from RT 44 % more likely to receive mastectomy. |
+            | Aggarwal et al. 2017 (IJROBP) | England, prostate RT | About a third of patients bypassed their nearest centre, so nearest-centre allocation over-predicts local use. |
+            | Luo & Qi 2009 (Health & Place) | US primary care, E2SFCA | Gaussian band weights 1.00 / 0.68 / 0.22 within a 30-min catchment. |
+            | Wawrzuta et al. 2025 (Radiother Oncol) | Global RT facilities | 2 h travel time used as the access threshold. |
+
+            A flat plateau over the first 10–20 km and a decline that becomes material beyond roughly 1–2 h
+            is consistent with all of these; the Weibull with k ≈ 3–4 and the Gaussian kernel both have that shape.
+            """
+        )
 
 # ---------------------------------------------------------------------------
 # Map tab
@@ -1749,11 +1998,11 @@ def _render_pop_data_fom(gdf, iso3: str, country: str, rt_method: str, rt_fracti
         _fom_c3.metric("Cancer Incidence excl. NMSC", "N/A")
         _fom_c4.metric("Cases Requiring RT", "N/A")
         return
-    _fom_rt = _data_tab_rt_need(iso3)
+    _fom_rt = _data_tab_rt_need(iso3, rtu_set)
     _fom_c3.metric("Cancer Incidence excl. NMSC", _fmt_sigfig(_fom_rt['total_cancer_excl_nmsc']))
     if rt_method == "optimal":
         _fom_rt_val = _fom_rt["total_rt_cases"]
-        _fom_rt_note = "Optimal RTU (Delaney et al. 2005)"
+        _fom_rt_note = rtu_set_info(rtu_set)["label"]
     elif rt_method == "proportional":
         _fom_rt_val = _fom_rt["total_cancer_excl_nmsc"] * rt_fraction
         _fom_rt_note = f"Proportional ({rt_fraction:.0%} of cases excl. NMSC)"
@@ -1789,7 +2038,7 @@ with tab_map:
         country_span_km: float = 1000.0  # default; refined when gdf is available
         if needs_linac or show_linac_markers:
             with st.spinner("Loading LINAC data from DIRAC database…"):
-                result = _load_dirac(country)
+                result = _load_dirac(country, merge_colocated)
             if result[0] is None:
                 locs = []
                 facilities_df = pd.DataFrame()
@@ -2039,149 +2288,161 @@ with tab_map:
         elif is_access or is_nearest:
             linac_locs_tuple = tuple(locs)
 
+            # The default World view is precomputed (cache/world_default.pkl); reuse it
+            # whenever the current settings are exactly those defaults.
+            _wp = _WORLD_DEFAULT_PARAMS
+            _is_world_default = (
+                country == _wp["country"] and access_model == _wp["model"]
+                and abs(float(max_distance_km) - _wp["max_distance_km"]) < 1
+                and h3_resolution == _wp["h3_res"]
+                and access_rt_method == _wp["rt_method"]
+                and abs(capacity_per_machine_per_year - _wp["capacity"]) < 1
+                and _region_percountry == _wp["region_percountry"]
+                and use_travel_time and tt_mode == _wp["tt_mode"]
+                and allocation_rule == "nearest_first" and rtu_set == DEFAULT_RTU_SET
+                and capacity_basis == "patients" and not merge_colocated and not snap_linacs_to_hex
+                and not st.session_state.get("custom_linacs")
+                and not st.session_state.get(_fac_cap_ss_key)
+            )
+
             _map_result = st.session_state.get("_map_result")
+            # A result computed for another country or region is not reused.
+            if _map_result is not None and _map_result.get("location", "World") != country:
+                _map_result = None
+                st.session_state["_map_result"] = None
             # Discard cached result if TT mode or regional mode has changed.
             if _map_result is not None:
                 _result_had_tt = "nearest_linac_min" in _map_result["gdf_out"].columns
                 _result_was_percountry = _map_result.get("region_percountry", False)
-                if use_travel_time != _result_had_tt or _region_percountry != _result_was_percountry:
+                _result_has_both = "rt_treated_fca" in _map_result["gdf_out"].columns
+                if (use_travel_time != _result_had_tt or _region_percountry != _result_was_percountry
+                        or not _result_has_both):
                     _map_result = None
                     st.session_state["_map_result"] = None
+            if _map_result is None and _is_world_default:
+                _cached = _load_world_default()
+                if _cached is not None and "rt_treated_fca" in _cached["gdf_out"].columns:
+                    _map_result = {
+                        "gdf_out": _cached["gdf_out"], "stats": _cached["stats"],
+                        "region_percountry": True, "linac_locs_tuple": None,
+                        "facilities_df": None, "location": "World",
+                    }
+                    st.session_state["_map_result"] = _map_result
             if _map_result is not None:
                 gdf_out = _map_result["gdf_out"]
                 stats = _map_result["stats"]
             else:
-                if use_travel_time and _region_percountry:
-                    st.warning(
-                        "Travel time mode is not supported for regional analysis. "
-                        "Select a single country to use driving or public transport times."
-                    )
-                    st.stop()
-                if use_travel_time:
-                    if not tt_app_id or not tt_api_key:
-                        st.warning(
-                            "Enter your TravelTime App ID and API Key in the sidebar to use "
-                            "driving or public transport times."
-                        )
-                        st.stop()
-
-                    # Build structured cache key: {iso3}_res{R}_{Hh}h_{linac_hash8}
-                    # File on disk: {key}_{mode}.npz  (mode appended by compute_travel_time_matrix)
+                _tt_cache_key = None
+                _tt_proxy = False
+                if use_travel_time and not _region_percountry:
+                    # Driving times come from the res-6 store (data/tt_store.py), built
+                    # into a dense matrix for this resolution and cached on disk.
                     import hashlib as _hl, json as _json
-                    _gdf_tmp = _load_pop_region(country, h3_resolution) if _is_region else _load_pop(country, h3_resolution)
+                    _gdf_tmp = _load_pop(country, h3_resolution)
                     _hex_ids = list(_gdf_tmp["h3"])
                     _linac_ll = [(lat, lon) for lat, lon, _ in locs]
                     _linac_hash = _hl.md5(_json.dumps(sorted(_linac_ll)).encode()).hexdigest()[:8]
-                    _tt_max_h = tt_max_travel_time_sec // 3600
-                    _tt_cache_key = f"{iso3}_res{h3_resolution}_{_tt_max_h}h_{_linac_hash}"
+                    _tt_cache_key = f"{iso3}_res{h3_resolution}_2h_{_linac_hash}"
                     _tt_cache_file = _TT_CACHE_DIR / f"{_tt_cache_key}_{tt_mode}.npz"
-
                     if not _tt_cache_file.exists():
-                        if h3_resolution not in _TT_SUPPORTED_RES:
-                            # Aggregate from resolution 5 — try matching time budget first, then max (10h)
-                            _res5_candidates = [
-                                f"{iso3}_res5_{_tt_max_h}h_{_linac_hash}",
-                                f"{iso3}_res5_10h_{_linac_hash}",
-                            ]
-                            _res5_cache_key = next(
-                                (k for k in _res5_candidates
-                                 if (_TT_CACHE_DIR / f"{k}_{tt_mode}.npz").exists()),
-                                None,
+                        if len(_hex_ids) * len(_linac_ll) * 4 > _TT_DENSE_MAX_BYTES:
+                            st.error(
+                                f"{country} is too large for a resolution {h3_resolution} travel-time "
+                                "matrix in this app. Choose resolution 5 or coarser."
                             )
-                            if _res5_cache_key is None:
-                                st.error(
-                                    f"No resolution 5 travel time matrix found for {iso3} with these LINACs. "
-                                    "Switch to resolution 5, fetch the matrix, then return to resolution "
-                                    f"{h3_resolution}."
-                                )
-                                st.stop()
-                            with st.spinner(f"Aggregating resolution 5 → {h3_resolution} travel times…"):
-                                from data.travel_time import aggregate_tt_matrix as _aggregate_tt_matrix
-                                _mat_res5 = np.load(_TT_CACHE_DIR / f"{_res5_cache_key}_{tt_mode}.npz")["matrix"]
-                                _gdf_res5 = _load_pop_region(country, 5) if _is_region else _load_pop(country, 5)
-                                _mat_agg = _aggregate_tt_matrix(
-                                    _mat_res5,
-                                    list(_gdf_res5["h3"]),
-                                    _gdf_res5["population"].to_numpy(dtype=np.float64),
-                                    _hex_ids,
-                                    target_resolution=h3_resolution,
-                                    unreachable_fill_min=tt_max_travel_time_sec / 60.0,
-                                )
+                            st.stop()
+                        with st.spinner("Building travel times from the stored resolution-6 data…"):
+                            _mat_store = store_matrix(iso3, _hex_ids, _linac_ll, tt_mode)
+                        if _mat_store is not None:
                             _TT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                            np.savez_compressed(_tt_cache_file, matrix=_mat_agg)
-                        else:
-                            _tt_progress = st.progress(0, text="Fetching travel times from TravelTime API…")
-                            def _tt_cb(done, total):
-                                _tt_progress.progress(
-                                    min(done / max(total, 1), 1.0),
-                                    text=f"Travel time API: request {done}/{total}…",
-                                )
-                            try:
-                                _, _tt_errors = compute_travel_time_matrix(
-                                    _hex_ids, _linac_ll, h3_resolution, tt_mode,
-                                    tt_app_id, tt_api_key,
-                                    cache_key=_tt_cache_key,
-                                    progress_callback=_tt_cb,
-                                    max_travel_time_sec=tt_max_travel_time_sec,
-                                )
-                                _tt_progress.empty()
-                                if _tt_errors:
-                                    st.warning("Some TravelTime batches failed: " + "; ".join(_tt_errors))
-                            except Exception as _e:
-                                st.error(f"TravelTime API error: {_e}")
-                                st.stop()
+                            np.savez_compressed(_tt_cache_file, matrix=_mat_store)
+                    _tt_proxy = not _tt_cache_file.exists()
+                    if _tt_proxy:
+                        _tt_cache_key = None
+                        st.info(
+                            f"No stored driving times for {country} (not covered by TravelTime, or the "
+                            "facility list has changed). Using the calibrated straight-line equivalent of "
+                            "the driving-time budget (120 min ≈ 64 km)."
+                        )
 
-                    with st.spinner("Computing accessibility…"):
-                        gdf_out, stats = _compute_access_travel_time(
+                def _run_access(alloc: str):
+                    """One access computation under allocation rule *alloc*."""
+                    kw = {**_access_kwargs, "allocation": alloc}
+                    common = dict(weibull_k=float(weibull_k), custom_rtu=access_custom_rtu)
+                    if _region_percountry:
+                        return _compute_access_region_percountry(
+                            country, float(lambda_km), access_model, float(max_distance_km),
+                            capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
+                            h3_resolution, snap_linacs_to_hex, progress_callback=_pc_progress,
+                            tt_mode=(tt_mode if use_travel_time else None), **common, **kw,
+                        )
+                    if use_travel_time and not _tt_proxy:
+                        return _compute_access_travel_time(
                             country, iso3, linac_locs_tuple,
                             float(lambda_km), access_model, float(max_distance_km),
                             capacity_per_machine_per_year, tt_mode, _tt_cache_key,
                             access_rt_method, access_rt_fraction,
-                            h3_resolution, _is_region, snap_linacs_to_hex,
-                            weibull_k=float(weibull_k),
-                            custom_rtu=access_custom_rtu,
+                            h3_resolution, _is_region, snap_linacs_to_hex, **common, **kw,
                         )
-                elif _region_percountry:
-                    _n_countries = len(get_region(country).member_alpha2)
-                    _pc_bar = st.progress(0, text=f"Computing per-country accessibility: 0 / {_n_countries}")
-                    def _pc_progress(done, total):
-                        _pc_bar.progress(
-                            done / total,
-                            text=f"Computing per-country accessibility: {done} / {total}",
+                    if _tt_proxy:  # minutes -> calibrated km
+                        kw["cutoff_km"] = minutes_to_proxy_km(kw.get("cutoff_km"))
+                        _g, _s = _compute_access(
+                            country, iso3, linac_locs_tuple,
+                            float(minutes_to_proxy_km(lambda_km) if access_model == "exponential" else lambda_km),
+                            access_model, float(minutes_to_proxy_km(max_distance_km)),
+                            capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
+                            h3_resolution, _is_region, snap_linacs_to_hex, **common, **kw,
                         )
-                    gdf_out, stats = _compute_access_region_percountry(
-                        country,
+                        _g = _g.copy()
+                        _g["nearest_linac_min"] = np.float32(np.nan)
+                        return _g, {**_s, "proxy_countries": [country]}
+                    return _compute_access(
+                        country, iso3, linac_locs_tuple,
                         float(lambda_km), access_model, float(max_distance_km),
                         capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
-                        h3_resolution, snap_linacs_to_hex,
-                        weibull_k=float(weibull_k),
-                        custom_rtu=access_custom_rtu,
-                        progress_callback=_pc_progress,
+                        h3_resolution, _is_region, snap_linacs_to_hex, **common, **kw,
                     )
+
+                _pc_bar = None
+                if _region_percountry:
+                    _n_countries = len(get_region(country).member_alpha2)
+                    _pc_bar = st.progress(0, text="Computing per-country accessibility")
+                _pc_step = {"rule": "nearest-first"}
+
+                def _pc_progress(done, total):
+                    _pc_bar.progress(done / total, text=f"Computing per-country accessibility "
+                                                         f"({_pc_step['rule']}): {done} / {total}")
+
+                with st.spinner("Computing accessibility (nearest-first and capped 3SFCA)…"):
+                    try:
+                        gdf_out, stats = _run_access("nearest_first")
+                        _pc_step["rule"] = "capped 3SFCA"
+                        _gdf_fca, _stats_fca = _run_access("proportional")
+                    except (ValueError, RuntimeError) as _alloc_err:
+                        st.error(f"Allocation failed: {_alloc_err}")
+                        st.stop()
+                if _pc_bar is not None:
                     _pc_bar.empty()
-                else:
-                    with st.spinner("Computing accessibility…"):
-                        gdf_out, stats = _compute_access(
-                            country, iso3, linac_locs_tuple,
-                            float(lambda_km), access_model, float(max_distance_km),
-                            capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
-                            h3_resolution, _is_region, snap_linacs_to_hex,
-                            weibull_k=float(weibull_k),
-                            custom_rtu=access_custom_rtu,
-                        )
+                gdf_out, stats = combine_allocations(gdf_out, stats, _gdf_fca, _stats_fca)
+
                 st.session_state["_map_result"] = {
                     "gdf_out": gdf_out, "stats": stats, "region_percountry": _region_percountry,
                     "linac_locs_tuple": linac_locs_tuple, "facilities_df": facilities_df,
+                    "location": country,
+                    "tt_cache_key": _tt_cache_key if use_travel_time else None,
+                    "tt_mode": tt_mode if use_travel_time else None,
+                    "params": {
+                        "lambda_km": float(lambda_km), "model": access_model,
+                        "max_distance_km": float(max_distance_km), "weibull_k": float(weibull_k),
+                        "capacity": capacity_per_machine_per_year, "rt_method": access_rt_method,
+                        "rt_fraction": access_rt_fraction, "h3_res": h3_resolution,
+                        "snap": snap_linacs_to_hex, "custom_rtu": access_custom_rtu,
+                        **_access_kwargs,
+                    },
                 }
 
                 # Persist world default to disk so future sessions load instantly
-                _wp = _WORLD_DEFAULT_PARAMS
-                if (country == _wp["country"] and access_model == _wp["model"]
-                        and abs(float(max_distance_km) - _wp["max_distance_km"]) < 1
-                        and h3_resolution == _wp["h3_res"]
-                        and access_rt_method == _wp["rt_method"]
-                        and abs(capacity_per_machine_per_year - _wp["capacity"]) < 1
-                        and _region_percountry == _wp["region_percountry"]):
+                if _is_world_default:
                     _save_world_default(gdf_out, stats)
 
             # --- Data quality warnings (shown on every rerun) ---
@@ -2198,6 +2459,12 @@ with tab_map:
                     "excluded (no population or GLOBOCAN data): "
                     + ", ".join(sorted(_skipped))
                     + ". Regional totals understate true demand."
+                )
+            _proxy = stats.get("proxy_countries") or []
+            if _proxy:
+                st.info(
+                    "TravelTime does not cover " + ", ".join(sorted(_proxy)) + "; driving time there "
+                    "is replaced by the calibrated straight-line equivalent (120 min ≈ 64 km)."
                 )
             if _is_region:
                 _pop_skipped = get_region_skipped_countries(country, h3_resolution)
@@ -2386,6 +2653,12 @@ with tab_map:
                         st.plotly_chart(_fig_h2, use_container_width=True)
 
             else:  # Radiotherapy Access
+                # Show the selected allocation rule's result under the standard column names
+                gdf_out, stats = allocation_view(gdf_out, stats, access_alloc_view)
+                if "sfca3_ratio" in gdf_out.columns:
+                    gdf_out = gdf_out.copy()
+                    gdf_out["fca_3sfca_raw"] = gdf_out["sfca3_ratio"]
+                    gdf_out["fca_3sfca"] = gdf_out["sfca3_ratio"]  # shown uncapped
                 prob = gdf_out["access_probability"].to_numpy(dtype=np.float64)
                 cap_prob = gdf_out["capacity_limited_probability"].to_numpy(dtype=np.float64)
                 raw_pop = gdf_out["population"].to_numpy(dtype=np.float64)
@@ -2410,7 +2683,7 @@ with tab_map:
 
                 if access_display_metric == "Modelled Access Deficit":
                     display_vals = gdf_out["rt_untreated"].to_numpy(dtype=np.float64)
-                    cb_label_access = "RT access deficit"
+                    cb_label_access = access_display_label
                     auto_vmin_a = 0.0
                     auto_vmax_a = float(np.nanmax(display_vals))
                     metric_cmap_fn = _rdylgn_reversed_rgb
@@ -2426,11 +2699,11 @@ with tab_map:
 
                 elif access_display_metric == "Modelled Access Ratio":
                     display_vals = cap_prob
-                    cb_label_access = "Modelled Access Ratio"
+                    cb_label_access = access_display_label
                     auto_vmin_a, auto_vmax_a = 0.0, 1.0
                     tip_series = (
                         "<b>" + s_h3 + "</b><br/>"
-                        + "Modelled access ratio: " + s_cap + "%<br/>"
+                        + access_display_label + ": " + s_cap + "%<br/>"
                         + "Geographic access probability: " + s_prob + "%<br/>"
                         + "<hr style='margin:3px 0'/>"
                         + "Population: " + s_pop_fmt + "<br/>"
@@ -2456,6 +2729,105 @@ with tab_map:
                         + "RT demand: " + _s_rt_demand_raw + "<br/>"
                         + "RT accessed: " + s_treated + "<br/>"
                         + "RT deficit: " + s_untreated + "<br/>"
+                        + "<hr style='margin:3px 0'/>"
+                        + "Population: " + s_pop_fmt + "<br/>"
+                        + "Hex area: " + _s_area_acc + " km²"
+                    )
+
+                elif access_display_metric in _fca_metrics:
+                    _var = _fca_metrics[access_display_metric]
+                    _col = f"fca_{_var}"
+                    if _col not in gdf_out.columns:
+                        st.warning("Floating-catchment indices are computed for single-country runs only"
+                                   + (f" (last error: {stats['fca_error']})" if stats.get("fca_error") else "")
+                                   + ". Select a country and press Calculate RT Access.")
+                        display_vals = np.zeros(len(gdf_out))
+                        _s_raw = pd.Series(["n/a"] * len(gdf_out), index=gdf_out.index)
+                    else:
+                        display_vals = gdf_out[_col].to_numpy(dtype=np.float64)
+                        _s_raw = gdf_out[f"{_col}_raw"].round(2).astype(str)
+                    cb_label_access = f"{access_display_metric} (capacity per patient of demand in reach)"
+                    _finite = display_vals[np.isfinite(display_vals) & (display_vals > 0)]
+                    auto_vmin_a = 0.0
+                    auto_vmax_a = float(np.nanpercentile(_finite, 99)) if _finite.size else 1.0
+                    metric_cmap_fn = _rdylgn_rgb
+                    tip_series = (
+                        "<b>" + s_h3 + "</b><br/>"
+                        + access_display_metric + ": " + _s_raw + "<br/>"
+                        + "RadMaps access ratio: " + s_cap + "%<br/>"
+                        + "Geographic access probability: " + s_prob + "%<br/>"
+                        + "<hr style='margin:3px 0'/>"
+                        + "Population: " + s_pop_fmt + "<br/>"
+                        + "Hex area: " + _s_area_acc + " km²"
+                    )
+
+                elif access_display_metric in _fca_deficit_metrics:
+                    _var = _fca_deficit_metrics[access_display_metric]
+                    _col = f"fca_{_var}_deficit"
+                    if _col not in gdf_out.columns:
+                        st.warning("Floating-catchment indices are computed for single-country runs only"
+                                   + (f" (last error: {stats['fca_error']})" if stats.get("fca_error") else "")
+                                   + ". Select a country and press Calculate RT Access.")
+                        display_vals = np.zeros(len(gdf_out))
+                        _s_fdef = pd.Series(["n/a"] * len(gdf_out), index=gdf_out.index)
+                        _s_raw = _s_fdef
+                    else:
+                        display_vals = gdf_out[_col].to_numpy(dtype=np.float64)
+                        _s_fdef = gdf_out[_col].round(1).astype(str)
+                        _s_raw = gdf_out[f"fca_{_var}_raw"].round(2).astype(str)
+                    cb_label_access = f"{access_display_metric} (patients/yr)"
+                    auto_vmin_a = 0.0
+                    auto_vmax_a = float(np.nanmax(display_vals)) if len(display_vals) else 1.0
+                    metric_cmap_fn = _rdylgn_reversed_rgb
+                    _s_rt_demand_raw = gdf_out["rt_demand"].round(1).astype(str)
+                    if density_per_km2:
+                        display_vals = display_vals / (_areas_acc / 10)
+                        auto_vmax_a = float(np.nanmax(display_vals))
+                        cb_label_access += " per 10 km²"
+                    else:
+                        cb_label_access += " per hexagon"
+                    tip_series = (
+                        "<b>" + s_h3 + "</b><br/>"
+                        + access_display_metric + ": " + _s_fdef + "<br/>"
+                        + "Index ratio (supply / demand in reach): " + _s_raw + "<br/>"
+                        + "RT demand: " + _s_rt_demand_raw + "<br/>"
+                        + "RadMaps deficit: " + s_untreated + "<br/>"
+                        + "<hr style='margin:3px 0'/>"
+                        + "Population: " + s_pop_fmt + "<br/>"
+                        + "Hex area: " + _s_area_acc + " km²"
+                    )
+
+                elif access_display_metric in _workload_metrics:
+                    _has_fx = "rt_fractions_demand" in gdf_out.columns
+                    if not _has_fx:
+                        st.warning("Workload metrics are unavailable for this result (cancer data missing, "
+                                   "or the result predates the fraction metrics). Recompute with Calculate RT Access.")
+                    _fx_col = "rt_fractions_untreated" if "Deficit" in access_display_metric else "rt_fractions_demand"
+                    display_vals = (gdf_out[_fx_col].to_numpy(dtype=np.float64) if _has_fx
+                                    else np.zeros(len(gdf_out)))
+                    cb_label_access = ("Workload deficit (fractions/yr)" if "Deficit" in access_display_metric
+                                       else "Workload demand (fractions/yr)")
+                    auto_vmin_a = 0.0
+                    auto_vmax_a = float(np.nanmax(display_vals)) if display_vals.size and np.nanmax(display_vals) > 0 else 1.0
+                    metric_cmap_fn = _rdylgn_reversed_rgb
+                    if _has_fx:
+                        _s_fxd = gdf_out["rt_fractions_demand"].round(0).astype(int).astype(str)
+                        _s_fxt = gdf_out["rt_fractions_treated"].round(0).astype(int).astype(str)
+                        _s_fxu = gdf_out["rt_fractions_untreated"].round(0).astype(int).astype(str)
+                    else:
+                        _s_fxd = _s_fxt = _s_fxu = pd.Series(["n/a"] * len(gdf_out), index=gdf_out.index)
+                    if density_per_km2:
+                        display_vals = display_vals / (_areas_acc / 10)
+                        auto_vmax_a = float(np.nanmax(display_vals)) if np.nanmax(display_vals) > 0 else 1.0
+                        cb_label_access += " per 10 km²"
+                    else:
+                        cb_label_access += " per hexagon"
+                    tip_series = (
+                        "<b>" + s_h3 + "</b><br/>"
+                        + "Fractions demanded: " + _s_fxd + "<br/>"
+                        + "Fractions delivered: " + _s_fxt + "<br/>"
+                        + "Fraction deficit: " + _s_fxu + "<br/>"
+                        + "Patients: " + s_treated + " of " + gdf_out["rt_demand"].round(1).astype(str) + " treated<br/>"
                         + "<hr style='margin:3px 0'/>"
                         + "Population: " + s_pop_fmt + "<br/>"
                         + "Hex area: " + _s_area_acc + " km²"
@@ -2509,7 +2881,7 @@ with tab_map:
                 _map_default_cmap = _DEFAULT_CMAP.get(map_type, "Green → Red")
                 active_cmap_fn = metric_cmap_fn if cb_cmap_name == _map_default_cmap else cb_cmap_fn
                 # For deficit/demand, higher = worse/more → invert binary colours (above = red)
-                _acc_invert_binary = access_display_metric in ("Modelled Access Deficit", "RT Demand")
+                _acc_invert_binary = access_display_metric in ("Modelled Access Deficit", "RT Demand") or access_display_metric in _workload_metrics
                 colors, vmin, vmax = _color_values(display_vals, active_cmap_fn, auto_vmin_a, auto_vmax_a,
                                                    invert_binary=_acc_invert_binary)
 
@@ -2538,8 +2910,28 @@ with tab_map:
                         "Capacity allocation cannot be computed; geographic access probability is still valid."
                     )
 
-                if access_display_metric in ("Modelled Access Ratio", "Geographic Access Probability"):
+                if access_display_metric in ("Modelled Access Ratio", "Modelled Access Deficit"):
+                    st.subheader(access_display_label)
+                elif access_display_metric in _fca_metrics:
+                    st.subheader(access_display_label)
+                    st.caption(
+                        "Conventional 3SFCA index (Wan et al. 2012): each hexagon's demand is split across the facilities "
+                        "it can reach by selection weight, and the hexagon sums the capacity per patient of the facilities "
+                        "in reach. It is not capped: values above 1 mean more capacity than demand within reach. The colour "
+                        "scale runs to the 99th percentile. Unlike the capped 3SFCA ratio it is a supply-to-demand ratio, "
+                        "not patients treated."
+                    )
+                elif access_display_metric in _fca_deficit_metrics:
                     st.subheader(access_display_metric)
+                    _fd_tot = float(np.nansum(gdf_out[f"fca_{_fca_deficit_metrics[access_display_metric]}_deficit"])) \
+                        if f"fca_{_fca_deficit_metrics[access_display_metric]}_deficit" in gdf_out.columns else float("nan")
+                    _rm_tot = float(stats.get("total_rt_demand", 0.0) - stats.get("total_rt_treated", 0.0))
+                    st.caption(
+                        f"RT demand × (1 − min(1, index ratio)) per hexagon: the patients the index implies are left "
+                        f"untreated. National sum {_fd_tot:,.0f} vs RadMaps deficit {_rm_tot:,.0f} patients/yr. "
+                        "The two differ because the index credits each facility's capacity to every hexagon in reach, "
+                        "so its sum is not bounded by total capacity; the RadMaps deficit is."
+                    )
 
                 if click_mode and _PYDECK_CLICK_SUPPORTED:
                     st.info("Click a hexagon on the map to place a LINAC there, then click **Generate Map** to recompute.")
@@ -2591,7 +2983,8 @@ with tab_map:
                         )
                 if access_display_metric == "Modelled Access Ratio":
                     st.caption(
-                        "Modelled Access Ratio gives the ratio of patients accessing RT to total RT demand per hex."
+                        f"{access_display_label}: patients treated / RT demand per hexagon under the "
+                        f"{'nearest-first' if access_alloc_view == 'nf' else 'capped 3SFCA'} allocation rule."
                     )
                 elif access_display_metric == "Geographic Access Probability":
                     st.caption(
@@ -2599,12 +2992,11 @@ with tab_map:
                         "have treatment, given there are no linac capacity constraints."
                     )
 
-                if access_model == "weibull":
-                    model_info = f"Weibull | λ = {lambda_km} km | k = {weibull_k} | cut-off = {stats['cutoff_km']:.0f} km"
-                elif access_model == "step":
-                    model_info = f"Step function | max distance = {max_distance_km:.0f} km"
-                else:
-                    model_info = "Uniform (no distance decay)"
+                _mi_unit = "min" if stats.get("using_travel_time") else "km"
+                model_info = describe_model(
+                    access_model, scale=lambda_km, shape=weibull_k, threshold=max_distance_km,
+                    cutoff=stats.get("cutoff_km"), unit=_mi_unit,
+                )
 
                 # pre-compute all values
                 _globocan = stats.get("total_cancer_excl_nmsc")
@@ -2613,7 +3005,10 @@ with tab_map:
                 _total_pop_acc = float(gdf_out["population"].sum())
                 _modelled_ratio = _treated / _demand if _demand > 0 else 0.0
                 _modelled_deficit = _demand - _treated
-                _geo_access = stats.get("mean_access_probability", 0.0)
+                # Geography-only access is demand-weighted (paper Eq. 4). Older cached
+                # results carry only the population-weighted mean, so fall back to it.
+                _geo_access = stats.get("demand_weighted_access", stats.get("mean_access_probability", 0.0))
+                _unused_cap = stats.get("unused_capacity")
                 _cap_ratio = min(stats['total_national_capacity'] / _demand, 1.0) if _demand > 0 else None
                 _cap_accessed = min(stats['total_national_capacity'], _demand) if _demand > 0 else None
                 _cap_deficit = max(_demand - stats['total_national_capacity'], 0.0) if _demand > 0 else None
@@ -2642,7 +3037,12 @@ with tab_map:
 
                 # ── RT Demand ────────────────────────────────────────────────
                 st.markdown("**RT Demand**")
-                _rtu_label = "optimal" if access_rt_method == "optimal" else f"proportional ({access_rt_fraction:.0%})"
+                if access_rt_method == "optimal":
+                    _rtu_label = f"optimal — {rtu_set_info(stats.get('rtu_set', rtu_set))['label']}"
+                elif access_rt_method == "custom":
+                    _rtu_label = "custom per-type rates (Data tab)"
+                else:
+                    _rtu_label = f"proportional ({access_rt_fraction:.0%})"
                 st.caption(f"**Calculated Assuming:** RTU = {_rtu_label}")
                 st.metric("RT Demand",
                           _pct_num(_demand, _rt_pct_of_cancer) if _rt_pct_of_cancer is not None else _fmt_k(_demand),
@@ -2652,36 +3052,33 @@ with tab_map:
 
                 # ── Calculations ─────────────────────────────────────────────
                 st.markdown("**Calculations**")
-                if access_model == "step":
-                    _params_str = (
-                        f"**Calculated Assuming:** H3 Resolution = {h3_resolution}, Access Model = Step function, "
-                        f"Cut-off = {int(max_distance_km)} km, Capacity per machine = {int(capacity_per_machine_per_year)}"
-                    )
-                elif access_model == "weibull":
-                    _params_str = (
-                        f"**Calculated Assuming:** H3 Resolution = {h3_resolution}, Access Model = Weibull, "
-                        f"λ = {lambda_km} km, k = {weibull_k}, Capacity per machine = {int(capacity_per_machine_per_year)}"
-                    )
-                elif access_model == "uniform":
-                    _params_str = (
-                        f"**Calculated Assuming:** H3 Resolution = {h3_resolution}, Access Model = Uniform (no decay), "
-                        f"Capacity per machine = {int(capacity_per_machine_per_year)}"
-                    )
+                if stats.get("capacity_basis") == "fractions" or (capacity_basis == "fractions" and not _is_region):
+                    _cap_str = (f"Capacity = {fractions_per_linac:,.0f} fractions/LINAC/yr × hypofractionation "
+                                f"{hypofractionation:.2f}" + (f" → {int(capacity_per_machine_per_year)} pts/LINAC"
+                                                               if not _is_region else " (per-country pts/LINAC)"))
                 else:
-                    _params_str = (
-                        f"**Calculated Assuming:** H3 Resolution = {h3_resolution}, Access Model = Exponential, "
-                        f"λ = {lambda_km} km, Capacity per machine = {int(capacity_per_machine_per_year)}"
-                    )
+                    _cap_str = f"Capacity per machine = {int(capacity_per_machine_per_year)}"
+                _params_str = (
+                    f"**Calculated Assuming:** H3 Resolution = {h3_resolution}, Access Model = {model_info}, "
+                    f"{_cap_str}, Allocation = {_ALLOCATION_LABELS.get(stats.get('allocation', allocation_rule), allocation_rule)}"
+                    + (" (Huff size-weighted)" if stats.get("size_weighting") else "")
+                )
                 st.caption(_params_str)
 
                 st.markdown("*RadMaps*")
-                col1b, col2b = st.columns(2)
+                col1b, col2b, col3b = st.columns(3)
                 col1b.metric("Accessed",
                              _pct_num(_treated, _modelled_ratio),
                              help="Patients accessing RT per year · % of RT demand (capacity + geography combined)")
                 col2b.metric("Deficit ∆",
                              _pct_num(_modelled_deficit, 1.0 - _modelled_ratio),
                              help="Patients not accessing RT per year · % of RT demand")
+                if _unused_cap is not None and stats.get("total_national_capacity"):
+                    col3b.metric("Unused capacity",
+                                 _pct_num(_unused_cap, _unused_cap / stats["total_national_capacity"]),
+                                 help="Capacity no reachable patient could use · % of total capacity. "
+                                      "Non-zero values with unmet demand show where geography, not machines, is the constraint "
+                                      "— or, for nearest-first, where overlapping catchments strand capacity.")
 
                 st.markdown("*Capacity-only*")
                 col1c, col2c = st.columns(2)
@@ -2700,6 +3097,33 @@ with tab_map:
                 col2d.metric("Deficit ∆",
                              _pct_num((1.0 - _geo_access) * _demand, 1.0 - _geo_access),
                              help="Patients too far from any LINAC · % of RT demand")
+
+                # ── Workload (fractions) ─────────────────────────────────────
+                if stats.get("total_fractions_demand"):
+                    _fxd = stats["total_fractions_demand"]
+                    _fxt = stats.get("total_fractions_treated", 0.0)
+                    _fxu = stats.get("total_fractions_untreated", _fxd - _fxt)
+                    _fpl = stats.get("fractions_per_linac")
+                    _fcap = stats.get("fractions_capacity")
+                    _leq = stats.get("linac_equivalents_deficit")
+                    st.markdown("*Workload (treatment fractions)*")
+                    st.caption(
+                        f"Same demand and allocation expressed as machine time: "
+                        f"mean {stats.get('mean_fractions_per_course', 0.0):.1f} fractions per course for this "
+                        f"cancer mix (Wong et al. 2016" + (", with your per-type edits" if _site_fractions else "")
+                        + (f", × {hypofractionation:.2f} hypofractionation" if abs(hypofractionation - 1.0) > 1e-9 else "")
+                        + ")" + (f"; one LINAC ≈ {_fpl:,.0f} fractions/yr." if _fpl else ".")
+                    )
+                    col1e, col2e, col3e, col4e = st.columns(4)
+                    col1e.metric("Fractions demanded", _fmt_k(_fxd), help="Annual treatment fractions implied by RT demand")
+                    col2e.metric("Fractions delivered", _pct_num(_fxt, _fxt / _fxd if _fxd > 0 else 0.0),
+                                 help="Fractions for the patients the model treats · % of fractions demanded")
+                    col3e.metric("Fraction deficit", _pct_num(_fxu, _fxu / _fxd if _fxd > 0 else 0.0),
+                                 help="Fractions for the patients the model cannot treat · % of fractions demanded")
+                    col4e.metric("LINAC-equivalents short", f"{_leq:,.1f}" if _leq is not None else "N/A",
+                                 help="Fraction deficit ÷ fractions per LINAC per year: the machines the unmet workload "
+                                      "represents at benchmark throughput, if they could be placed within reach. "
+                                      + (f"Current fleet ≈ {_fcap:,.0f} fractions/yr." if _fcap else ""))
 
     # ── Download (bottom of page) ─────────────────────────────────────────
     if _dl_info is not None:
@@ -2800,17 +3224,27 @@ with tab_cap:
     with st.spinner("Loading population data…"):
         _cap_pop_gdf = _load_pop_region(country, 3) if _is_region else _load_pop(country, 5)
     _cap_total_pop = int(_cap_pop_gdf["population"].sum())
-    _cap_linac_result = _load_dirac(country)
+    _cap_linac_result = _load_dirac(country, merge_colocated)
     _cap_facilities_df = _cap_linac_result[1] if _cap_linac_result[0] is not None else pd.DataFrame()
     _n_linacs_cap = int(_cap_facilities_df["n_linacs"].sum()) if _cap_facilities_df is not None and len(_cap_facilities_df) > 0 else 0
-    _capacity_per_linac = int(capacity_per_machine_per_year)
+    _capacity_per_linac = int(round(capacity_per_machine_per_year))
+    _cap_source_md = (
+        f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
+        + (f"derived from {fractions_per_linac:,.0f} fractions/LINAC/yr and this country's cancer-type mix "
+           f"(mean {_cap_basis_info['mean_fractions_per_course']:.1f} fractions per course; Wong et al. 2016)"
+           if (_cap_basis_info is not None) else
+           "([Zubizarreta et al. 2015](https://doi.org/10.1016/j.clon.2014.10.006); "
+           "[Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8))")
+        + "."
+    )
 
     if not has_globocan_data(iso3):
         st.warning(f"No GLOBOCAN data for **{country}** — RT need cannot be estimated.")
     else:
         with st.spinner("Computing RT need…"):
-            _rt_need = _data_tab_rt_need(iso3)
+            _rt_need = _data_tab_rt_need(iso3, rtu_set)
         _total_rt_cases = _rt_need["total_rt_cases"]
+        _rtu_src = rtu_set_info(rtu_set)
 
         st.markdown("**Calculation based on annual cancer incidence and optimal RT utilisation**")
         _linacs_required_incidence = _total_rt_cases / _capacity_per_linac
@@ -2819,7 +3253,7 @@ with tab_cap:
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Cancers requiring RT annually", f"{int(_total_rt_cases):,}")
         col2.metric("LINACs (DIRAC)", f"{_n_linacs_cap:,}")
-        col3.metric("LINACs required (450 pts/yr/LINAC)", f"{_linacs_required_incidence_ceil:,}")
+        col3.metric(f"LINACs required ({_capacity_per_linac} pts/yr/LINAC)", f"{_linacs_required_incidence_ceil:,}")
         _gap_inc_label = "LINAC shortage" if _linac_gap_incidence > 0 else "LINAC surplus"
         _gap_inc_color = "red" if _linac_gap_incidence > 0 else "green"
         col4.markdown(
@@ -2828,10 +3262,9 @@ with tab_cap:
             unsafe_allow_html=True,
         )
         st.caption(
-            "Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence by optimal RT utilisation rates "
-            "(Delaney et al. 2005) for each cancer site independently. "
-            f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
-            "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8))."
+            "Incidence-based RT need estimated by multiplying GLOBOCAN 2024 cancer incidence by optimal RT utilisation rates "
+            f"({_rtu_src['label']}; {_rtu_src['intent_coverage'].split('.')[0]}) for each cancer type independently. "
+            + _cap_source_md
         )
 
         st.markdown("**Calculation based on annual cancer incidence and proportional scaling**")
@@ -2843,7 +3276,7 @@ with tab_cap:
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Cancers requiring RT annually", f"{int(_total_rt_cases_prop):,}")
         col2.metric("LINACs (DIRAC)", f"{_n_linacs_cap:,}")
-        col3.metric("LINACs required (450 pts/yr/LINAC)", f"{_linacs_required_prop_ceil:,}")
+        col3.metric(f"LINACs required ({_capacity_per_linac} pts/yr/LINAC)", f"{_linacs_required_prop_ceil:,}")
         _gap_prop_label = "LINAC shortage" if _linac_gap_prop > 0 else "LINAC surplus"
         _gap_prop_color = "red" if _linac_gap_prop > 0 else "green"
         col4.markdown(
@@ -2852,10 +3285,9 @@ with tab_cap:
             unsafe_allow_html=True,
         )
         st.caption(
-            f"Incidence-based RT need estimated by multiplying GLOBOCAN 2022 cancer incidence (excl. NMSC) by a "
+            f"Incidence-based RT need estimated by multiplying GLOBOCAN 2024 cancer incidence (excl. NMSC) by a "
             f"proportional scaling factor of **{_prop_fraction:.2f}**. "
-            f"Capacity assumed at **{_capacity_per_linac} patients per LINAC per year** "
-            "([Abdel-Wahab et al. 2025](https://doi.org/10.1016/S1470-2045(24)00678-8))."
+            + _cap_source_md
         )
 
         st.markdown("**Calculation based on 5 machines per million of population**")
@@ -3131,6 +3563,7 @@ with tab_plan:
                             capacity_per_machine_per_year, access_rt_method, access_rt_fraction,
                             h3_resolution, _is_region, snap_linacs_to_hex,
                             weibull_k=float(weibull_k), custom_rtu=access_custom_rtu,
+                            **_access_kwargs,
                         )
                         _oimprove  = _onew_stats["total_rt_treated"] - _opt_stats["total_rt_treated"]
                         _onew_ratio = _onew_stats["total_rt_treated"] / _onew_stats["total_rt_demand"] if _onew_stats["total_rt_demand"] > 0 else 0.0
@@ -3477,6 +3910,7 @@ with tab_sensitivity:
                             _base_cap * _cf, access_rt_method, access_rt_fraction,
                             h3_resolution, _is_region, snap_linacs_to_hex,
                             weibull_k=float(weibull_k), custom_rtu=access_custom_rtu,
+                            **_access_kwargs,
                         )
                     except Exception as _e:
                         _prog.progress((_i + 1) / _n)
@@ -3543,6 +3977,250 @@ with tab_sensitivity:
                 continue
         if _cal_rows:
             st.dataframe(pd.DataFrame(_cal_rows), use_container_width=True, hide_index=True)
+
+# ---------------------------------------------------------------------------
+# Benchmark tab — allocation rules and floating-catchment indices
+# ---------------------------------------------------------------------------
+
+with tab_benchmark:
+    st.header("🔁 Benchmark")
+    st.markdown(
+        """
+        RadMaps is a **capacity-conserving allocation model**: every patient is counted once, no
+        facility treats beyond its capacity, and shortage is rationed nearest-first. The conventional
+        spatial-accessibility indices (2SFCA, E2SFCA, gravity) are **potential accessibility ratios**:
+        supply per unit of demand within reach, unbounded, with overlapping catchments counting the
+        same demand and supply more than once. This tab puts both side by side for the current
+        country and parameters.
+        """
+    )
+    _bm = st.session_state.get("_map_result")
+    _bm_ok = (
+        _bm is not None and not _bm.get("region_percountry")
+        and _bm.get("linac_locs_tuple") and _bm.get("params") is not None
+    )
+    if not _bm_ok:
+        st.info("Run **Calculate RT Access** for a **single country** first. Benchmarks are computed one country at a time "
+                "using the parameters of that run.")
+    else:
+        _bp = _bm["params"]
+        _bm_gdf = _bm["gdf_out"]
+        _bm_stats = _bm["stats"]
+        _bm_locs = tuple(_bm["linac_locs_tuple"])
+        _bm_tt_key = _bm.get("tt_cache_key")
+        _bm_tt_mode = _bm.get("tt_mode")
+        _bm_unit = "min" if _bm_tt_key else "km"
+        st.caption(
+            f"Current run: {country} · res {_bp['h3_res']} · "
+            + describe_model(_bp["model"], scale=_bp["lambda_km"], shape=_bp["weibull_k"],
+                             threshold=_bp["max_distance_km"], cutoff=_bp.get("cutoff_km"), unit=_bm_unit)
+            + f" · {_ALLOCATION_LABELS[_bp['allocation']]} · {int(_bp['capacity'])} pts/LINAC"
+        )
+
+        def _bm_run(rule: str):
+            common = dict(
+                rt_method=_bp["rt_method"], rt_fraction=_bp["rt_fraction"], h3_res=_bp["h3_res"],
+                region_flag=False, snap_linacs_to_hex=_bp["snap"], weibull_k=_bp["weibull_k"],
+                custom_rtu=_bp["custom_rtu"], rtu_set=_bp["rtu_set"], allocation=rule,
+                size_weighting=_bp["size_weighting"], cutoff_km=_bp.get("cutoff_km"),
+                site_fractions=_bp.get("site_fractions", ()), hypofractionation=_bp.get("hypofractionation", 1.0),
+                fractions_per_linac=_bp.get("fractions_per_linac"),
+            )
+            if _bm_tt_key:
+                return _compute_access_travel_time(
+                    country, iso3, _bm_locs, _bp["lambda_km"], _bp["model"], _bp["max_distance_km"],
+                    _bp["capacity"], _bm_tt_mode, _bm_tt_key, **common,
+                )
+            return _compute_access(
+                country, iso3, _bm_locs, _bp["lambda_km"], _bp["model"], _bp["max_distance_km"],
+                _bp["capacity"], **common,
+            )
+
+        def _pop_gini(values: np.ndarray, weights: np.ndarray) -> float:
+            if weights.sum() <= 0:
+                return 0.0
+            order = np.argsort(values)
+            v, w = values[order], weights[order]
+            served = v * w
+            if served.sum() <= 0:
+                return 0.0
+            lx = np.concatenate([[0.0], np.cumsum(w) / w.sum()])
+            ly = np.concatenate([[0.0], np.cumsum(served) / served.sum()])
+            trap = getattr(np, "trapezoid", None) or np.trapz
+            return float(1.0 - 2.0 * trap(ly, lx))
+
+        # ------------------------------------------------------------------
+        st.subheader("1 · Allocation rules")
+        st.markdown(
+            "Same demand, same geography, same capacity — only the rationing rule changes. "
+            "**Nearest-first** serves the closest patients first; **proportional** shares each "
+            "facility's shortage equally across everyone it reaches (a capacity-capped balanced "
+            "FCA); **optimal** is the linear-programme maximum of patients treated."
+        )
+        if st.button("Run allocation comparison", key="_bm_run_alloc"):
+            _rows, _perhex = [], {}
+            _prog = st.progress(0.0, text="Allocating…")
+            for _i, _rule in enumerate(ALLOCATION_RULES):
+                try:
+                    if _rule == _bp["allocation"]:
+                        _g, _s = _bm_gdf, _bm_stats
+                    else:
+                        _g, _s = _bm_run(_rule)
+                    _dem = _g["rt_demand"].to_numpy(np.float64)
+                    _ratio = _g["capacity_limited_probability"].to_numpy(np.float64)
+                    _rows.append({
+                        "Rule": _ALLOCATION_LABELS[_rule],
+                        "Treated (pts/yr)": round(_s["total_rt_treated"]),
+                        "% of demand": round(100 * _s["total_rt_treated"] / _s["total_rt_demand"], 1) if _s["total_rt_demand"] > 0 else 0.0,
+                        "Unused capacity": round(_s.get("unused_capacity", 0.0)),
+                        "Demand-weighted Gini of access ratio": round(_pop_gini(_ratio, _dem), 3),
+                        "Demand with zero access": round(float(_dem[_ratio <= 1e-9].sum())),
+                    })
+                    _perhex[_rule] = _g.set_index("h3")["capacity_limited_probability"]
+                except (ValueError, RuntimeError) as _e:
+                    _rows.append({"Rule": _ALLOCATION_LABELS[_rule], "Treated (pts/yr)": None,
+                                  "% of demand": None, "Unused capacity": None,
+                                  "Demand-weighted Gini of access ratio": None,
+                                  "Demand with zero access": f"not run: {_e}"})
+                _prog.progress((_i + 1) / len(ALLOCATION_RULES))
+            _prog.empty()
+            st.session_state["_bm_alloc"] = (_rows, _perhex, _bm_gdf.set_index("h3")["rt_demand"])
+
+        if "_bm_alloc" in st.session_state:
+            _rows, _perhex, _dem_s = st.session_state["_bm_alloc"]
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+            if "nearest_first" in _perhex and len(_perhex) > 1:
+                _fig_al = go.Figure()
+                _x = _perhex["nearest_first"]
+                _mask = _dem_s.reindex(_x.index).fillna(0) > 0
+                for _rule, _series in _perhex.items():
+                    if _rule == "nearest_first":
+                        continue
+                    _y = _series.reindex(_x.index)
+                    _sel = _mask & _y.notna()
+                    _n = int(_sel.sum())
+                    _step = max(1, _n // 4000)
+                    _fig_al.add_trace(go.Scattergl(
+                        x=_x[_sel].to_numpy()[::_step], y=_y[_sel].to_numpy()[::_step], mode="markers",
+                        marker=dict(size=4, opacity=0.5), name=_ALLOCATION_LABELS[_rule],
+                    ))
+                _fig_al.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash", color="#888"),
+                                             name="identical"))
+                _fig_al.update_layout(
+                    xaxis_title="Nearest-first access ratio per hexagon", yaxis_title="Alternative rule access ratio",
+                    height=420, margin=dict(t=30, b=50), legend=dict(orientation="h", y=-0.2),
+                )
+                st.plotly_chart(_fig_al, use_container_width=True)
+                st.caption("Points below the diagonal are hexagons that lose out when shortage is shared rather than "
+                           "rationed to the nearest; points above are the far hexagons that gain.")
+
+        st.divider()
+        # ------------------------------------------------------------------
+        st.subheader("2 · Floating-catchment indices")
+        _thr_default = (_bp["max_distance_km"] if _bp["model"] in ("step", "gaussian")
+                        else (_bp.get("cutoff_km") or default_cutoff(_bp["model"], _bp["lambda_km"], _bp["max_distance_km"])))
+        _bm_thr = float(st.number_input(
+            f"Catchment for 2SFCA / E2SFCA / 3SFCA ({_bm_unit})", min_value=5.0, max_value=3000.0,
+            value=float(_thr_default), step=10.0, key="_bm_thr",
+            help="2SFCA uses a binary catchment of this radius; E2SFCA and 3SFCA use the Gaussian kernel falling to zero at it "
+                 "(or the current run's decay model if that is itself smooth). 3SFCA additionally splits each hexagon's "
+                 "demand across the facilities it can reach (Wan et al. 2012), removing the demand-side double counting.",
+        ))
+        _bm_beta = float(st.slider("Gravity exponent β", 0.5, 3.0, 1.5, step=0.1, key="_bm_beta"))
+        st.markdown(
+            "Each index is **capacity per patient of demand within reach**. A value of 1 means the "
+            "facilities a hexagon can reach have, in aggregate, exactly enough capacity for all the demand "
+            "they can reach; it does not mean those patients are treated. `min(1, ratio)` is the quantity "
+            "comparable with the RadMaps access ratio, and demand × (1 − min(1, ratio)) summed over hexagons is the "
+            "index's implied deficit. 3SFCA's demand split is the uncapped counterpart of the proportional allocation rule."
+        )
+        if st.button("Run floating-catchment benchmarks", key="_bm_run_fca"):
+            _e2_model = _bp["model"] if _bp["model"] in ("weibull", "exponential", "gaussian", "power") else "gaussian"
+            _variants = [
+                ("2sfca", dict(model="step", max_distance_km=_bm_thr, lambda_km=_bp["lambda_km"], weibull_k=_bp["weibull_k"], cutoff_km=None)),
+                ("e2sfca", dict(model=_e2_model, max_distance_km=_bm_thr, lambda_km=_bp["lambda_km"], weibull_k=_bp["weibull_k"], cutoff_km=_bp.get("cutoff_km"))),
+                ("3sfca", dict(model=_e2_model, max_distance_km=_bm_thr, lambda_km=_bp["lambda_km"], weibull_k=_bp["weibull_k"], cutoff_km=_bp.get("cutoff_km"))),
+                ("gravity", dict(model="power", max_distance_km=_bm_thr, lambda_km=10.0, weibull_k=_bm_beta, cutoff_km=5.0 * _bm_thr)),
+            ]
+            _frows, _fper = [], {}
+            _prog = st.progress(0.0, text="Computing indices…")
+            for _i, (_var, _kw) in enumerate(_variants):
+                _df, _fs = _compute_fca_cached(
+                    country, iso3, _bm_locs, _var, _kw["model"], _kw["lambda_km"], _kw["weibull_k"],
+                    _kw["max_distance_km"], _kw["cutoff_km"], _bp["capacity"], _bp["rt_method"],
+                    _bp["rt_fraction"], _bp["h3_res"], _bp["snap"], _bp["custom_rtu"], _bp["rtu_set"],
+                    tt_mode=_bm_tt_mode, tt_cache_key=_bm_tt_key, gravity_beta=_bm_beta,
+                )
+                _frows.append({
+                    "Index": FCA_LABELS[_var],
+                    "Decay": describe_model(_fs["model"], scale=_fs["lambda_km"], shape=_fs["shape"],
+                                            threshold=_fs["max_distance_km"], cutoff=_fs["cutoff_km"], unit=_bm_unit),
+                    "Demand-weighted mean ratio": round(_fs["demand_weighted_ratio"], 3),
+                    "Implied treated, min(1, ratio) (% of demand)": round(100 * _fs["implied_treated_fraction"], 1),
+                    "Implied deficit (patients/yr)": round(_fs["implied_deficit"]),
+                    "Demand with ratio ≥ 1 (%)": round(100 * _fs["demand_with_ratio_ge_1"] / _fs["total_rt_demand"], 1) if _fs["total_rt_demand"] > 0 else 0.0,
+                    "Demand unreached (%)": round(100 * _fs["demand_unreached"] / _fs["total_rt_demand"], 1) if _fs["total_rt_demand"] > 0 else 0.0,
+                })
+                _fper[_var] = _df.set_index("h3")
+                _prog.progress((_i + 1) / len(_variants))
+            _prog.empty()
+            st.session_state["_bm_fca"] = (_frows, _fper)
+
+        if "_bm_fca" in st.session_state:
+            _frows, _fper = st.session_state["_bm_fca"]
+            _rm_row = {
+                "Index": "RadMaps (this run)",
+                "Decay": describe_model(_bp["model"], scale=_bp["lambda_km"], shape=_bp["weibull_k"],
+                                        threshold=_bp["max_distance_km"], cutoff=_bp.get("cutoff_km"), unit=_bm_unit),
+                "Demand-weighted mean ratio": None,
+                "Implied treated, min(1, ratio) (% of demand)": round(100 * _bm_stats["total_rt_treated"] / _bm_stats["total_rt_demand"], 1) if _bm_stats["total_rt_demand"] > 0 else 0.0,
+                "Implied deficit (patients/yr)": round(_bm_stats["total_rt_demand"] - _bm_stats["total_rt_treated"]),
+                "Demand with ratio ≥ 1 (%)": None,
+                "Demand unreached (%)": round(100 * (1 - _bm_stats.get("demand_weighted_access", _bm_stats.get("mean_access_probability", 0.0))), 1),
+            }
+            st.dataframe(pd.DataFrame([_rm_row] + _frows), use_container_width=True, hide_index=True)
+
+            _rm = _bm_gdf.set_index("h3")
+            _rm_ratio = _rm["capacity_limited_probability"].astype(np.float64)
+            _rm_dem = _rm["rt_demand"].astype(np.float64)
+            try:
+                from scipy.stats import spearmanr as _spearmanr
+            except Exception:  # pragma: no cover
+                _spearmanr = None
+            _fig_f = go.Figure()
+            _corr_rows = []
+            for _var, _df in _fper.items():
+                _y = _df["fca_ratio_capped"].reindex(_rm.index).astype(np.float64)
+                _sel = (_rm_dem > 0) & _y.notna()
+                _n = int(_sel.sum())
+                if _n == 0:
+                    continue
+                _step = max(1, _n // 4000)
+                _fig_f.add_trace(go.Scattergl(
+                    x=_rm_ratio[_sel].to_numpy()[::_step], y=_y[_sel].to_numpy()[::_step], mode="markers",
+                    marker=dict(size=4, opacity=0.5), name=FCA_LABELS[_var],
+                ))
+                if _spearmanr is not None and _n > 2:
+                    _rho = _spearmanr(_rm_ratio[_sel], _y[_sel]).correlation
+                    _mad = float(np.average(np.abs(_rm_ratio[_sel] - _y[_sel]), weights=_rm_dem[_sel]))
+                    _corr_rows.append({"Index": FCA_LABELS[_var], "Spearman ρ vs RadMaps ratio": round(float(_rho), 3),
+                                       "Demand-weighted mean |difference|": round(_mad, 3), "Hexagons": _n})
+            _fig_f.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash", color="#888"), name="identical"))
+            _fig_f.update_layout(
+                xaxis_title="RadMaps access ratio per hexagon (treated / demand)",
+                yaxis_title="Floating-catchment ratio, capped at 1",
+                height=440, margin=dict(t=30, b=50), legend=dict(orientation="h", y=-0.2),
+            )
+            st.plotly_chart(_fig_f, use_container_width=True)
+            if _corr_rows:
+                st.dataframe(pd.DataFrame(_corr_rows), use_container_width=True, hide_index=True)
+            st.caption(
+                "Where capacity is ample the indices and RadMaps agree (both ≈ 1 inside the catchment). "
+                "Where it is short, 2SFCA spreads the same deflated ratio across a whole catchment and re-sums it "
+                "at every overlap, while RadMaps rations it; the scatter shows how far apart the two pictures are "
+                "and the Spearman ρ whether they at least rank hexagons the same way."
+            )
+
 
 # ---------------------------------------------------------------------------
 # Convergence Testing tab
@@ -3659,6 +4337,7 @@ with tab_convergence:
 # ---------------------------------------------------------------------------
 
 _COUNTRY_METRICS_PATH = Path(__file__).resolve().parent / "data" / "country_metrics.parquet"
+_COUNTRY_RESULTS_PATH = Path(__file__).resolve().parent / "data" / "country_results.parquet"
 
 
 @st.cache_data(show_spinner=False)
@@ -3669,54 +4348,56 @@ def _load_country_metrics():
     return pd.read_parquet(_COUNTRY_METRICS_PATH)
 
 
+@st.cache_data(show_spinner=False)
+def _load_country_results():
+    """Per-country results of the paper's global analysis (scripts/global_results.py)."""
+    if not _COUNTRY_RESULTS_PATH.exists():
+        return None
+    return pd.read_parquet(_COUNTRY_RESULTS_PATH)
+
+
 with tab_choropleth:
     st.header("🗺️ World Choropleth")
     st.caption(
-        "One value per country — the **national, demand-weighted** access metric. "
-        "This is a coarser view than the per-hexagon Access Maps (which resolve access "
-        "*within* a country); here each country is a single number. Precomputed at H3 "
-        "resolution 5 from the corrected DIRAC facilities and cached driving-time matrices."
+        "One value per country: the national share of radiotherapy demand met, as in the RadMaps "
+        "paper (H3 resolution 5, 120-min driving time from the stored TravelTime data, "
+        "450 patients per LINAC, optimal RTU). Each country is a single number; the Access Maps "
+        "resolve access within countries."
     )
 
-    _cm = _load_country_metrics()
+    _cm = _load_country_results()
     if _cm is None or _cm.empty:
         st.info(
-            "Country metrics lookup not found. Generate it with "
-            "`python scripts/build_country_metrics.py`."
+            "Country results not found. Generate them with `python scripts/global_results.py`."
         )
     else:
-        _cc1, _cc2 = st.columns([1.1, 1.4])
+        _cc1, _cc2 = st.columns([1.6, 1.0])
         _chor_metric = _cc1.radio(
-            "Metric", ["Capacity", "Geography", "RadMaps"],
+            "Metric",
+            ["Nearest-first (A)", "Capped 3SFCA (A)", "Capacity only (A_C)", "Geography only (A_G)"],
             horizontal=True, key="chor_metric",
-            help="Capacity = supply adequacy A_C = min(1, machines·450 / demand). "
-                 "Geography = demand-weighted geographic reach A_G. "
-                 "RadMaps = realised treatment A_RM (supply × access).",
+            help="Nearest-first and capped 3SFCA: patients treated / demand under each allocation rule. "
+                 "Capacity only: min(1, machines × 450 / demand), ignoring geography. "
+                 "Geography only: demand-weighted geographic access, ignoring capacity.",
         )
-        _chor_is_cap = _chor_metric == "Capacity"
-        _chor_thr = _cc2.radio(
-            "Threshold", ["50 km", "100 km", "200 km", "30 min", "60 min", "120 min"],
-            index=5, horizontal=True, key="chor_thr", disabled=_chor_is_cap,
-            help="Distance or driving-time cut-off. Not applicable to Capacity — "
-                 "supply adequacy is threshold-free.",
+        _chor_decay = _cc2.radio(
+            "Decay (120 min)", ["Gaussian", "Step"], horizontal=True, key="chor_decay",
+            disabled=_chor_metric.startswith("Capacity"),
+            help="The paper's main model is Gaussian with a 120-min catchment; the step function "
+                 "(full access within 120 min) is the measure reported by Wawrzuta et al. 2025.",
         )
+        _chor_is_time = True
+        _dk = "gauss" if _chor_decay == "Gaussian" else "step"
+        _chor_col, _chor_title = {
+            "Nearest-first (A)": (f"A_{_dk}_nf", f"Share of demand met, nearest-first ({_chor_decay}, 120 min)"),
+            "Capped 3SFCA (A)": (f"A_{_dk}_fca", f"Share of demand met, capped 3SFCA ({_chor_decay}, 120 min)"),
+            "Capacity only (A_C)": ("A_C", "Capacity only, A_C"),
+            "Geography only (A_G)": (f"A_G_{_dk}", f"Geography only, A_G ({_chor_decay}, 120 min)"),
+        }[_chor_metric]
 
-        # Resolve the column + a human title.
-        if _chor_is_cap:
-            _chor_col = "A_C"
-            _chor_title = "Capacity — supply adequacy (A_C)"
-            _chor_is_time = False
-        else:
-            _chor_code = {"Geography": "A_G", "RadMaps": "A_RM"}[_chor_metric]
-            _chor_unit = _chor_thr.replace(" ", "")           # "50km" / "120min"
-            _chor_col = f"{_chor_code}_{_chor_unit}"
-            _chor_is_time = _chor_unit.endswith("min")
-            _chor_metric_full = {"Geography": "Geographic reach (A_G)",
-                                 "RadMaps": "Realised treatment (A_RM)"}[_chor_metric]
-            _chor_title = f"{_chor_metric_full} within {_chor_thr}"
-
-        _cdf = _cm[["iso3", "name", "n_machines", "time_source", _chor_col]].copy()
-        _cdf = _cdf.rename(columns={_chor_col: "value"}).dropna(subset=["value"])
+        _cdf = _cm[["iso3", "name", "n_machines", "time_source", "D", _chor_col]].copy()
+        _cdf["value"] = _cdf[_chor_col] / _cdf["D"]
+        _cdf = _cdf.dropna(subset=["value"])
         _cdf["pct"] = (_cdf["value"] * 100).round(1)
 
         # Discrete 5-band colouring, reusing the app's discrete palette (honours the
@@ -3780,9 +4461,9 @@ with tab_choropleth:
         st.plotly_chart(_fig_chor, use_container_width=True)
 
         _n_grey = int((_cdf["n_machines"] == 0).sum())
-        _mean_v = float(_cdf["value"].mean())
+        _glob_v = float(_cdf[_chor_col].sum() / _cdf["D"].sum())
         st.caption(
-            f"{len(_cdf)} countries with GLOBOCAN data · mean = {_mean_v*100:.0f}% · "
+            f"{len(_cdf)} countries with GLOBOCAN data · worldwide {_glob_v*100:.1f}% of demand met · "
             f"{_n_grey} have no radiotherapy facilities (shown at 0%). "
             "Countries we can't compute (no GLOBOCAN cancer data) are shown in grey. "
             + ("Driving times for countries TravelTime does not cover use a fitted "

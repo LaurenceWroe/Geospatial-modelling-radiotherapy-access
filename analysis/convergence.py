@@ -106,7 +106,7 @@ def run_convergence(country: str, iso3: str, app_id: str, api_key: str,
     for i, res in enumerate(RES_ALL):
         _tick(0.70 + 0.28 * i / len(RES_ALL), f"Computing access metrics at res {res}…")
         gdf = gdf_by_res[res]
-        cg = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False)
+        cg = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False, rtu_set="barton_2014")
         demand = _optimal_demand(cg)
         if demand is None:
             continue

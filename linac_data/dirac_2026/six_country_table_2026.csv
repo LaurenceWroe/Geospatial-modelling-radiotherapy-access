@@ -1,0 +1,7 @@
+Country,rows 2025,rows 2026,MVM 2025,MVM 2026,matched exact,matched fuzzy,new,removed,changed,MVM +,MVM -,coords carried,need geocoding
+Australia,103,103,224,224,103,0,0,0,0,0,0,103,0
+India,463,470,791,805,455,4,11,4,3,5,-2,459,11
+Nigeria,15,15,17,18,15,0,0,0,1,1,0,15,0
+Oman,2,2,7,7,2,0,0,0,0,0,0,2,0
+United Kingdom,78,78,358,358,77,0,1,1,0,0,0,77,1
+USA,2237,2239,3892,3898,2233,0,6,4,0,0,0,2233,6

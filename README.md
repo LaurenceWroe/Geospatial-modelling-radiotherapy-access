@@ -25,10 +25,11 @@ Approximately half of all cancer cases require radiotherapy, yet access to RT re
 
 RadMaps combines both constraints simultaneously, producing per-hexagon estimates of:
 
-- Population density and cancer burden (GLOBOCAN 2022)
+- Population density and cancer burden (GLOBOCAN 2024)
 - RT demand (optimal utilisation rates or user-defined fraction)
-- Geographic access probability using exponential, Weibull, step, or uniform distance-decay models
-- Capacity-limited access via a ring-based proportional allocation algorithm
+- RT demand from per-cancer-type optimal utilisation rates (CCORE 2012 model by default; Delaney 2005 as published in the preprint also selectable) and the matching workload in treatment fractions (Wong et al. 2016), with case-mix-adjusted capacity per linac
+- Geographic access probability using step, Weibull, exponential, Gaussian (E2SFCA), power-law (gravity) or uniform decay models
+- Capacity-limited access via a global-ring nearest-first allocation, with proportional (balanced-FCA) and optimal (linear-programme) rationing rules and 2SFCA / E2SFCA / gravity indices available as benchmarks
 
 Maps are built on [H3 hexagonal grids](https://h3geo.org/) at resolutions from ~400 m (country level) down to ~87,000 km² (regional), enabling consistent multi-scale analysis. Travel-time routing via the TravelTime API (driving / public transport) is supported as an alternative to straight-line distance.
 
@@ -75,7 +76,7 @@ The app opens at `http://localhost:8501`. Population data for the selected regio
 | Data | Source | Notes |
 |---|---|---|
 | Population | [Kontur Population Dataset](https://www.kontur.io/portfolio/population-dataset/) | H3 resolution 8 (~400 m); downloaded automatically |
-| Cancer incidence | [GLOBOCAN 2022](https://gco.iarc.who.int/today/) (IARC) | Bundled; 175 countries |
+| Cancer incidence | [GLOBOCAN 2024](https://gco.iarc.who.int/today/) (IARC; Sung et al. 2026) | Bundled; 186 countries |
 | Optimal RT utilisation | Delaney *et al.* 2005 | Site-specific RT fractions; bundled |
 | LINAC locations & counts | [IAEA DIRAC](https://dirac.iaea.org/) | Bundled |
 
@@ -111,7 +112,8 @@ data/
   travel_time.py              # TravelTime API integration
   regions.py                  # Region definitions (Africa, Europe, etc.)
 cancer_data/
-  globocan_xarray.nc          # GLOBOCAN 2022 data (Cancer × Metric × ISO3)
+  globocan_xarray_2024.nc     # GLOBOCAN 2024 data (Cancer × Metric × ISO3), the default
+  globocan_xarray.nc          # GLOBOCAN 2022 (preprint; RADMAPS_GLOBOCAN=2022)
   optimal_rt_utilisations.csv # Site-specific RT utilisation fractions
 linac_data/
   Database_DIRAC_fixed.csv    # DIRAC LINAC database (geocoding-corrected)
@@ -128,18 +130,29 @@ H3_pop_density_maps/          # Per-country Kontur GPKG files (downloaded on dem
 
 ## Probability Models
 
-Four distance-decay models are available:
+Six decay models are available (`analysis/decay.py`); *x* is straight-line distance (km) or travel time (min):
 
 | Model | Formula | Key parameter |
 |---|---|---|
-| Exponential | P(d) = exp(−d/λ) | λ = decay length (km) |
-| Weibull | P(d) = exp(−(d/λ)ᵏ) | λ = scale (km), k = shape |
-| Step function | P(d) = 1 if d ≤ d_max, else 0 | d_max = cutoff (km) |
-| Uniform | P(d) = 1 for all d | — |
+| Step function | P(x) = 1 if x ≤ x_max, else 0 | x_max = catchment (classic 2SFCA) |
+| Weibull | P(x) = exp(−(x/λ)ᵏ) | λ = scale, k = shape (k = 1 is exponential) |
+| Exponential | P(x) = exp(−x/λ) | λ = decay length |
+| Gaussian | P(x) = (e^{−½(x/x_max)²} − e^{−½}) / (1 − e^{−½}) within x_max | x_max = catchment (E2SFCA kernel, Luo & Qi 2009) |
+| Power law | P(x) = min(1, (x/λ)^{−β}) | λ = plateau, β = exponent (gravity model) |
+| Uniform | P(x) = 1 for all x | — |
 
-The Weibull model (k ≥ 1) generalises exponential decay with a flat near-facility plateau followed by a steeper drop-off, matching observed patterns in RT attendance with distance.
+The Probability Models tab offers published parameterisations as presets (Luo & Qi 2009 30-min Gaussian bands; 120-min catchments used by Wawrzuta et al. 2025 and the Philippine E2SFCA study).
 
-Capacity allocation uses a **ring-based proportional algorithm**: for each facility, hexagons are grouped into concentric rings; each ring is served in full before moving outward, and when a ring exhausts remaining capacity the budget is split proportionally by demand weight across all hexagons in that ring.
+### Capacity allocation
+
+The default **nearest-first** rule allocates capacity in distance rings across *all facilities at once*: every hexagon–facility pair is assigned to a ring one hexagon wide, rings are processed nearest to farthest, and within a ring each facility serves the demand it reaches (weighted by demand × P) until its capacity is exhausted, splitting proportionally when a ring would exhaust it. The result is independent of the order facilities appear in the input file (verified by `tests/test_accessibility.py`).
+
+Two alternative rules can be selected for comparison:
+
+- **Proportional** — a capacity-capped balanced floating catchment (Paez et al. 2019): each hexagon's accessible demand is split across the facilities it can reach, and each facility serves its share at min(1, capacity / demand received). Shortage is shared equally across a catchment rather than rationed nearest-first.
+- **Optimal** — a linear programme (SciPy HiGHS) maximising total patients treated, as an upper bound that shows how much capacity nearest-first allocation strands where catchments overlap.
+
+Conventional **2SFCA, E2SFCA, 3SFCA and gravity** supply-to-demand ratios (`analysis/fca.py`) are reported in the Benchmark tab alongside the RadMaps metrics, and can be mapped per hexagon as a capped ratio or as an *implied deficit* (demand × (1 − min(1, ratio))). 3SFCA (Wan et al. 2012) splits each hexagon's demand across reachable facilities by selection weight, the uncapped counterpart of the proportional rule; none of the indices conserves capacity, so their national implied deficits are not comparable with the RadMaps deficit. The paper's Table 3 is pinned as a regression test (`tests/test_regression_table3.py`) so the default configuration keeps reproducing the published numbers.
 
 ---
 

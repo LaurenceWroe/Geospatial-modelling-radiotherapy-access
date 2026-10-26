@@ -1,0 +1,38 @@
+cancer_type,delaney_2005,delaney_2005_corrected,barton_2014
+Breast,0.83,0.83,0.87
+Stomach,0.68,0.68,0.27
+Lung,0.76,0.76,0.78
+Cervix uteri,0.58,0.35,0.71
+Leukaemia,0.04,0.04,0.04
+Colorectum,0.5,0.308,0.227
+Brain CNS,0.92,0.92,0.8
+"Lip, oral cavity",0.2,0.78,0.74
+Oesophagus,0.8,0.8,0.71
+Liver,0.0,0.0,0.0
+NHL,0.65,0.65,0.73
+Kidney,0.27,0.27,0.15
+Ovary,0.35,0.35,0.04
+Prostate,0.6,0.6,0.58
+Corpus uteri,0.35,0.35,0.32
+Bladder,0.58,0.58,0.47
+Pancreas,0.57,0.57,0.49
+Thyroid,1.0,0.1,0.04
+Hodgkin Lymphoma,0.65,0.65,0.73
+Larynx,1.0,0.78,0.74
+Testis,0.49,0.49,0.15
+Gallbladder,0.13,0.13,0.17
+Oropharynx,0.1,0.78,0.74
+Hypopharynx,1.0,0.78,0.74
+Nasopharynx,1.0,0.78,0.74
+Multiple myeloma,0.38,0.38,0.45
+Melanoma,0.23,0.23,0.21
+Salivary glands,0.87,0.78,0.74
+Vulva,0.35,0.35,0.39
+Kaposi sarcoma,0.5,0.5,0.19
+Vagina,0.35,0.35,0.94
+Mesothelioma,0.5,0.5,0.19
+All cancers,0.52,0.523,0.484
+All cancers excl. NMSC,0.52,0.523,0.484
+Penis,0.5,0.5,0.19
+NMSC,0.0,0.0,0.0
+Other cancers,0.5,0.5,0.19

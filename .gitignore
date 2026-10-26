@@ -60,3 +60,6 @@ Old_Tests/
 
 # One-off analysis / dev scripts (not app code)
 scripts/
+
+# remote job logs
+logs/

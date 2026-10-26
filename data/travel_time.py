@@ -31,6 +31,7 @@ TT_BASE_URL = "https://api.traveltimeapp.com/v4"
 
 # TravelTime H3 API limits
 _MAX_SEARCHES_PER_REQUEST = 10   # arrival_searches per request
+MAX_SNAP_THRESHOLD_M = 10_000    # account plan limit on the road-snapping threshold
 
 # Maximum travel time (seconds) by H3 resolution, per TravelTime docs
 # https://docs.traveltime.com/api/reference/h3#limits-of-resolution-and-traveltime
@@ -86,6 +87,29 @@ def _next_wednesday_8am_utc() -> str:
     return target.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
+def next_wednesday_8am_local(lat: float, lon: float) -> str:
+    """ISO8601 string for the next Wednesday at 08:00 local time at (lat, lon).
+
+    The time zone is looked up from the coordinates, so facilities in
+    multi-zone countries (USA, Russia, Brazil, ...) each depart at their own
+    08:00. Falls back to UTC where no zone is found (e.g. open sea).
+    """
+    from zoneinfo import ZoneInfo
+    from timezonefinder import TimezoneFinder
+
+    global _TZF
+    if _TZF is None:
+        _TZF = TimezoneFinder()
+    tz = ZoneInfo(_TZF.timezone_at(lat=lat, lng=lon) or "UTC")
+    now = datetime.now(tz)
+    days_ahead = (2 - now.weekday()) % 7 or 7  # 2 = Wednesday
+    target = (now + timedelta(days=days_ahead)).replace(hour=8, minute=0, second=0, microsecond=0)
+    return target.isoformat()
+
+
+_TZF = None
+
+
 # Max walking time (seconds) within a public transport journey. TravelTime's
 # default is 900 s; we allow 30 min. Without a cap the journey can degenerate
 # into hours of pure walking, which overstates realistic patient access.
@@ -111,22 +135,26 @@ def _call_h3(
     mode: str,
     app_id: str,
     api_key: str,
-    departure_time: str,
+    departure_time,
     max_travel_time_sec: int,
     snap_threshold_m: int,
 ) -> dict[str, dict[str, float]]:
     """
     Single POST to /v4/h3.
 
+    *departure_time* is one ISO8601 string for every search, or a list with
+    one per linac (e.g. each facility's local 08:00).
+
     Returns
     -------
     {linac_id: {h3_cell_id: travel_time_minutes}} for reachable cells only.
     """
+    deps = [departure_time] * len(linac_ids) if isinstance(departure_time, str) else list(departure_time)
     departure_searches = [
         {
             "id": l_id,
             "coords": {"lat": lat, "lng": lon},
-            "departure_time": departure_time,
+            "departure_time": dep,
             "travel_time": max_travel_time_sec,
             "transportation": _transportation(mode, max_travel_time_sec),
             "remove_water_bodies": False,
@@ -136,7 +164,7 @@ def _call_h3(
                 "threshold": snap_threshold_m,
             },
         }
-        for l_id, (lat, lon) in zip(linac_ids, linac_latlons)
+        for l_id, (lat, lon), dep in zip(linac_ids, linac_latlons, deps)
     ]
 
     resp = requests.post(
@@ -225,8 +253,10 @@ def compute_travel_time_matrix(
         max_travel_time_sec = min(max_travel_time_sec, _res_cap)
     # Snap threshold = 3 × H3 edge length in metres, so coastal/rural hex centroids
     # that sit away from the road network can still be snapped to a road.
-    snap_threshold_m = int(h3.average_hexagon_edge_length(h3_resolution, unit="m") * 3)
-    departure_time = _next_wednesday_8am_utc()
+    # Capped at the plan limit (10 km since October 2026; the API returns 401
+    # "plan is limited to 10000 m snapping threshold" above it).
+    snap_threshold_m = min(int(h3.average_hexagon_edge_length(h3_resolution, unit="m") * 3), MAX_SNAP_THRESHOLD_M)
+    departure_time = [next_wednesday_8am_local(lat, lon) for lat, lon in linac_latlons]  # local 08:00
     matrix = np.full((n_hexes, n_linacs), np.inf, dtype=np.float32)
     failed_batches: List[str] = []
 
@@ -252,7 +282,7 @@ def compute_travel_time_matrix(
                     l_batch_latlons, l_batch_ids,
                     h3_resolution, mode,
                     app_id, api_key,
-                    departure_time, max_travel_time_sec,
+                    departure_time[l_start:l_end], max_travel_time_sec,
                     snap_threshold_m,
                 )
                 for l_local_id, cell_times in results.items():

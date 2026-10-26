@@ -19,14 +19,20 @@ import streamlit as st
 import xarray as xr
 
 from data.population import load_population_at_resolution, load_region_population
-from data.linacs import load_linacs_from_dirac_db, load_linacs_for_region
+from data.linacs import load_linacs_from_dirac_db, load_linacs_for_region, facility_quality_report
 from data.regions import is_region, get_region, REGIONS, REGION_GLOBOCAN_CODES
 from data.cancer import (
     get_cancer_types, apportion_cancer_to_h3, get_national_cases,
-    get_optimal_rt_fractions, DERIVED_CANCER_TYPES, XARRAY_PATH,
+    get_optimal_rt_fractions, effective_capacity_per_linac, fractions_per_course_map,
+    _load_optimal_fractions, _norm_key,
+    DERIVED_CANCER_TYPES, XARRAY_PATH, DEFAULT_RTU_SET, DEFAULT_FRACTIONS_PER_COURSE,
 )
 from data.travel_time import CACHE_DIR as _TT_CACHE_DIR
-from analysis.accessibility import compute_accessibility, aggregate_access_gdf
+from data.tt_store import store_matrix
+from analysis.accessibility import (
+    compute_accessibility, aggregate_access_gdf, attach_fraction_metrics, FRACTION_COLUMNS,
+)
+from analysis.fca import compute_fca
 
 # Disk cache for apportioned regional cancer GeoDataFrames.  Mirrors the region
 # *population* parquet cache (data.population.REGION_CACHE_DIR) so that the
@@ -34,11 +40,13 @@ from analysis.accessibility import compute_accessibility, aggregate_access_gdf
 # LRU eviction of the in-memory st.cache_data — not just a single session.
 _REGION_CANCER_CACHE_DIR = Path("H3_region_cache")
 
+_AGGREGATE_CANCER_KEYS = {"all cancers", "all cancers excl. nmsc", "all cancers excl nmsc"}
+
 
 def _region_cancer_cache_path(globocan_code: str, resolution: int,
                               cancers: tuple, use_actual: bool) -> Path:
     """Stable on-disk path for one (region, resolution, cancers, actual) result."""
-    key = json.dumps({"c": sorted(cancers), "a": bool(use_actual)}, sort_keys=True)
+    key = json.dumps({"c": sorted(cancers), "a": bool(use_actual), "g": XARRAY_PATH.name}, sort_keys=True)
     digest = hashlib.sha1(key.encode()).hexdigest()[:8]
     return _REGION_CANCER_CACHE_DIR / f"{globocan_code}_res{resolution}_cancer_{digest}.parquet"
 
@@ -188,6 +196,108 @@ def _load_cancer_region_percountry(region_name: str, cancers: tuple, use_actual:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Demand construction (shared by every compute path)
+# ---------------------------------------------------------------------------
+
+def _national_mean_fractions(iso3: str, rtu_set: str, fmap: dict, default_f: float) -> float:
+    """Demand-weighted mean fractions per course for a country's optimal RT mix."""
+    cases = get_national_cases(iso3, get_cancer_types() + DERIVED_CANCER_TYPES)
+    rtu = _load_optimal_fractions(rtu_set)
+    num = den = 0.0
+    for cancer, n in cases.items():
+        if cancer.strip().lower() in _AGGREGATE_CANCER_KEYS:
+            continue
+        d = n * rtu.get(_norm_key(cancer), 0.0)
+        if d > 0:
+            num += d * fmap.get(_norm_key(cancer), default_f)
+            den += d
+    return num / den if den > 0 else default_f
+
+
+def _build_demand(gdf, iso3: str, rt_method: str, rt_fraction: float,
+                  custom_rtu: tuple, rtu_set: str = DEFAULT_RTU_SET,
+                  site_fractions: tuple = (), hypofractionation: float = 1.0):
+    """Return (demand, total cancer excl. NMSC, fractions demand); each None on failure.
+
+    ``optimal``      per-type incidence × optimal RTU of *rtu_set*, summed over
+                     individual (non-aggregate) cancer types.
+    ``custom``       per-type incidence × user percentages from *custom_rtu*.
+    ``proportional`` All cancers excl. NMSC × *rt_fraction*.
+
+    *fractions demand* is Σ_i demand_{h,i} × fractions per course_i (Wong et al.
+    2016, with *site_fractions* overrides and the *hypofractionation* factor),
+    i.e. the annual treatment workload each hexagon's demand represents. For
+    the proportional method, which has no per-type split, the national
+    demand-weighted mean course length is used.
+    Returns (None, None, None) if GLOBOCAN data cannot be loaded; the caller
+    then falls back to raw population as the demand proxy.
+    """
+    fmap = fractions_per_course_map(site_fractions, hypofractionation)
+    default_f = DEFAULT_FRACTIONS_PER_COURSE * max(hypofractionation, 1e-6)
+    try:
+        if rt_method in ("optimal", "custom"):
+            all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
+            cancer_gdf = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False, rtu_set=rtu_set)
+            excl_col = "All cancers excl. NMSC_incidence"
+            total_excl = float(cancer_gdf[excl_col].clip(lower=0).sum()) if excl_col in cancer_gdf.columns else None
+            demand = None
+            fractions = None
+            for cancer in all_cancers:
+                if cancer.strip().lower() in _AGGREGATE_CANCER_KEYS:
+                    continue
+                if rt_method == "optimal":
+                    col = f"{cancer}_optimal_rt"
+                    if col not in cancer_gdf.columns:
+                        continue
+                    d_i = cancer_gdf[col].clip(lower=0).to_numpy(np.float64)
+                else:
+                    col = f"{cancer}_incidence"
+                    if col not in cancer_gdf.columns:
+                        continue
+                    frac = dict((k.strip().lower(), v / 100.0) for k, v in custom_rtu).get(cancer.strip().lower(), 0.0)
+                    d_i = cancer_gdf[col].clip(lower=0).to_numpy(np.float64) * frac
+                f_i = fmap.get(_norm_key(cancer), default_f)
+                demand = d_i if demand is None else demand + d_i
+                fractions = d_i * f_i if fractions is None else fractions + d_i * f_i
+            return demand, total_excl, fractions
+        cancer_gdf = apportion_cancer_to_h3(gdf, iso3, ["All cancers excl. NMSC"], use_actual_rt=False)
+        col = "All cancers excl. NMSC_incidence"
+        if col not in cancer_gdf.columns:
+            return None, None, None
+        total_excl = float(cancer_gdf[col].clip(lower=0).sum())
+        demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
+        mean_f = _national_mean_fractions(iso3, rtu_set, fmap, default_f)
+        return demand, total_excl, demand * mean_f
+    except Exception:
+        return None, None, None
+
+
+def _finish_result(gdf_out, stats, demand, fractions_demand, capacity_per_machine_per_year,
+                   fractions_per_linac):
+    """Attach workload metrics. With no fractions demand (population fallback) nothing is added."""
+    if fractions_demand is None or demand is None:
+        return gdf_out, stats
+    if fractions_per_linac is None:
+        # Patients-per-linac mode: express the same throughput in fractions at
+        # this country's mean course length so the two units stay consistent.
+        d_tot = float(np.sum(demand))
+        mean_f = float(np.sum(fractions_demand)) / d_tot if d_tot > 0 else DEFAULT_FRACTIONS_PER_COURSE
+        fractions_per_linac = capacity_per_machine_per_year * mean_f
+    return attach_fraction_metrics(gdf_out, stats, fractions_demand, fractions_per_linac)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _effective_capacity(iso3: str, fractions_per_linac: float, rtu_set: str,
+                        hypofractionation: float, site_fractions: tuple = ()) -> dict:
+    """Country-specific patients per linac from a fractions throughput (cached)."""
+    return effective_capacity_per_linac(iso3, fractions_per_linac, rtu_set, hypofractionation, site_fractions)
+
+
+# ---------------------------------------------------------------------------
+# Access computation
+# ---------------------------------------------------------------------------
+
 @st.cache_data(show_spinner=False, max_entries=4)
 def _compute_access(
     country: str,
@@ -204,59 +314,26 @@ def _compute_access(
     snap_linacs_to_hex: bool = False,
     weibull_k: float = 2.0,
     custom_rtu: tuple = (),
+    rtu_set: str = DEFAULT_RTU_SET,
+    allocation: str = "nearest_first",
+    size_weighting: bool = True,
+    cutoff_km: Optional[float] = None,
+    site_fractions: tuple = (),
+    hypofractionation: float = 1.0,
+    fractions_per_linac: Optional[float] = None,
 ):
     # At coarse display resolutions the hex centroid is a poor proxy for where
     # people live (res 3 ≈ 12,400 km²). Compute at ≥ res 5 and aggregate down.
     compute_res = h3_res if (region_flag or h3_res >= 5) else 5
     gdf = _load_pop_region(country, compute_res) if region_flag else _load_pop(country, compute_res)
-
-    # Build RT demand per hex from cancer data
-    demand = None
-    total_cancer_excl_nmsc = None
-    try:
-        if rt_method in ("optimal", "custom"):
-            all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
-            cancer_gdf = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False)
-            excl_col = "All cancers excl. NMSC_incidence"
-            if excl_col in cancer_gdf.columns:
-                total_cancer_excl_nmsc = float(cancer_gdf[excl_col].clip(lower=0).sum())
-            if rt_method == "optimal":
-                rt_cols = [
-                    c for c in cancer_gdf.columns
-                    if c.endswith("_optimal_rt")
-                    and c[:-len("_optimal_rt")].strip().lower() not in _AGGREGATE_CANCER_KEYS
-                ]
-                if rt_cols:
-                    demand = cancer_gdf[rt_cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
-            else:  # custom — use incidence columns × user-supplied fractions
-                _custom_fracs = {k.strip().lower(): v / 100.0 for k, v in custom_rtu}
-                demand_arr = None
-                for cancer in all_cancers:
-                    if cancer.strip().lower() in _AGGREGATE_CANCER_KEYS:
-                        continue
-                    col = f"{cancer}_incidence"
-                    if col not in cancer_gdf.columns:
-                        continue
-                    frac = _custom_fracs.get(cancer.strip().lower(), 0.0)
-                    inc = cancer_gdf[col].clip(lower=0).to_numpy(np.float64)
-                    demand_arr = inc * frac if demand_arr is None else demand_arr + inc * frac
-                if demand_arr is not None:
-                    demand = demand_arr
-        else:  # proportional — use All cancers excl. NMSC × rt_fraction
-            cancer_gdf = apportion_cancer_to_h3(
-                gdf, iso3, ["All cancers excl. NMSC"], use_actual_rt=False
-            )
-            col = "All cancers excl. NMSC_incidence"
-            if col in cancer_gdf.columns:
-                total_cancer_excl_nmsc = float(cancer_gdf[col].clip(lower=0).sum())
-                demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
-    except Exception:
-        pass  # fallback: compute_accessibility uses raw population
+    demand, total_cancer_excl_nmsc, fractions_demand = _build_demand(
+        gdf, iso3, rt_method, rt_fraction, custom_rtu, rtu_set, site_fractions, hypofractionation)
 
     gdf_out, stats = compute_accessibility(
         gdf,
         list(linac_locs),
         lambda_km=lambda_km,
+        cutoff_km=cutoff_km,
         model=model,
         max_distance_km=max_distance_km,
         weibull_k=weibull_k,
@@ -264,13 +341,28 @@ def _compute_access(
         demand=demand,
         snap_linacs_to_hex=snap_linacs_to_hex,
         h3_resolution=compute_res,
+        allocation=allocation,
+        size_weighting=size_weighting,
     )
+    gdf_out, stats = _finish_result(gdf_out, stats, demand, fractions_demand,
+                                    capacity_per_machine_per_year, fractions_per_linac)
     if compute_res != h3_res:
         gdf_out = aggregate_access_gdf(gdf_out, h3_res)
         stats["n_hexagons"] = len(gdf_out)
         stats["compute_resolution"] = compute_res
     stats["total_cancer_excl_nmsc"] = total_cancer_excl_nmsc
+    stats["rtu_set"] = rtu_set
     return gdf_out, stats
+
+
+def _load_tt_matrix(tt_cache_key: str, tt_mode: str) -> np.ndarray:
+    cache_file = _TT_CACHE_DIR / f"{tt_cache_key}_{tt_mode}.npz"
+    if not cache_file.exists():
+        raise FileNotFoundError(
+            f"Travel time cache not found: {cache_file.name}. "
+            "Press 'Fetch TravelTime Data' before computing accessibility."
+        )
+    return np.load(cache_file)["matrix"]
 
 
 @st.cache_data(show_spinner=False, max_entries=4)
@@ -291,65 +383,25 @@ def _compute_access_travel_time(
     snap_linacs_to_hex: bool = False,
     weibull_k: float = 2.0,
     custom_rtu: tuple = (),
+    rtu_set: str = DEFAULT_RTU_SET,
+    allocation: str = "nearest_first",
+    size_weighting: bool = True,
+    cutoff_km: Optional[float] = None,
+    site_fractions: tuple = (),
+    hypofractionation: float = 1.0,
+    fractions_per_linac: Optional[float] = None,
 ):
     """Like _compute_access but loads a pre-computed travel time matrix from disk."""
     gdf = _load_pop_region(country, h3_res) if region_flag else _load_pop(country, h3_res)
-
-    demand = None
-    total_cancer_excl_nmsc = None
-    try:
-        if rt_method in ("optimal", "custom"):
-            all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
-            cancer_gdf = apportion_cancer_to_h3(gdf, iso3, all_cancers, use_actual_rt=False)
-            excl_col = "All cancers excl. NMSC_incidence"
-            if excl_col in cancer_gdf.columns:
-                total_cancer_excl_nmsc = float(cancer_gdf[excl_col].clip(lower=0).sum())
-            if rt_method == "optimal":
-                rt_cols = [
-                    c for c in cancer_gdf.columns
-                    if c.endswith("_optimal_rt")
-                    and c[:-len("_optimal_rt")].strip().lower() not in _AGGREGATE_CANCER_KEYS
-                ]
-                if rt_cols:
-                    demand = cancer_gdf[rt_cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
-            else:  # custom
-                _custom_fracs = {k.strip().lower(): v / 100.0 for k, v in custom_rtu}
-                demand_arr = None
-                for cancer in all_cancers:
-                    if cancer.strip().lower() in _AGGREGATE_CANCER_KEYS:
-                        continue
-                    col = f"{cancer}_incidence"
-                    if col not in cancer_gdf.columns:
-                        continue
-                    frac = _custom_fracs.get(cancer.strip().lower(), 0.0)
-                    inc = cancer_gdf[col].clip(lower=0).to_numpy(np.float64)
-                    demand_arr = inc * frac if demand_arr is None else demand_arr + inc * frac
-                if demand_arr is not None:
-                    demand = demand_arr
-        else:
-            cancer_gdf = apportion_cancer_to_h3(
-                gdf, iso3, ["All cancers excl. NMSC"], use_actual_rt=False
-            )
-            col = "All cancers excl. NMSC_incidence"
-            if col in cancer_gdf.columns:
-                total_cancer_excl_nmsc = float(cancer_gdf[col].clip(lower=0).sum())
-                demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
-    except Exception:
-        pass
-
-    # Load travel time matrix from disk cache (must already exist)
-    cache_file = _TT_CACHE_DIR / f"{tt_cache_key}_{tt_mode}.npz"
-    if not cache_file.exists():
-        raise FileNotFoundError(
-            f"Travel time cache not found: {cache_file.name}. "
-            "Press 'Fetch TravelTime Data' before computing accessibility."
-        )
-    tt_matrix = np.load(cache_file)["matrix"]
+    demand, total_cancer_excl_nmsc, fractions_demand = _build_demand(
+        gdf, iso3, rt_method, rt_fraction, custom_rtu, rtu_set, site_fractions, hypofractionation)
+    tt_matrix = _load_tt_matrix(tt_cache_key, tt_mode)
 
     gdf_out, stats = compute_accessibility(
         gdf,
         list(linac_locs),
         lambda_km=lambda_km,
+        cutoff_km=cutoff_km,
         model=model,
         max_distance_km=max_distance_km,
         weibull_k=weibull_k,
@@ -358,12 +410,43 @@ def _compute_access_travel_time(
         snap_linacs_to_hex=snap_linacs_to_hex,
         h3_resolution=h3_res,
         travel_time_matrix=tt_matrix,
+        allocation=allocation,
+        size_weighting=size_weighting,
     )
+    gdf_out, stats = _finish_result(gdf_out, stats, demand, fractions_demand,
+                                    capacity_per_machine_per_year, fractions_per_linac)
     stats["total_cancer_excl_nmsc"] = total_cancer_excl_nmsc
+    stats["rtu_set"] = rtu_set
     return gdf_out, stats
 
 
-@st.cache_data(show_spinner=False, max_entries=300)
+# Regional driving time uses the per-country 120-min res-6 store
+# (data/tt_store.py), aggregated to the compute resolution. Countries TravelTime
+# does not serve fall back to great-circle distance, converted with the
+# calibrated km equivalent of each driving-time budget (scripts/calibrate_fit.py).
+REGION_TT_RES = 5
+REGION_TT_MAX_MIN = 120.0
+_PROXY_MIN = [0.0, 30.0, 60.0, 90.0, 120.0]
+# straight-line km giving the same population coverage as each driving-time budget,
+# fitted on the 152 countries in the local-08:00 travel-time store (scripts/calibrate_fit.py)
+_PROXY_KM = [0.0, 12.6, 28.4, 41.6, 64.4]
+
+
+def minutes_to_proxy_km(minutes: Optional[float]) -> Optional[float]:
+    """Great-circle km equivalent of a driving-time budget (linear beyond 120 min)."""
+    if minutes is None:
+        return None
+    if minutes <= _PROXY_MIN[-1]:
+        return float(np.interp(minutes, _PROXY_MIN, _PROXY_KM))
+    return _PROXY_KM[-1] * minutes / _PROXY_MIN[-1]
+
+
+def _regional_tt_matrix(iso3: str, locs, hex_ids, tt_mode: str):
+    """2 h matrix for this country's facilities from the res-6 store, or None."""
+    return store_matrix(iso3, hex_ids, locs, tt_mode)
+
+
+@st.cache_data(show_spinner=False, max_entries=1000)
 def _compute_access_one_country_for_region(
     alpha2: str,
     lambda_km: float,
@@ -376,12 +459,29 @@ def _compute_access_one_country_for_region(
     snap_linacs_to_hex: bool,
     weibull_k: float,
     custom_rtu: tuple,
+    rtu_set: str = DEFAULT_RTU_SET,
+    allocation: str = "nearest_first",
+    size_weighting: bool = True,
+    cutoff_km: Optional[float] = None,
+    fractions_per_linac: Optional[float] = None,
+    hypofractionation: float = 1.0,
+    site_fractions: tuple = (),
+    tt_mode: Optional[str] = None,
 ):
     """Cached per-country computation for use in per-country regional aggregation.
 
     Returns (gdf_subset, c_stats) or None if the country should be skipped
     (no population data or no GLOBOCAN data).  Countries with no LINACs return
     a gdf with zero access so their unmet demand is still counted.
+
+    When *fractions_per_linac* is given, the per-machine capacity is derived
+    for each country from its own cancer-type mix (see
+    ``data.cancer.effective_capacity_per_linac``) instead of the flat value.
+
+    With *tt_mode* set, *max_distance_km*, *lambda_km* and *cutoff_km* are in
+    minutes: the country's cached res-5 matrix is used if one exists, otherwise
+    the minutes are converted to calibrated great-circle km
+    (``c_stats["time_source"]`` is "traveltime", "proxy" or "none").
     """
     country_obj = pycountry.countries.get(alpha_2=alpha2)
     if country_obj is None:
@@ -389,59 +489,30 @@ def _compute_access_one_country_for_region(
 
     c_name = country_obj.name
     c_iso3 = country_obj.alpha_3
-    all_cancers = get_cancer_types() + DERIVED_CANCER_TYPES
-    _agg_keys = _AGGREGATE_CANCER_KEYS
 
     # Compute at ≥ res 4 so centroid-to-facility distances are meaningful,
     # then aggregate down to the display resolution.
-    compute_res = max(h3_res, 4)
+    compute_res = max(h3_res, REGION_TT_RES if tt_mode else 4)
 
     try:
         gdf = _load_pop(c_name, compute_res)
     except Exception:
         return None
 
-    demand = None
-    c_cancer_excl_nmsc = None
-    try:
-        if rt_method in ("optimal", "custom"):
-            cancer_gdf = apportion_cancer_to_h3(gdf, c_iso3, all_cancers, use_actual_rt=False)
-            excl_col = "All cancers excl. NMSC_incidence"
-            if excl_col in cancer_gdf.columns:
-                c_cancer_excl_nmsc = float(cancer_gdf[excl_col].clip(lower=0).sum())
-            if rt_method == "optimal":
-                rt_cols = [
-                    c for c in cancer_gdf.columns
-                    if c.endswith("_optimal_rt")
-                    and c[:-len("_optimal_rt")].strip().lower() not in _agg_keys
-                ]
-                if rt_cols:
-                    demand = cancer_gdf[rt_cols].sum(axis=1).clip(lower=0).to_numpy(np.float64)
-            else:
-                _custom_fracs = {k.strip().lower(): v / 100.0 for k, v in custom_rtu}
-                demand_arr = None
-                for cancer in all_cancers:
-                    if cancer.strip().lower() in _agg_keys:
-                        continue
-                    col = f"{cancer}_incidence"
-                    if col not in cancer_gdf.columns:
-                        continue
-                    frac = _custom_fracs.get(cancer.strip().lower(), 0.0)
-                    inc = cancer_gdf[col].clip(lower=0).to_numpy(np.float64)
-                    demand_arr = inc * frac if demand_arr is None else demand_arr + inc * frac
-                if demand_arr is not None:
-                    demand = demand_arr
-        else:
-            cancer_gdf = apportion_cancer_to_h3(gdf, c_iso3, ["All cancers excl. NMSC"], use_actual_rt=False)
-            col = "All cancers excl. NMSC_incidence"
-            if col in cancer_gdf.columns:
-                c_cancer_excl_nmsc = float(cancer_gdf[col].clip(lower=0).sum())
-                demand = (cancer_gdf[col].clip(lower=0) * rt_fraction).to_numpy(np.float64)
-    except Exception:
+    demand, c_cancer_excl_nmsc, fractions_demand = _build_demand(
+        gdf, c_iso3, rt_method, rt_fraction, custom_rtu, rtu_set, site_fractions, hypofractionation)
+    if demand is None:
         return None  # no GLOBOCAN data
 
-    if demand is None:
-        return None
+    cap_per_machine = capacity_per_machine_per_year
+    cap_basis = None
+    if fractions_per_linac is not None:
+        try:
+            cap_basis = effective_capacity_per_linac(c_iso3, fractions_per_linac, rtu_set,
+                                                     hypofractionation, site_fractions)
+            cap_per_machine = float(cap_basis["patients_per_linac"])
+        except Exception:
+            cap_basis = None
 
     try:
         c_locs, _ = load_linacs_from_dirac_db(c_name)
@@ -450,14 +521,27 @@ def _compute_access_one_country_for_region(
         c_locs = []
         has_linacs = False
 
+    time_source = None
+    tt = None
+    if tt_mode and has_linacs:
+        tt = _regional_tt_matrix(c_iso3, c_locs, list(gdf["h3"]), tt_mode)
+        time_source = "traveltime" if tt is not None else "proxy"
+        if tt is None:
+            lambda_km = minutes_to_proxy_km(lambda_km) if model != "power" else lambda_km
+            max_distance_km = minutes_to_proxy_km(max_distance_km)
+            cutoff_km = minutes_to_proxy_km(cutoff_km)
+    elif tt_mode:
+        time_source = "none"
+
     if has_linacs:
         gdf_out, c_stats = compute_accessibility(
             gdf, c_locs,
-            lambda_km=lambda_km, model=model,
+            lambda_km=lambda_km, cutoff_km=cutoff_km, model=model,
             max_distance_km=max_distance_km, weibull_k=weibull_k,
-            capacity_per_machine_per_year=capacity_per_machine_per_year,
+            capacity_per_machine_per_year=cap_per_machine,
             demand=demand, snap_linacs_to_hex=snap_linacs_to_hex,
-            h3_resolution=compute_res,
+            h3_resolution=compute_res, travel_time_matrix=tt,
+            allocation=allocation, size_weighting=size_weighting,
         )
     else:
         gdf_out = gdf.copy()
@@ -468,15 +552,28 @@ def _compute_access_one_country_for_region(
         gdf_out["rt_treated"] = np.float32(0.0)
         gdf_out["rt_untreated"] = demand.astype(np.float32)
         gdf_out["pop_with_access"] = np.float32(0.0)
-        c_stats = {"n_facilities": 0, "total_machines": 0,
-                   "total_rt_demand": float(demand.sum()), "total_rt_treated": 0.0}
+        gdf_out["sfca3_ratio"] = np.float32(0.0)
+        gdf_out["sfca3_supply"] = np.float32(0.0)
+        if tt_mode:
+            gdf_out["nearest_linac_min"] = np.float32(np.nan)
+        c_stats = {"n_facilities": 0, "total_machines": 0, "total_national_capacity": 0.0,
+                   "total_rt_demand": float(demand.sum()), "total_rt_treated": 0.0,
+                   "geo_accessible_demand": 0.0}
+    gdf_out, c_stats = _finish_result(gdf_out, c_stats, demand, fractions_demand,
+                                      cap_per_machine, fractions_per_linac)
+    if tt_mode and "nearest_linac_min" not in gdf_out.columns:  # proxy country
+        gdf_out["nearest_linac_min"] = np.float32(np.nan)
 
     gdf_out["country"] = c_name
     if compute_res != h3_res:
         gdf_out = aggregate_access_gdf(gdf_out, h3_res)
         gdf_out["country"] = c_name
 
+    c_stats["time_source"] = time_source
     c_stats["cancer_excl_nmsc"] = c_cancer_excl_nmsc or 0.0
+    c_stats["capacity_per_machine_per_year"] = cap_per_machine
+    if cap_basis is not None:
+        c_stats["capacity_basis"] = cap_basis
     return gdf_out, c_stats
 
 
@@ -493,10 +590,21 @@ def _compute_access_region_percountry(
     weibull_k: float,
     custom_rtu: tuple,
     progress_callback=None,
+    rtu_set: str = DEFAULT_RTU_SET,
+    allocation: str = "nearest_first",
+    size_weighting: bool = True,
+    cutoff_km: Optional[float] = None,
+    fractions_per_linac: Optional[float] = None,
+    hypofractionation: float = 1.0,
+    site_fractions: tuple = (),
+    tt_mode: Optional[str] = None,
 ):
     """Aggregate per-country RT access results into a single regional GeoDataFrame.
 
     progress_callback(done, total) is called after each country completes.
+    With *tt_mode* set, countries are computed on driving time (see
+    _compute_access_one_country_for_region); stats["proxy_countries"] lists
+    those that fell back to the distance proxy.
     Per-country computations are individually cached via
     _compute_access_one_country_for_region.
     """
@@ -513,13 +621,22 @@ def _compute_access_region_percountry(
     total_rt_treated = 0.0
     total_n_facilities = 0
     total_machines = 0
+    total_capacity = 0.0
+    total_geo_accessible = 0.0
     total_cancer_excl_nmsc = 0.0
+    total_fd = total_ft = total_fcap = 0.0
+    any_fractions = False
+    proxy_countries: list[str] = []
 
     for i, alpha2 in enumerate(alpha2_list):
         result = _compute_access_one_country_for_region(
             alpha2, lambda_km, model, max_distance_km,
             capacity_per_machine_per_year, rt_method, rt_fraction,
             h3_res, snap_linacs_to_hex, weibull_k, custom_rtu,
+            rtu_set=rtu_set, allocation=allocation, size_weighting=size_weighting,
+            cutoff_km=cutoff_km, fractions_per_linac=fractions_per_linac,
+            hypofractionation=hypofractionation, site_fractions=site_fractions,
+            tt_mode=tt_mode,
         )
         if progress_callback is not None:
             progress_callback(i + 1, n_total)
@@ -528,21 +645,34 @@ def _compute_access_region_percountry(
             skipped_countries.append(_c_obj.name if _c_obj else alpha2)
             continue
         gdf_out, c_stats = result
+        if c_stats.get("time_source") == "proxy" and c_stats["total_rt_demand"] > 0:
+            proxy_countries.append(gdf_out["country"].iloc[0])
         total_rt_demand += c_stats["total_rt_demand"]
         total_rt_treated += c_stats.get("total_rt_treated", 0.0)
         total_n_facilities += c_stats.get("n_facilities", 0)
         total_machines += c_stats.get("total_machines", 0)
+        total_capacity += c_stats.get("total_national_capacity",
+                                      c_stats.get("total_machines", 0) * capacity_per_machine_per_year)
+        total_geo_accessible += c_stats.get("geo_accessible_demand", 0.0)
         total_cancer_excl_nmsc += c_stats.get("cancer_excl_nmsc", 0.0)
+        if c_stats.get("total_fractions_demand") is not None:
+            any_fractions = True
+            total_fd += c_stats["total_fractions_demand"]
+            total_ft += c_stats.get("total_fractions_treated", 0.0)
+            total_fcap += c_stats.get("fractions_capacity") or 0.0
         all_gdfs.append(gdf_out)
 
     if not all_gdfs:
         raise ValueError(f"No country data found for region {region_name!r}")
 
+    _base_cols = ["h3", "population", "geometry", "country", "nearest_linac_km",
+                  "access_probability", "capacity_limited_probability",
+                  "rt_demand", "rt_treated", "rt_untreated", "pop_with_access", "sfca3_supply"]
+    if tt_mode:
+        _base_cols.append("nearest_linac_min")
+    _frac_cols = [c for c in FRACTION_COLUMNS if all(c in g.columns for g in all_gdfs)]
     combined = pd.concat(
-        [g[["h3", "population", "geometry", "country", "nearest_linac_km",
-            "access_probability", "capacity_limited_probability",
-            "rt_demand", "rt_treated", "rt_untreated", "pop_with_access"]]
-         for g in all_gdfs],
+        [g[_base_cols + _frac_cols] for g in all_gdfs],
         ignore_index=True,
     )
 
@@ -555,20 +685,31 @@ def _compute_access_region_percountry(
     _km_valid = combined["nearest_linac_km"].notna()
     combined["_wd_km"] = (combined["nearest_linac_km"] * _w).where(_km_valid, 0.0)
     combined["_w_km"] = _w.where(_km_valid, 0.0)
+    if tt_mode:
+        _min_valid = combined["nearest_linac_min"].notna()
+        combined["_wd_min"] = (combined["nearest_linac_min"] * _w).where(_min_valid, 0.0)
+        combined["_w_min"] = _w.where(_min_valid, 0.0)
 
     grp = combined.groupby("h3", sort=False)
-    merged = grp.agg(
+    _spec = dict(
         population=("population", "sum"),
         rt_demand=("rt_demand", "sum"),
         rt_treated=("rt_treated", "sum"),
         rt_untreated=("rt_untreated", "sum"),
         pop_with_access=("pop_with_access", "sum"),
+        sfca3_supply=("sfca3_supply", "sum"),
         _w=("_w", "sum"),
         _wp=("_wp", "sum"),
         _wd_km=("_wd_km", "sum"),
         _w_km=("_w_km", "sum"),
         geometry=("geometry", "first"),
-    ).reset_index()
+    )
+    if tt_mode:
+        _spec["_wd_min"] = ("_wd_min", "sum")
+        _spec["_w_min"] = ("_w_min", "sum")
+    for c in _frac_cols:
+        _spec[c] = (c, "sum")
+    merged = grp.agg(**_spec).reset_index()
 
     # Attribute each hex to the country holding most of its population
     _country_top = (
@@ -582,9 +723,17 @@ def _compute_access_region_percountry(
         merged["nearest_linac_km"] = (
             merged["_wd_km"] / merged["_w_km"].replace(0.0, np.nan)
         ).astype(np.float32)
+        if tt_mode:
+            merged["nearest_linac_min"] = (
+                merged["_wd_min"] / merged["_w_min"].replace(0.0, np.nan)
+            ).astype(np.float32)
+            merged = merged.drop(columns=["_wd_min", "_w_min"])
     _dem = merged["rt_demand"].to_numpy(np.float64)
     merged["capacity_limited_probability"] = np.where(
         _dem > 0, merged["rt_treated"] / np.maximum(_dem, 1e-9), 0.0
+    ).astype(np.float32)
+    merged["sfca3_ratio"] = np.where(
+        _dem > 0, merged["sfca3_supply"] / np.maximum(_dem, 1e-9), 0.0
     ).astype(np.float32)
     merged = merged.drop(columns=["_w", "_wp", "_wd_km", "_w_km"])
     gdf_merged = gpd.GeoDataFrame(merged, geometry="geometry", crs="EPSG:4326")
@@ -594,30 +743,136 @@ def _compute_access_region_percountry(
     stats = {
         "n_facilities": total_n_facilities,
         "total_machines": total_machines,
-        "total_national_capacity": total_machines * capacity_per_machine_per_year,
+        "capacity_per_machine_per_year": capacity_per_machine_per_year,
+        "total_national_capacity": total_capacity,
         "total_rt_demand": total_rt_demand,
         "total_rt_treated": total_rt_treated,
         "total_rt_untreated": total_rt_demand - total_rt_treated,
+        "unused_capacity": max(total_capacity - total_rt_treated, 0.0),
         "pop_with_access": pop_with_access,
         "mean_access_probability": pop_with_access / total_pop if total_pop > 0 else 0.0,
+        "geo_accessible_demand": total_geo_accessible,
+        "demand_weighted_access": total_geo_accessible / total_rt_demand if total_rt_demand > 0 else 0.0,
         "total_cancer_excl_nmsc": total_cancer_excl_nmsc if total_cancer_excl_nmsc > 0 else None,
         "n_hexagons": len(merged),
         "skipped_countries": skipped_countries,
+        "proxy_countries": proxy_countries,
+        "tt_mode": tt_mode,
+        "model": model,
+        "allocation": allocation,
+        "rtu_set": rtu_set,
+        "capacity_basis": ("fractions" if fractions_per_linac is not None else "patients"),
     }
+    if any_fractions:
+        fpl = fractions_per_linac
+        stats.update({
+            "total_fractions_demand": total_fd,
+            "total_fractions_treated": total_ft,
+            "total_fractions_untreated": total_fd - total_ft,
+            "mean_fractions_per_course": total_fd / total_rt_demand if total_rt_demand > 0 else 0.0,
+            "fractions_per_linac": fpl,
+            "fractions_capacity": total_fcap if total_fcap > 0 else None,
+            # Region-level machine equivalents use the stated fractions throughput when
+            # given, else the benchmark 450 × this region's mean course length.
+            "linac_equivalents_deficit": (
+                (total_fd - total_ft) / (fpl if fpl else capacity_per_machine_per_year * (total_fd / total_rt_demand))
+                if total_rt_demand > 0 and total_fd > 0 else None
+            ),
+        })
     return gdf_merged, stats
 
 
+def combine_allocations(gdf_nf, stats_nf, gdf_fca, stats_fca):
+    """Attach the capped-3SFCA ("proportional") result to the nearest-first one.
+
+    Adds ``rt_treated_fca``, ``rt_untreated_fca`` and
+    ``capacity_limited_probability_fca`` columns (matched on h3) and
+    ``stats["fca"]`` with the capped-3SFCA totals.
+    """
+    fca = gdf_fca.set_index("h3")
+    out = gdf_nf.copy()
+    for c in ("rt_treated", "rt_untreated", "capacity_limited_probability"):
+        out[f"{c}_fca"] = out["h3"].map(fca[c]).astype(np.float32)
+    stats = dict(stats_nf)
+    stats["fca"] = {k: stats_fca.get(k) for k in
+                    ("total_rt_treated", "total_rt_untreated", "unused_capacity", "allocation")}
+    return out, stats
+
+
+def allocation_view(gdf_out, stats, which: str):
+    """The result as seen under one allocation rule: "nf" (nearest-first) or
+    "fca" (capped 3SFCA), with that rule's treated/untreated columns and totals
+    in the standard column names."""
+    if which != "fca" or "rt_treated_fca" not in gdf_out.columns:
+        return gdf_out, stats
+    g = gdf_out.copy()
+    for c in ("rt_treated", "rt_untreated", "capacity_limited_probability"):
+        g[c] = g[f"{c}_fca"]
+    s = dict(stats)
+    s.update({k: v for k, v in stats["fca"].items() if v is not None})
+    s["allocation"] = "proportional"
+    return g, s
+
+
+# ---------------------------------------------------------------------------
+# Floating-catchment benchmarks
+# ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _compute_fca_cached(
+    country: str,
+    iso3: str,
+    linac_locs: tuple,
+    variant: str,
+    model: str,
+    lambda_km: float,
+    weibull_k: float,
+    max_distance_km: float,
+    cutoff_km: Optional[float],
+    capacity_per_machine_per_year: float,
+    rt_method: str,
+    rt_fraction: float,
+    h3_res: int,
+    snap_linacs_to_hex: bool,
+    custom_rtu: tuple,
+    rtu_set: str,
+    tt_mode: Optional[str] = None,
+    tt_cache_key: Optional[str] = None,
+    gravity_beta: float = 1.5,
+):
+    """2SFCA / E2SFCA / 3SFCA / gravity ratios and implied deficits for a single country at the display resolution."""
+    gdf = _load_pop(country, h3_res)
+    demand, _, _ = _build_demand(gdf, iso3, rt_method, rt_fraction, custom_rtu, rtu_set)
+    tt = _load_tt_matrix(tt_cache_key, tt_mode) if tt_cache_key and tt_mode else None
+    return compute_fca(
+        gdf, list(linac_locs), variant=variant, model=model, lambda_km=lambda_km,
+        weibull_k=weibull_k, max_distance_km=max_distance_km, cutoff_km=cutoff_km,
+        capacity_per_machine_per_year=capacity_per_machine_per_year, demand=demand,
+        snap_linacs_to_hex=snap_linacs_to_hex, h3_resolution=h3_res,
+        travel_time_matrix=tt, gravity_beta=gravity_beta,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lookups for the Data / Capacity tabs
+# ---------------------------------------------------------------------------
+
 @st.cache_data(show_spinner=False, max_entries=32)
-def _load_dirac(country: str):
+def _load_dirac(country: str, merge_colocated: bool = False):
     try:
         if is_region(country):
             return load_linacs_for_region(country)
-        return load_linacs_from_dirac_db(country)
+        return load_linacs_from_dirac_db(country, merge_colocated=merge_colocated)
     except (ValueError, FileNotFoundError) as e:
         return None, str(e)
 
 
-_AGGREGATE_CANCER_KEYS = {"all cancers", "all cancers excl. nmsc", "all cancers excl nmsc"}
+@st.cache_data(show_spinner=False, max_entries=64)
+def _facility_quality(country: str):
+    try:
+        return facility_quality_report(country)
+    except (ValueError, FileNotFoundError):
+        return None
 
 
 @st.cache_data(show_spinner=False, max_entries=32)
@@ -655,11 +910,11 @@ def _run_convergence_cached(country: str, iso3: str):
 
 
 @st.cache_data(show_spinner=False)
-def _data_tab_rt_need(iso3: str) -> dict:
+def _data_tab_rt_need(iso3: str, rtu_set: str = DEFAULT_RTU_SET) -> dict:
     """Compute country-level RT need from optimal utilisations × incidence."""
     all_cancer_types = get_cancer_types() + DERIVED_CANCER_TYPES
     cases = get_national_cases(iso3, all_cancer_types)
-    opt = get_optimal_rt_fractions()
+    opt = get_optimal_rt_fractions(rtu_set)
     opt_norm = {k.strip().lower(): v for k, v in opt.items()}
     total_rt = 0.0
     for cancer, n in cases.items():

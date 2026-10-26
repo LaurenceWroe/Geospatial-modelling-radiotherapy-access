@@ -1,0 +1,46 @@
+# Evidence-based optimal number of radiotherapy fractions per FIRST treatment course, by cancer type.
+# Source: Wong K, Delaney GP, Barton MB. Evidence-based optimal number of radiotherapy fractions
+#         for cancer: a useful tool to estimate radiotherapy demand. Radiother Oncol 2016;119(1):145-9,
+#         Table 1, column "Optimal number of fractions per treatment course". https://doi.org/10.1016/j.radonc.2015.12.001
+# Overall: 19.4 per course (range 18.0-20.7), 9.4 per cancer patient; 24.3 radical vs 3.0 palliative.
+# Fractions per course = fractions per patient / optimal RTU, so it must be paired with a demand already
+# expressed in patients needing RT (RadMaps' D = incidence × RTU) — never with fractions per patient.
+# Mapping of Wong sites to GLOBOCAN types follows cancer_data/rt_utilisation_sources.csv (barton_2014 row).
+# Colorectum = colon (2.5) and rectum (24.0) weighted by RT demand (colon 8.4%×4%, rectum 4.2%×60%) → 21.5.
+# Liver has no RT indication in the model (RTU 0) so no course length is defined.
+cancer_type,fractions_per_course
+Breast,16.4
+Stomach,18.5
+Lung,15.5
+Cervix uteri,21.1
+Leukaemia,7.5
+Colorectum,21.5
+Brain CNS,29.1
+"Lip, oral cavity",27.0
+Oesophagus,14.1
+Liver,
+NHL,14.2
+Kidney,2.0
+Ovary,7.5
+Prostate,28.1
+Corpus uteri,22.2
+Bladder,10.4
+Pancreas,21.0
+Thyroid,12.5
+Hodgkin Lymphoma,14.2
+Larynx,27.0
+Testis,14.7
+Gallbladder,24.1
+Oropharynx,27.0
+Hypopharynx,27.0
+Nasopharynx,27.0
+Multiple myeloma,3.6
+Melanoma,18.6
+Salivary glands,27.0
+Vulva,24.1
+Kaposi sarcoma,18.4
+Vagina,22.0
+Mesothelioma,18.4
+Penis,18.4
+NMSC,
+Other cancers,18.4

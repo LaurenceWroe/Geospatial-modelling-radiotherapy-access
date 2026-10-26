@@ -140,13 +140,19 @@ def run(output_path: Path, capacity: float, h3_res: int) -> None:
                 print(f"{prefix} — SKIP (no GLOBOCAN data)")
                 skipped.append((dirac_name, "no GLOBOCAN data"))
                 continue
-            gdf = apportion_cancer_to_h3(gdf, alpha3, [_ALL_CANCERS_EXCL_NMSC], use_actual_rt=False)
-            demand_col = f"{_ALL_CANCERS_EXCL_NMSC.lower().replace(' ', '_').replace('.', '')}_optimal_rt"
-            # Find the demand column (naming convention may vary)
-            demand_cols = [c for c in gdf.columns if "optimal_rt" in c]
+            # Same demand recipe as the app: per-cancer-type incidence × optimal
+            # RTU, summed over the individual (non-aggregate) types.
+            from data.cancer import get_cancer_types, DERIVED_CANCER_TYPES
+            _all_types = get_cancer_types() + DERIVED_CANCER_TYPES
+            gdf = apportion_cancer_to_h3(gdf, alpha3, _all_types, use_actual_rt=False)
+            _agg = {"all cancers", "all cancers excl. nmsc", "all cancers excl nmsc"}
+            demand_cols = [
+                c for c in gdf.columns
+                if c.endswith("_optimal_rt") and c[:-len("_optimal_rt")].strip().lower() not in _agg
+            ]
             if demand_cols:
                 import numpy as np
-                demand = gdf[demand_cols].sum(axis=1).to_numpy(dtype=float)
+                demand = gdf[demand_cols].sum(axis=1).clip(lower=0).to_numpy(dtype=float)
             else:
                 demand = None
         except Exception as e:
