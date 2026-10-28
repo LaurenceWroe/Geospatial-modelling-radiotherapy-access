@@ -20,7 +20,7 @@ is typically a few kilometres from the hospital. The rule is therefore:
 The log gains final_method / final_lat / final_lon; the fixed CSV is written
 from them. Light: no network, runs anywhere.
 
-    python scripts/geocode_reconcile.py [--dir linac_data/dirac_2026]
+    python scripts/geocode_reconcile.py [--dir inputs/dirac]
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def _hav(lat1, lon1, lat2, lon2):
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default=str(_ROOT / "linac_data" / "dirac_2026"))
+    ap.add_argument("--dir", default=str(_ROOT / "inputs" / "dirac"))
     args = ap.parse_args()
     d = Path(args.dir)
     log = pd.read_csv(d / "geocode_log_2026.csv")

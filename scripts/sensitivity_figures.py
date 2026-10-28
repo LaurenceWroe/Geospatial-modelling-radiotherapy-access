@@ -134,7 +134,7 @@ def resolution_figure():
 
 def main() -> None:
     df = pd.read_csv(_FIG / "sensitivity_global.csv")
-    wb = pd.read_csv(_ROOT / "data" / "wb_income_groups.csv")[["iso3", "income_group"]]
+    wb = pd.read_csv(_ROOT / "inputs" / "wb_income_groups.csv")[["iso3", "income_group"]]
     figure(df)
     if (_FIG / "sensitivity_resolution.csv").exists():
         resolution_figure()

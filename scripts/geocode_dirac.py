@@ -3,8 +3,8 @@ Clean, geocode and audit a DIRAC facility export.
 
 Pipeline (every step is logged so the methodology can be reported exactly):
 
- 1. Load the tidy export (default: linac_data/dirac_2026/Database_DIRAC_2026.csv,
-    produced by linac_data/dirac_2026/process_dirac_2026.py, in which centres
+ 1. Load the tidy export (default: inputs/dirac/Database_DIRAC_2026.csv,
+    the October 2026 DIRAC export in the 2025 column layout, in which centres
     matched to the previous export already carry its coordinates).
  2. Clean: strip whitespace; drop rows DIRAC itself labels "duplicated / do not
     use"; drop exact duplicate rows (all fields identical), keeping the first.
@@ -21,8 +21,8 @@ Pipeline (every step is logged so the methodology can be reported exactly):
  5. Write the final facility file and an audit log with one row per centre
     (method, pass, result label, coordinate, polygon check) plus a summary.
 
-Outputs (default folder linac_data/dirac_2026/):
-    Database_DIRAC_2026_fixed.csv   final facility file (same columns as Database_DIRAC.csv)
+Outputs (default folder inputs/dirac/):
+    Database_DIRAC_2026_fixed.csv   final facility file (same columns as the input)
     geocode_log_2026.csv            per-row audit log
     geocode_manual_2026.csv         rows needing manual placement (empty if none)
     GEOCODING_SUMMARY.md            counts for the methods section
@@ -132,8 +132,8 @@ class Nominatim:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default=str(_ROOT / "linac_data" / "dirac_2026" / "Database_DIRAC_2026.csv"))
-    ap.add_argument("--outdir", default=str(_ROOT / "linac_data" / "dirac_2026"))
+    ap.add_argument("--input", default=str(_ROOT / "inputs" / "dirac" / "Database_DIRAC_2026.csv"))
+    ap.add_argument("--outdir", default=str(_ROOT / "inputs" / "dirac"))
     ap.add_argument("--polygons", default=str(_ROOT / "assets" / "country_borders_50m.geojson"))
     ap.add_argument("--limit", type=int, default=None, help="dry run: geocode only the first N rows needing it")
     ap.add_argument("--email", default="radmaps@generality.org")

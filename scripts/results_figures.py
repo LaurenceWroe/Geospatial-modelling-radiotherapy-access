@@ -287,10 +287,10 @@ def comparison_table(df):
 
     The capacity pair is grouped by the FY2025 World Bank classification, which
     reproduces Moraes et al.'s group sizes (26/49/48/58); everything else uses the
-    current classification in data/wb_income_groups.csv.
+    current classification in inputs/wb_income_groups.csv.
     """
     w = pd.read_csv(_FIG / "verification_wawrzuta_groups.csv").set_index("group")
-    fy25 = df["iso3"].map(pd.read_csv(_ROOT / "data" / "wb_income_groups_fy25.csv").set_index("iso3")["income_group"])
+    fy25 = df["iso3"].map(pd.read_csv(_ROOT / "inputs" / "wb_income_groups_fy25.csv").set_index("iso3")["income_group"])
     lines = [r"\begin{tabular}{lrrrrrrr}", r"\toprule",
              r" & \multicolumn{2}{c}{Capacity only$^*$} & \multicolumn{2}{c}{Geography only} & \multicolumn{3}{c}{RadMaps} \\",
              r"\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-8}",

@@ -31,7 +31,7 @@ META = {
     "departure": "Wednesday 08:00 UTC",
     "fetched": "2026-10-24",
     "source": "TravelTime /v4/h3 (one-to-many), scripts/fetch_tt_res6.py",
-    "facilities": "IAEA DIRAC October 2026 export, linac_data/Database_DIRAC_2026_fixed.csv",
+    "facilities": "IAEA DIRAC October 2026 export, inputs/dirac/Database_DIRAC_2026_fixed.csv",
 }
 
 

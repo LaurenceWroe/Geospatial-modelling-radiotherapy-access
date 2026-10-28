@@ -20,7 +20,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _ROOT = Path(__file__).resolve().parent.parent
-_DIR = _ROOT / "linac_data" / "dirac_2026"
+_DIR = _ROOT / "inputs" / "dirac"
 
 from scripts.geocode_dirac import Nominatim, iso2  # noqa: E402
 
@@ -62,7 +62,7 @@ FIXES = {
 def main() -> None:
     fixed = pd.read_csv(_DIR / "Database_DIRAC_2026_fixed.csv", dtype=str)
     log = pd.read_csv(_DIR / "geocode_log_2026.csv")
-    prev = pd.read_csv(_ROOT / "linac_data" / "Database_DIRAC_fixed.csv", dtype=str)
+    prev = pd.read_csv(_ROOT / "inputs" / "dirac" / "Database_DIRAC_2025_fixed.csv", dtype=str)
     geo = Nominatim("laurence.wroe@generality.org")
     failed = log[log["status"] == "failed"]
     print(f"{len(failed)} rows to resolve")

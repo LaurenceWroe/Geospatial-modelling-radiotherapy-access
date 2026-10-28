@@ -5,7 +5,7 @@ A "selection" in the UI is either:
   - a plain country name (str, pycountry-resolvable), or
   - a region display name (a key in REGION_DISPLAY_NAMES).
 
-ISO3 codes here are synthetic regional codes stored in globocan_xarray.nc.
+ISO3 codes here are synthetic regional codes stored in the GLOBOCAN files (inputs/globocan_xarray_*.nc).
 They must not clash with real ISO-3166-1 alpha-3 codes ("NAM" is Namibia, so
 Northern America is "NAR"). A region code absent from the GLOBOCAN file has its
 cases summed over its member countries (data.cancer.get_national_cases).

@@ -207,7 +207,7 @@ def main() -> None:
                        unroutable=bad, cutoff_min=CUTOFF_MIN, departure="Wednesday 08:00 local time at each facility",
                        fetched=time.strftime("%Y-%m-%d"),
                        source="TravelTime /v4/h3 (one-to-many), scripts/fetch_tt_res6.py",
-                       facilities="IAEA DIRAC, linac_data/Database_DIRAC_2026_fixed.csv")
+                       facilities="IAEA DIRAC, inputs/dirac/Database_DIRAC_2026_fixed.csv")
             status = "fetched"
         if args.dry_run:
             continue

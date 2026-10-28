@@ -76,7 +76,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--countries", nargs="*", help="ISO3 codes (default: World)")
     args = ap.parse_args()
-    wb = pd.read_csv(_ROOT / "data" / "wb_income_groups.csv").set_index("iso3")
+    wb = pd.read_csv(_ROOT / "inputs" / "wb_income_groups.csv").set_index("iso3")
     cancers = get_cancer_types() + DERIVED_CANCER_TYPES
 
     if args.countries:

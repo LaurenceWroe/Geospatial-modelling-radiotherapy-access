@@ -7,7 +7,7 @@ Inputs
   figures/global_results.csv            RadMaps (scripts/global_results.py)
   data/wawrzuta_2025_country.csv        their per-country results (GitHub
                                         dwawrzuta/radiotherapyaccess, data_table.rds)
-  data/wb_income_groups.csv             World Bank income groups
+  inputs/wb_income_groups.csv             World Bank income groups
 
 Outputs
   figures/verification_wawrzuta.csv           per-country comparison

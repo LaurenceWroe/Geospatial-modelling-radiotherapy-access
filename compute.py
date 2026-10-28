@@ -19,7 +19,7 @@ import streamlit as st
 import xarray as xr
 
 from data.population import load_population_at_resolution, load_region_population
-from data.linacs import load_linacs_from_dirac_db, load_linacs_for_region, facility_quality_report
+from data.linacs import load_linacs_from_dirac_db, load_linacs_for_region
 from data.regions import is_region, get_region, REGIONS, REGION_GLOBOCAN_CODES
 from data.cancer import (
     get_cancer_types, apportion_cancer_to_h3, get_national_cases,
@@ -907,14 +907,6 @@ def _load_dirac(country: str, merge_colocated: bool = False):
         return load_linacs_from_dirac_db(country, merge_colocated=merge_colocated)
     except (ValueError, FileNotFoundError) as e:
         return None, str(e)
-
-
-@st.cache_data(show_spinner=False, max_entries=64)
-def _facility_quality(country: str):
-    try:
-        return facility_quality_report(country)
-    except (ValueError, FileNotFoundError):
-        return None
 
 
 @st.cache_data(show_spinner=False, max_entries=32)

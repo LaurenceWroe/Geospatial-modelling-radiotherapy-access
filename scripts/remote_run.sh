@@ -7,12 +7,12 @@
 # 2. runs the command there inside the project venv, under scripts/run_capped.py
 #    (memory watchdog, one job at a time), with nohup so it survives disconnects
 # 3. waits for it, then rsyncs back the result directories (figures/, cache/,
-#    data/country_metrics.parquet, travel_time_cache/, H3_region_cache/)
+#    travel_time_cache/, H3_region_cache/, dashboard_store/)
 #
 # Examples
 #   scripts/remote_run.sh python -m pytest tests -q
-#   scripts/remote_run.sh python scripts/table3_rtu_variants.py
-#   scripts/remote_run.sh python scripts/regen_world.py
+#   scripts/remote_run.sh python scripts/global_results.py
+#   scripts/remote_run.sh python scripts/build_dashboard_world.py
 #
 # Override the host with REMOTE=user@host (default: the 'cybench-box' ssh alias).
 set -euo pipefail

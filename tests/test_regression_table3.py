@@ -3,7 +3,7 @@ Regression test: the paper's Table 3 (six countries, H3 res 5, 2 h driving
 step threshold, 450 patients/linac/yr, Delaney 2005 optimal RTU) must be
 reproduced by the default engine configuration.
 
-Reference values live in figures/table3_metrics.csv and were generated from
+Reference values live in tests/table3_metrics.csv and were generated from
 the engine as published (commit 5e180f8) with the July 2025 DIRAC export; the
 A_RM column was regenerated on 26 Oct 2026 after the deliberate change to the
 nearest-first ring rule (rings by rounded travel time), which moved Australia,
@@ -34,7 +34,7 @@ gpd = pytest.importorskip("geopandas")
 pycountry = pytest.importorskip("pycountry")
 
 _ROOT = Path(__file__).resolve().parent.parent
-_REF = _ROOT / "figures" / "table3_metrics.csv"
+_REF = _ROOT / "tests" / "table3_metrics.csv"
 _TT_CACHE = _ROOT / "travel_time_cache"
 _POP_DIR = _ROOT / "H3_zipped_pop_density_maps"
 

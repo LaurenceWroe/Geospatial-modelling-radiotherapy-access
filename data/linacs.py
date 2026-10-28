@@ -18,17 +18,14 @@ from typing import List, Tuple
 import pandas as pd
 import pycountry
 
-# Prefer the geocoding-corrected version if it exists, fall back to original.
 # RADMAPS_DIRAC_CSV overrides the file (e.g. a newer DIRAC export) for scripts
 # and comparisons without changing the default the app and the tests use.
 import os as _os
 _ROOT = Path(__file__).resolve().parent.parent
-_DIRAC_2026  = _ROOT / "linac_data" / "Database_DIRAC_2026_fixed.csv"   # October 2026 export, geocoded (default)
-_DIRAC_FIXED = _ROOT / "linac_data" / "Database_DIRAC_fixed.csv"        # July 2025 export as used in the preprint
-_DIRAC_ORIG  = _ROOT / "linac_data" / "Database_DIRAC.csv"              # July 2025 export before geocoding audit
-DIRAC_CSV_2025 = _DIRAC_FIXED
+_DIRAC_2026  = _ROOT / "inputs" / "dirac" / "Database_DIRAC_2026_fixed.csv"   # October 2026 export, geocoded (default)
+DIRAC_CSV_2025 = _ROOT / "inputs" / "dirac" / "Database_DIRAC_2025_fixed.csv"  # July 2025 export as used in the preprint
 DIRAC_CSV = (Path(_os.environ["RADMAPS_DIRAC_CSV"]) if _os.environ.get("RADMAPS_DIRAC_CSV")
-             else next((p for p in (_DIRAC_2026, _DIRAC_FIXED, _DIRAC_ORIG) if p.exists()), _DIRAC_ORIG))
+             else _DIRAC_2026)
 
 # pycountry name → DIRAC CSV country name for known mismatches
 _COUNTRY_ALIASES: dict[str, str] = {
@@ -246,7 +243,7 @@ def load_linacs_from_dirac_db(
     merge_colocated: bool = False,
     csv_path: "str | Path | None" = None,
 ) -> Tuple[List[Tuple[float, float, float]], pd.DataFrame]:
-    """Load LINAC photon/electron RT facilities for *country_name* from Database_DIRAC.csv.
+    """Load LINAC photon/electron RT facilities for *country_name* from the DIRAC export.
 
     Parameters
     ----------
@@ -330,82 +327,6 @@ def merge_colocated_facilities(facilities_df: pd.DataFrame) -> pd.DataFrame:
     )
     cols = ["name", "city", "lat", "lon", "n_linacs", "n_merged"]
     return merged[cols].reset_index(drop=True)
-
-
-_FIX_REPORT = _ROOT / "linac_data" / "fix_report.csv"
-
-
-def facility_quality_report(country_name: str) -> dict:
-    """Data-quality summary for one country's DIRAC records.
-
-    Combines the DIRAC export with ``linac_data/fix_report.csv`` (the
-    geocoding log) to report how many facilities were usable, how many had
-    coordinates added or corrected and by which method, how many could not be
-    geocoded, how many rows share a coordinate, and how recent the DIRAC
-    ``Last Update`` years are. Counts are rows (operators), not machines,
-    unless the key says otherwise.
-    """
-    if not DIRAC_CSV.exists():
-        raise FileNotFoundError(f"DIRAC database not found: {DIRAC_CSV}")
-    df = pd.read_csv(DIRAC_CSV)
-    rows = _resolve_dirac_country(country_name, df).copy()
-    if rows.empty:
-        raise ValueError(f"No DIRAC rows for {country_name!r}")
-    dirac_names = sorted(rows["Country"].dropna().unique().tolist())
-
-    lat = pd.to_numeric(rows["Latitude"], errors="coerce")
-    lon = pd.to_numeric(rows["Longitude"], errors="coerce")
-    has_coord = lat.notna() & lon.notna() & lat.between(-90, 90) & lon.between(-180, 180)
-    machines_raw = pd.to_numeric(rows["He Photon And Electron Beam Rt"], errors="coerce")
-    blank_machines = machines_raw.isna()
-    zero_machines = machines_raw.fillna(1) == 0
-    usable = has_coord & ~zero_machines
-    machines = machines_raw.fillna(1).where(usable, 0.0)
-
-    coords = pd.DataFrame({"lat": lat.round(5), "lon": lon.round(5)})[usable]
-    dup_counts = coords.groupby(["lat", "lon"]).size()
-    n_dup_rows = int((dup_counts[dup_counts > 1] - 1).sum()) if len(dup_counts) else 0
-    n_dup_sites = int((dup_counts > 1).sum()) if len(dup_counts) else 0
-
-    years = pd.to_numeric(rows.get("Last Update"), errors="coerce").dropna().astype(int)
-
-    other_modalities = {}
-    for col, label in (("Proton Ion Therapy", "proton_rows"), ("XRay Generator", "orthovoltage_rows"),
-                       ("Brachy Therapy Inc El", "brachy_rows")):
-        if col in rows.columns:
-            other_modalities[label] = int((pd.to_numeric(rows[col], errors="coerce").fillna(0) > 0).sum())
-
-    fixes = pd.DataFrame()
-    if _FIX_REPORT.exists():
-        fr = pd.read_csv(_FIX_REPORT)
-        fixes = fr[fr["country"].isin(dirac_names)]
-    method_counts = fixes["method"].value_counts().to_dict() if not fixes.empty else {}
-    reason_missing = int(fixes["reason"].eq("missing").sum()) if not fixes.empty else 0
-    reason_bbox = int(fixes["reason"].str.startswith("outside bbox").sum()) if not fixes.empty else 0
-    failed = fixes[fixes["method"].eq("FAILED")] if not fixes.empty else pd.DataFrame()
-
-    return {
-        "country": country_name,
-        "dirac_country_names": dirac_names,
-        "rows": int(len(rows)),
-        "rows_usable": int(usable.sum()),
-        "machines_usable": float(machines.sum()),
-        "rows_zero_machines": int(zero_machines.sum()),
-        "rows_blank_machines_assumed_one": int((blank_machines & usable).sum()),
-        "rows_without_coordinates": int((~has_coord).sum()),
-        "rows_geocoded_missing": reason_missing,
-        "rows_geocoded_outside_bbox": reason_bbox,
-        "geocode_methods": method_counts,
-        "rows_geocode_failed": int(len(failed)),
-        "geocode_failed_names": failed["operator"].fillna("").astype(str).tolist() if len(failed) else [],
-        "colocated_sites": n_dup_sites,
-        "colocated_extra_rows": n_dup_rows,
-        "last_update_min": int(years.min()) if len(years) else None,
-        "last_update_median": float(years.median()) if len(years) else None,
-        "last_update_max": int(years.max()) if len(years) else None,
-        "last_update_counts": years.value_counts().sort_index().to_dict() if len(years) else {},
-        **other_modalities,
-    }
 
 
 def load_linacs_for_region(

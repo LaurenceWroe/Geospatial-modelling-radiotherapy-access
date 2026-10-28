@@ -18,20 +18,20 @@
       "coverage": "34 cancer sites in 186 countries and territories (Sung et al. 2026), new cases (both sexes, all ages)",
       "source_url": "https://gco.iarc.who.int/today/",
       "accessed": "2026-10",
-      "local_path": "cancer_data/globocan_xarray_2024.nc",
+      "local_path": "inputs/globocan_xarray_2024.nc",
       "refresh": "Export the 'Cancer Today' dataset (new cases, both sexes, all ages, all cancer sites, all countries) as CSV from gco.iarc.who.int and run: python scripts/refresh_data.py globocan --csv <export.csv>",
-      "previous": "GLOBOCAN 2022 (175 countries), used for the preprint, kept as cancer_data/globocan_xarray.nc; select with RADMAPS_GLOBOCAN=2022"
+      "previous": "GLOBOCAN 2022 (175 countries), used for the preprint, kept as inputs/globocan_xarray_2022.nc; select with RADMAPS_GLOBOCAN=2022"
     },
     "facilities": {
       "name": "IAEA Directory of Radiotherapy Centres (DIRAC)",
-      "version": "export of October 2026 (preprint used July 2025; kept as linac_data/Database_DIRAC_fixed.csv)",
+      "version": "export of October 2026 (preprint used July 2025; kept as inputs/dirac/Database_DIRAC_2025_fixed.csv)",
       "accessed": "2026-10-22",
       "rows": 8625,
       "rows_with_photon_electron_machines": 8501,
       "machines_total": 17226,
       "source_url": "https://dirac.iaea.org/",
-      "local_path": "linac_data/Database_DIRAC_2026_fixed.csv",
-      "geocoding": "Every centre re-geocoded with OpenStreetMap Nominatim (operator + city + country, then city + country), validated against Natural Earth country polygons, with a disambiguation pass for town-level hits that disagreed with the curated 2025 coordinate. The fresh geocode confirms or corrects the curated coordinate rather than replacing it: 5,212 curated coordinates confirmed by a town-level hit within 25 km; 1,758 facilities found by name (median 0.1 km from the curated point); 993 curated coordinates kept where the new geocode failed or was ambiguous; 547 new centres placed at the town centroid; 100 curated coordinates kept where the town-level hit disagreed (flagged); 15 fixed by hand. 282 centres moved > 1 km relative to 2025. 2 DIRAC-flagged duplicates and 3 exact duplicates removed. Pipeline: linac_data/dirac_2026/process_dirac_2026.py, scripts/geocode_dirac.py, scripts/geocode_disambiguate.py, scripts/geocode_manual_fixes.py, scripts/geocode_reconcile.py; log: linac_data/dirac_2026/geocode_log_2026.csv; summary: linac_data/dirac_2026/GEOCODING_SUMMARY.md",
+      "local_path": "inputs/dirac/Database_DIRAC_2026_fixed.csv",
+      "geocoding": "Every centre re-geocoded with OpenStreetMap Nominatim (operator + city + country, then city + country), validated against Natural Earth country polygons, with a disambiguation pass for town-level hits that disagreed with the curated 2025 coordinate. The fresh geocode confirms or corrects the curated coordinate rather than replacing it: 5,212 curated coordinates confirmed by a town-level hit within 25 km; 1,758 facilities found by name (median 0.1 km from the curated point); 993 curated coordinates kept where the new geocode failed or was ambiguous; 547 new centres placed at the town centroid; 100 curated coordinates kept where the town-level hit disagreed (flagged); 15 fixed by hand. 282 centres moved > 1 km relative to 2025. 2 DIRAC-flagged duplicates and 3 exact duplicates removed. Pipeline: scripts/geocode_dirac.py, scripts/geocode_disambiguate.py, scripts/geocode_manual_fixes.py, scripts/geocode_reconcile.py; log: inputs/dirac/geocode_log_2026.csv",
       "refresh": "Export the full centre list from dirac.iaea.org (Country, City, Operator Name, He Photon And Electron Beam Rt, Proton Ion Therapy, XRay Generator, Brachy Therapy Inc El, Last Update, Latitude, Longitude) and run: python scripts/refresh_data.py dirac --csv <export.csv>"
     },
     "travel_time": {
@@ -54,8 +54,8 @@
     },
     "rt_utilisation": {
       "name": "Optimal radiotherapy utilisation rates",
-      "local_path": "cancer_data/rt_utilisation_sets.csv",
-      "sources_path": "cancer_data/rt_utilisation_sources.csv",
+      "local_path": "inputs/rt_utilisation_sets.csv",
+      "sources_path": "inputs/rt_utilisation_sources.csv",
       "default_set": "barton_2014",
       "sets": {
         "delaney_2005": "as published in arXiv 2605.23456 (52.3% overall)",
@@ -64,7 +64,7 @@
     },
     "fractions_per_course": {
       "name": "Evidence-based optimal fractions per course (Wong, Delaney & Barton 2016)",
-      "local_path": "cancer_data/optimal_fractions_per_course.csv",
+      "local_path": "inputs/optimal_fractions_per_course.csv",
       "status": "per-site values transcribed from Wong et al. 2016 Table 1 (5 Oct 2026); Liver and NMSC have no RT indication"
     }
   },

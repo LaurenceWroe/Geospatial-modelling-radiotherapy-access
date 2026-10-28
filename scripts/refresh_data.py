@@ -1,6 +1,6 @@
 """
 Refresh / validate the bundled input datasets and record their provenance in
-``data/manifest.json``.
+``inputs/manifest.json``.
 
 Sub-commands
 ------------
@@ -10,9 +10,9 @@ kontur [--force]    Re-download the Kontur population file for every country
                     publishes dated releases; set --version to switch release.
 dirac --csv PATH    Validate a fresh DIRAC export, report rows lacking
                     coordinates / machine counts, write it to
-                    linac_data/Database_DIRAC.csv and refresh the manifest.
-                    Geocoding of missing coordinates is a separate manual step
-                    (see linac_data/fix_report.csv for the log format).
+                    inputs/dirac/Database_DIRAC_<year>.csv and refresh the
+                    manifest. Geocoding is a separate step
+                    (scripts/geocode_dirac.py and the scripts it lists).
 globocan --csv PATH Rebuild the active GLOBOCAN file (data.cancer.XARRAY_PATH) from a GLOBOCAN
                     'Cancer Today' CSV export. Column names can be overridden
                     with --iso-col / --cancer-col / --cases-col.
@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _ROOT = Path(__file__).resolve().parent.parent
-_MANIFEST = _ROOT / "data" / "manifest.json"
+_MANIFEST = _ROOT / "inputs" / "manifest.json"
 
 _DIRAC_REQUIRED = [
     "Country", "City", "Operator Name", "He Photon And Electron Beam Rt",
@@ -132,20 +132,18 @@ def cmd_dirac(args) -> None:
         print(f"Last Update: min {int(years.min())}, median {years.median():.0f}, max {int(years.max())}")
 
     todo = df[~has_coord][["Country", "City", "Operator Name"]]
-    todo_path = _ROOT / "linac_data" / "geocode_todo.csv"
+    todo_path = _ROOT / "inputs" / "dirac" / "geocode_todo.csv"
     todo.to_csv(todo_path, index=False)
     print(f"rows needing geocoding written to {todo_path.relative_to(_ROOT)}")
 
-    dest = _ROOT / "linac_data" / "Database_DIRAC.csv"
+    dest = _ROOT / "inputs" / "dirac" / f"Database_DIRAC_{_dt.date.today():%Y}.csv"
     if dest.exists():
         bak = dest.with_name(f"Database_DIRAC_{_dt.date.today():%Y%m%d}.bak.csv")
         shutil.copy(dest, bak)
         print(f"previous export backed up to {bak.name}")
     shutil.copy(src, dest)
-    fixed = _ROOT / "linac_data" / "Database_DIRAC_fixed.csv"
-    if fixed.exists():
-        print("NOTE: Database_DIRAC_fixed.csv (geocoded) still takes precedence in the app. "
-              "Re-run geocoding on geocode_todo.csv and regenerate the fixed file + fix_report.csv.")
+    print(f"NOTE: the app reads the geocoded file (data.linacs.DIRAC_CSV); run scripts/geocode_dirac.py "
+          f"--input {dest.relative_to(_ROOT)} and the follow-up scripts to produce it.")
 
     m = _load_manifest()
     m["datasets"].setdefault("facilities", {})

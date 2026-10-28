@@ -113,7 +113,7 @@ def _is_facility(c: dict) -> bool:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dir", default=str(_ROOT / "linac_data" / "dirac_2026"))
+    ap.add_argument("--dir", default=str(_ROOT / "inputs" / "dirac"))
     ap.add_argument("--polygons", default=str(_ROOT / "assets" / "country_borders_50m.geojson"))
     ap.add_argument("--limit", type=int, default=None, help="dry run on the first N rows in scope; writes nothing")
     ap.add_argument("--email", default="radmaps@generality.org")

@@ -1,5 +1,5 @@
 """
-Build ``cancer_data/globocan_xarray_2024.nc`` from the GLOBOCAN 2024 data API.
+Build ``inputs/globocan_xarray_2024.nc`` from the GLOBOCAN 2024 data API.
 
 The Global Cancer Observatory population fact sheets
 (https://gco.iarc.who.int/media/globocan/factsheets/populations/<M49>-<name>-fact-sheet.pdf)
@@ -83,7 +83,7 @@ def _incidence(rows: list) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--cache", type=Path, default=Path(tempfile.gettempdir()) / "globocan_2024_api")
-    ap.add_argument("--out", type=Path, default=_ROOT / "cancer_data" / "globocan_xarray_2024.nc")
+    ap.add_argument("--out", type=Path, default=_ROOT / "inputs" / "globocan_xarray_2024.nc")
     args = ap.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
 

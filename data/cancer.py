@@ -3,22 +3,20 @@ Cancer incidence loader and H3 apportionment.
 
 Data sources
 ------------
-- ``cancer_data/globocan_xarray_2024.nc``  — national cancer case totals
+- ``inputs/globocan_xarray_2024.nc``  — national cancer case totals
   (dims: Cancer × Metric × ISO3), the default. The GLOBOCAN 2022 file used
-  for the preprint (``globocan_xarray.nc``, 175 countries) is kept; set
+  for the preprint (``globocan_xarray_2022.nc``, 175 countries) is kept; set
   ``RADMAPS_GLOBOCAN=2022`` to select it.
-- ``cancer_data/rt_utilisation_sets.csv``  — optimal RT utilisation rate
+- ``inputs/rt_utilisation_sets.csv``  — optimal RT utilisation rate
   per cancer type, one column per published set (``delaney_2005``,
   ``barton_2014`` …). ``rt_utilisation_sources.csv`` carries the provenance
   (source, year, which treatment intents are covered, whether the column is
   fully populated). Only complete sets are offered in the UI.
-- ``cancer_data/optimal_rt_utilisations.csv``  — legacy single-set file
-  (``Cancer type, fraction``, no header); used only if the sets file is absent.
-- ``cancer_data/optimal_fractions_per_course.csv``  — evidence-based optimal
+- ``inputs/optimal_fractions_per_course.csv``  — evidence-based optimal
   fractions per course by cancer type (Wong, Delaney & Barton 2016), used to
   convert a fractions-per-linac throughput into country-specific patients
   per linac.
-- ``cancer_data/actual_data/{ISO3}.csv``  — observed per-country RT
+- ``inputs/actual_data/{ISO3}.csv``  — observed per-country RT
   utilisation (optional; falls back to optimal if missing).
 
 Cases are apportioned over H3 hexagons proportional to population, so that
@@ -40,16 +38,15 @@ import xarray as xr
 
 _ROOT = Path(__file__).resolve().parent.parent
 GLOBOCAN_FILES = {
-    "2022": _ROOT / "cancer_data" / "globocan_xarray.nc",
-    "2024": _ROOT / "cancer_data" / "globocan_xarray_2024.nc",
+    "2022": _ROOT / "inputs" / "globocan_xarray_2022.nc",
+    "2024": _ROOT / "inputs" / "globocan_xarray_2024.nc",
 }
 GLOBOCAN_YEAR = os.environ.get("RADMAPS_GLOBOCAN", "2024")
 XARRAY_PATH = GLOBOCAN_FILES[GLOBOCAN_YEAR]
-OPTIMAL_CSV = _ROOT / "cancer_data" / "optimal_rt_utilisations.csv"
-RTU_SETS_CSV = _ROOT / "cancer_data" / "rt_utilisation_sets.csv"
-RTU_SOURCES_CSV = _ROOT / "cancer_data" / "rt_utilisation_sources.csv"
-FRACTIONS_CSV = _ROOT / "cancer_data" / "optimal_fractions_per_course.csv"
-ACTUAL_DIR = _ROOT / "cancer_data" / "actual_data"
+RTU_SETS_CSV = _ROOT / "inputs" / "rt_utilisation_sets.csv"
+RTU_SOURCES_CSV = _ROOT / "inputs" / "rt_utilisation_sources.csv"
+FRACTIONS_CSV = _ROOT / "inputs" / "optimal_fractions_per_course.csv"
+ACTUAL_DIR = _ROOT / "inputs" / "actual_data"
 NEW_CASES_METRIC = "New_Cases_Number"
 
 DEFAULT_RTU_SET = "barton_2014"
@@ -89,26 +86,6 @@ def has_globocan_data(iso3: str) -> bool:
         return True
     da = xr.open_dataarray(XARRAY_PATH)
     return iso3 in [str(v) for v in da.coords["ISO3"].values]
-
-
-def _load_legacy_optimal_fractions() -> Dict[str, float]:
-    """Read the legacy single-set ``Cancer type, fraction`` file (original names)."""
-    fracs: Dict[str, float] = {}
-    try:
-        with open(OPTIMAL_CSV) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.rsplit(",", 1)
-                if len(parts) == 2:
-                    try:
-                        fracs[parts[0].strip()] = float(parts[1].strip())
-                    except ValueError:
-                        pass
-    except FileNotFoundError:
-        pass
-    return fracs
 
 
 @lru_cache(maxsize=1)
@@ -191,11 +168,11 @@ def get_optimal_rt_fractions(rtu_set: str = DEFAULT_RTU_SET) -> Dict[str, float]
     """Return optimal RT utilisation fractions keyed by original cancer type name.
 
     Reads the requested column of ``rt_utilisation_sets.csv``; types with no
-    value in that set fall back to the default set, then to the legacy file.
+    value in that set fall back to the default set.
     """
     table = _read_rtu_sets_table()
     if table.empty:
-        return _load_legacy_optimal_fractions()
+        raise FileNotFoundError(f"RTU sets table not found: {RTU_SETS_CSV}")
     col = rtu_set if rtu_set in table.columns else DEFAULT_RTU_SET
     base = table[DEFAULT_RTU_SET] if DEFAULT_RTU_SET in table.columns else None
     fracs: Dict[str, float] = {}
