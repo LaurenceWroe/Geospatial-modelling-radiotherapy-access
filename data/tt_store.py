@@ -46,6 +46,29 @@ import numpy as np
 
 STORE_DIR = Path(__file__).resolve().parent.parent / "travel_time_store"
 STORE_RES = 6
+# Published copy of the store, fetched on first use when a country's file is not on disk
+RELEASE_URL = ("https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/"
+               "releases/download/dashboard-store-v1/{name}")
+_UNAVAILABLE: set = set()  # files the release does not have (e.g. countries TravelTime does not serve)
+
+
+def _download(p: Path) -> bool:
+    """Fetch *p* from the release; False when unavailable (offline, or no such file)."""
+    import shutil
+    import tempfile
+    import urllib.request
+    if p.name in _UNAVAILABLE:
+        return False
+    try:
+        with urllib.request.urlopen(RELEASE_URL.format(name=p.name), timeout=60) as r, \
+                tempfile.NamedTemporaryFile(delete=False, suffix=".npz") as tmp:
+            shutil.copyfileobj(r, tmp)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(tmp.name, p)
+        return True
+    except Exception:  # noqa: BLE001
+        _UNAVAILABLE.add(p.name)
+        return False
 
 
 def store_path(iso3: str, mode: str = "driving") -> Path:
@@ -146,7 +169,7 @@ class TTStore:
 def load_store(iso3: str, mode: str = "driving") -> Optional[TTStore]:
     """Load a country's store, or None if it has none (e.g. not served by TravelTime)."""
     p = store_path(iso3, mode)
-    if not p.exists():
+    if not p.exists() and not _download(p):
         return None
     z = np.load(p, allow_pickle=False)
     return TTStore(

@@ -414,10 +414,18 @@ with st.sidebar:
             st.session_state["res"] = res_opts[-1]
         st.session_state["_was_region"] = is_region
         res = st.selectbox("H3 resolution", res_opts, key="res",
-                           format_func=lambda r: (f"H{r} (~{math.sqrt(3) * h3.average_hexagon_edge_length(r, 'km'):,.0f} km "
-                                                  "between centres)"),
-                           help="Average distance between neighbouring cell centres. Access is always computed at "
-                                "resolution 5 and summed into larger hexagons.")
+                           format_func=lambda r: f"H{r}",
+                           help="Access is always computed at resolution 5 and summed into larger hexagons.")
+        st.markdown(
+            "<table style='font-size:0.75rem;color:#555;border-collapse:collapse;width:100%'>"
+            "<tr><th style='text-align:left'>H3</th><th style='text-align:right'>Cell area</th>"
+            "<th style='text-align:right'>Centroid spacing</th></tr>"
+            + "".join(f"<tr{' style=\'font-weight:600;color:#222\'' if r == res else ''}><td>H{r}</td>"
+                      f"<td style='text-align:right'>{h3.average_hexagon_area(r, 'km^2'):,.0f} km²</td>"
+                      f"<td style='text-align:right'>"
+                      f"{math.sqrt(3) * h3.average_hexagon_edge_length(r, 'km'):,.0f} km</td></tr>"
+                      for r in res_opts)
+            + "</table>", unsafe_allow_html=True)
     alpha2 = None if is_region else pycountry.countries.lookup(location).alpha_2
     _fac = _load_dirac(location)
     dirac = (_fac[1] if _fac[0] is not None
