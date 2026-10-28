@@ -323,17 +323,12 @@ def _facility_layer(fac: pd.DataFrame, capacity: float, by_load: bool = False, r
 
 
 def _render_profiles(countries: pd.DataFrame, view: pdk.ViewState, extra: list) -> None:
-    """Countries coloured by access profile. The legend is a set of buttons: choosing a profile
-    shows its countries in full colour and fades the others."""
-    _sq = {"Strong access": "🟩", "Capacity constrained": "🟦", "Geography constrained": "🟧",
-           "Doubly constrained": "🟥"}
-    pick = st.pills("Highlight a profile (choose again to show all)", list(PROFILES), selection_mode="single",
-                    key="profile_pick", format_func=lambda k: f"{_sq[k]} {k}")
+    """Countries coloured by access profile, with a legend in place of the colour bar."""
     col_map, col_lg = st.columns([7, 1])
     gj = _land_geojson_profiles(tuple(sorted(
         (pycountry.countries.get(alpha_3=r["iso3"]).alpha_2,
          _profile(r["A_C"] / r["D"], r["A_G"] / r["D"], r["A"] / r["D"]), r["country"],
-         round(100 * r["A"] / r["D"], 1)) for _, r in countries.iterrows() if r["D"] > 0)), pick)
+         round(100 * r["A"] / r["D"], 1)) for _, r in countries.iterrows() if r["D"] > 0)))
     layer = pdk.Layer("GeoJsonLayer", id="profiles", data=gj, filled=True, stroked=True,
                       get_fill_color="properties.fill", get_line_color=[255, 255, 255], line_width_min_pixels=0.5,
                       pickable=True)
@@ -360,15 +355,11 @@ def _country_geojson(rows: tuple) -> dict:
     return {"type": "FeatureCollection", "features": feats}
 
 
-def _land_geojson_profiles(rows: tuple, highlight: Optional[str] = None) -> dict:
-    """Country polygons with a fill colour and tooltip per access profile; with *highlight*,
-    countries of other profiles are faded to grey."""
-    def fill(prof):
-        if highlight is None or prof == highlight:
-            return tuple(PROFILES[prof] + [230 if highlight else 210])
-        return (205, 205, 205, 110)
+def _land_geojson_profiles(rows: tuple) -> dict:
+    """Country polygons with a fill colour and tooltip per access profile."""
     return _country_geojson(tuple(
-        (a2, fill(prof), f"<b>{name}</b><br/>{prof}<br/>RadMaps access {pct}%") for a2, prof, name, pct in rows))
+        (a2, tuple(PROFILES[prof] + [210]), f"<b>{name}</b><br/>{prof}<br/>RadMaps access {pct}%")
+        for a2, prof, name, pct in rows))
 
 
 # ---------------------------------------------------------------------------
@@ -481,8 +472,7 @@ with st.sidebar:
         if is_region:
             st.caption("Edit each country's linacs in the table below the map; its centres keep their shares.")
         elif dirac.empty and alpha2 not in edits:
-            st.caption("No radiotherapy centres in DIRAC for this country; add some in the Radiotherapy "
-                       "Planning tab.")
+            st.caption("No radiotherapy centres in DIRAC for this country; add some in the Planning tab.")
         else:
             st.caption("Linacs and capacity of each centre. Capacity follows linacs x capacity per linac "
                        "unless you set it; 0 closes a centre.")
@@ -614,8 +604,7 @@ g["deficit"] = (g["D"] - g["A"]).clip(lower=0)
 tot = countries[["D", "A_C", "A_G", "A", "n_linacs"]].sum()
 proxy = sorted(countries.loc[countries["time_source"] == "proxy", "country"])
 
-tab_map, tab_plan, tab_data, tab_about = st.tabs(["🗺️ Access Maps", "🔧 Radiotherapy Planning", "📊 Data",
-                                                    "📖 About"])
+tab_map, tab_plan, tab_data, tab_about = st.tabs(["🗺️ Maps", "🔧 Planning", "📊 Data", "📖 About"])
 
 with tab_map:
     st.header(f"{layer} — {location}")
@@ -1024,7 +1013,7 @@ Changes to the RTUs or centres are recalculated when you press **Recalculate wit
 else is read from pre-computed results.
 
 ### Radiotherapy planning
-For a single country, the planning tab adds linacs step by step where they treat the most patients:
+For a single country, the Planning tab adds linacs step by step where they treat the most patients:
 at the hexagon with the largest unmet demand (or the most demand out of reach), either at the nearest
 existing centre within a chosen driving time or as a new centre. Driving times to new centres use the
 calibrated straight-line equivalent. The result can be applied to the map.
