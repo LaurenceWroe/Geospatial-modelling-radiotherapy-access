@@ -26,4 +26,4 @@ pycountry>=22.3.5
 
 # Optional (for netCDF4 / GLOBOCAN tensor loading)
 # netCDF4>=1.6.0   # if xarray cannot read .nc without it
-timezonefinder>=6.5,<7  # local departure times (6.x keeps numpy<2)
+# timezonefinder        # only for fetching new driving times (scripts/fetch_tt_res6.py), not the app
