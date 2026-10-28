@@ -252,12 +252,13 @@ def _allocate_proportional(
     a_fac: np.ndarray,
     a_p: np.ndarray,
     size_weighting: bool,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Capacity-capped balanced-FCA allocation. Returns (allocated, remaining caps)."""
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Capacity-capped balanced-FCA allocation. Returns (allocated, remaining caps,
+    demand Q_f directed to each facility)."""
     n_fac = capacities.size
     allocated = np.zeros(n, dtype=np.float64)
     if a_hex.size == 0:
-        return allocated, capacities.copy()
+        return allocated, capacities.copy(), np.zeros(n_fac)
 
     w = a_p * (capacities[a_fac] if size_weighting else 1.0)
     row_sum = np.bincount(a_hex, weights=w, minlength=n)
@@ -272,7 +273,7 @@ def _allocate_proportional(
     served = demand_sent * ratio[a_fac]
     allocated = np.bincount(a_hex, weights=served, minlength=n)
     used = np.bincount(a_fac, weights=served, minlength=n_fac)
-    return allocated, np.maximum(capacities - used, 0.0)
+    return allocated, np.maximum(capacities - used, 0.0), demand_on_fac
 
 
 def _allocate_optimal(
@@ -511,6 +512,7 @@ def compute_accessibility(
     # ------------------------------------------------------------------
     # Pass 2 — allocation
     # ------------------------------------------------------------------
+    facility_demand = None  # Q_f, from the capped 3SFCA rule only
     if allocation == "nearest_first":
         total_allocated, caps = _allocate_nearest_first(
             n, rt_demand, capacities, linac_locations,
@@ -530,7 +532,7 @@ def compute_accessibility(
         a_fac = np.concatenate(ent_fac) if ent_fac else np.zeros(0, dtype=np.int32)
         a_p = np.concatenate(ent_p) if ent_p else np.zeros(0, dtype=np.float64)
         if allocation == "proportional":
-            total_allocated, caps = _allocate_proportional(
+            total_allocated, caps, facility_demand = _allocate_proportional(
                 n, accessible, capacities, a_hex, a_fac, a_p, size_weighting,
             )
         else:
@@ -590,6 +592,10 @@ def compute_accessibility(
         "n_hexagons": n,
         "using_travel_time": travel_time_matrix is not None,
         "demand_fallback": demand_fallback,
+        # per facility, in the order of linac_locations
+        "facility_capacity": np.asarray(capacities, dtype=np.float64).tolist(),
+        "facility_treated": np.maximum(np.asarray(capacities) - np.asarray(caps), 0.0).tolist(),
+        "facility_demand": None if facility_demand is None else np.asarray(facility_demand).tolist(),
     }
     return g, stats
 

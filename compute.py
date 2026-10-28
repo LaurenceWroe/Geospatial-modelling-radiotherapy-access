@@ -28,7 +28,9 @@ from data.cancer import (
     DERIVED_CANCER_TYPES, XARRAY_PATH, DEFAULT_RTU_SET, DEFAULT_FRACTIONS_PER_COURSE,
 )
 from data.travel_time import CACHE_DIR as _TT_CACHE_DIR
-from data.tt_store import store_matrix
+import h3
+
+from data.tt_store import load_store, store_matrix
 from analysis.accessibility import (
     compute_accessibility, aggregate_access_gdf, attach_fraction_metrics, FRACTION_COLUMNS,
 )
@@ -441,9 +443,41 @@ def minutes_to_proxy_km(minutes: Optional[float]) -> Optional[float]:
     return _PROXY_KM[-1] * minutes / _PROXY_MIN[-1]
 
 
+def proxy_km_to_minutes(km):
+    """Inverse of minutes_to_proxy_km: the driving time whose calibrated
+    straight-line equivalent is *km* (linear beyond 120 min)."""
+    km = np.asarray(km, dtype=np.float64)
+    return np.where(km <= _PROXY_KM[-1], np.interp(km, _PROXY_KM, _PROXY_MIN),
+                    km * _PROXY_MIN[-1] / _PROXY_KM[-1])
+
+
+def _great_circle_km(lat_lon: np.ndarray, lat: float, lon: float) -> np.ndarray:
+    la1, lo1 = np.radians(lat_lon[:, 0]), np.radians(lat_lon[:, 1])
+    la2, lo2 = np.radians(lat), np.radians(lon)
+    a = np.sin((la2 - la1) / 2) ** 2 + np.cos(la1) * np.cos(la2) * np.sin((lo2 - lo1) / 2) ** 2
+    return 6371.0088 * 2 * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
+
+
+def proxy_minutes_column(hex_ids, lat: float, lon: float) -> np.ndarray:
+    """Driving minutes from each hexagon centroid to (lat, lon), from the calibrated
+    straight-line equivalent; inf beyond the store's 120-min cut-off."""
+    ll = np.array([h3.cell_to_latlng(c) for c in hex_ids])
+    t = proxy_km_to_minutes(_great_circle_km(ll, lat, lon)).astype(np.float32)
+    t[t > REGION_TT_MAX_MIN] = np.inf
+    return t
+
+
 def _regional_tt_matrix(iso3: str, locs, hex_ids, tt_mode: str):
-    """2 h matrix for this country's facilities from the res-6 store, or None."""
-    return store_matrix(iso3, hex_ids, locs, tt_mode)
+    """2 h matrix for this country's facilities from the res-6 store, or None when
+    the country has no store. Facilities missing from the store (new or planned
+    centres) get the calibrated straight-line equivalent of driving time."""
+    store = load_store(iso3, tt_mode)
+    if store is None or not locs:
+        return None
+    m, found = store.matrix(hex_ids, locs, return_found=True)
+    for j in np.flatnonzero(~found):
+        m[:, j] = proxy_minutes_column(hex_ids, locs[j][0], locs[j][1])
+    return m if np.isfinite(m).any() else None
 
 
 @st.cache_data(show_spinner=False, max_entries=1000)
@@ -467,6 +501,7 @@ def _compute_access_one_country_for_region(
     hypofractionation: float = 1.0,
     site_fractions: tuple = (),
     tt_mode: Optional[str] = None,
+    linac_locs: Optional[tuple] = None,
 ):
     """Cached per-country computation for use in per-country regional aggregation.
 
@@ -482,6 +517,9 @@ def _compute_access_one_country_for_region(
     minutes: the country's cached res-5 matrix is used if one exists, otherwise
     the minutes are converted to calibrated great-circle km
     (``c_stats["time_source"]`` is "traveltime", "proxy" or "none").
+
+    *linac_locs* ((lat, lon, n_linacs), ...) replaces the DIRAC facilities,
+    e.g. with edited machine counts at the same centres.
     """
     country_obj = pycountry.countries.get(alpha_2=alpha2)
     if country_obj is None:
@@ -514,12 +552,16 @@ def _compute_access_one_country_for_region(
         except Exception:
             cap_basis = None
 
-    try:
-        c_locs, _ = load_linacs_from_dirac_db(c_name)
+    if linac_locs is not None:
+        c_locs = [loc for loc in linac_locs if loc[2] > 0]
         has_linacs = bool(c_locs)
-    except (ValueError, FileNotFoundError):
-        c_locs = []
-        has_linacs = False
+    else:
+        try:
+            c_locs, _ = load_linacs_from_dirac_db(c_name)
+            has_linacs = bool(c_locs)
+        except (ValueError, FileNotFoundError):
+            c_locs = []
+            has_linacs = False
 
     time_source = None
     tt = None
@@ -527,7 +569,7 @@ def _compute_access_one_country_for_region(
         tt = _regional_tt_matrix(c_iso3, c_locs, list(gdf["h3"]), tt_mode)
         time_source = "traveltime" if tt is not None else "proxy"
         if tt is None:
-            lambda_km = minutes_to_proxy_km(lambda_km) if model != "power" else lambda_km
+            lambda_km = minutes_to_proxy_km(lambda_km)  # scale or power-law plateau, in minutes
             max_distance_km = minutes_to_proxy_km(max_distance_km)
             cutoff_km = minutes_to_proxy_km(cutoff_km)
     elif tt_mode:
@@ -924,3 +966,210 @@ def _data_tab_rt_need(iso3: str, rtu_set: str = DEFAULT_RTU_SET) -> dict:
         total_rt += n * frac
     total_cancer_excl_nmsc = cases.get("All cancers excl. NMSC", 0.0)
     return {"total_rt_cases": total_rt, "total_cancer_excl_nmsc": total_cancer_excl_nmsc}
+
+
+# ---------------------------------------------------------------------------
+# Simplified dashboard: the paper's main configuration, per member country
+# ---------------------------------------------------------------------------
+
+DASHBOARD_RES = 5                  # compute resolution of the paper; maps aggregate from it
+DASHBOARD_EXP_SCALE_MIN = 60.0     # exponential decay scale (sensitivity analysis)
+DASHBOARD_POWER_PLATEAU_MIN = 10.0  # power-law plateau x0 and exponent beta = 1
+DASHBOARD_POWER_BETA = 1.0
+
+
+def compute_members(alpha2_list, model: str = "gaussian", t_max: float = 120.0,
+                    capacity: float = 450.0, rtu_set: str = DEFAULT_RTU_SET, linacs: Optional[dict] = None,
+                    custom_rtu: tuple = (), allocation: str = "proportional", progress_callback=None):
+    """Capped-3SFCA access for each member country at resolution 5, on stored
+    local-08:00 driving times (calibrated straight-line proxy where TravelTime
+    has no coverage) and the optimal RTU of *rtu_set* (CCORE 2012 by default).
+    *linacs* maps alpha-2 codes to ((lat, lon, n_linacs), ...) replacing that
+    country's DIRAC facilities. *custom_rtu* ((cancer, percent), ...) replaces
+    the optimal RTUs. *allocation* is "proportional" (capped 3SFCA) or
+    "nearest_first".
+
+    *t_max* is the driving-time limit in minutes: the catchment of the step and
+    Gaussian models and the cut-off of the exponential (scale 60 min) and power
+    law (plateau 10 min, beta 1).
+
+    Returns (hexes, countries):
+      hexes      h3, country, population, D, A, A_G per resolution-5 hexagon
+      countries  one row per country: country, iso3, D, capacity, A_C, A_G, A,
+                 n_facilities, n_linacs, time_source
+    """
+    scale, shape, cutoff = None, 2.0, None
+    if model == "exponential":
+        scale, cutoff = DASHBOARD_EXP_SCALE_MIN, t_max
+    elif model == "power":
+        scale, shape, cutoff = DASHBOARD_POWER_PLATEAU_MIN, DASHBOARD_POWER_BETA, t_max
+    hexes, rows = [], []
+    for i, a2 in enumerate(alpha2_list):
+        res = _compute_access_one_country_for_region(
+            a2, scale if scale is not None else t_max, model, t_max, capacity,
+            "custom" if custom_rtu else "optimal", 0.25,
+            DASHBOARD_RES, False, shape, tuple(custom_rtu), rtu_set=rtu_set, allocation=allocation, cutoff_km=cutoff,
+            tt_mode="driving", linac_locs=(linacs or {}).get(a2),
+        )
+        if progress_callback is not None:
+            progress_callback(i + 1, len(alpha2_list))
+        if res is None:
+            continue
+        g, s = res
+        obj = pycountry.countries.get(alpha_2=a2)
+        d = g["rt_demand"].to_numpy(np.float64)
+        hexes.append(pd.DataFrame({
+            "h3": g["h3"].to_numpy(), "country": obj.name,
+            "population": g["population"].to_numpy(np.float64), "D": d,
+            "A": g["rt_treated"].to_numpy(np.float64),
+            "A_G": g["access_probability"].to_numpy(np.float64) * d,
+        }))
+        cap = float(s.get("total_national_capacity", 0.0))
+        rows.append({
+            "country": obj.name, "iso3": obj.alpha_3, "D": float(d.sum()), "capacity": cap,
+            "A_C": min(float(d.sum()), cap), "A_G": float(hexes[-1]["A_G"].sum()),
+            "A": float(s.get("total_rt_treated", 0.0)), "n_facilities": int(s.get("n_facilities", 0)),
+            "n_linacs": float(s.get("total_machines", 0)), "time_source": s.get("time_source"),
+        })
+    if not hexes:
+        raise ValueError("No member country has population and GLOBOCAN data")
+    return pd.concat(hexes, ignore_index=True), pd.DataFrame(rows)
+
+
+def access_profile(a_c: float, a_g: float, a: float, thr: float = 0.8) -> str:
+    """Access profile of a country from its capacity-only, geography-only and RadMaps
+    shares of demand (paper, Section 3.2), at a nominal threshold *thr*."""
+    if a >= thr:
+        return "Strong access"
+    if a_c < thr and a_g < thr:
+        return "Doubly constrained"
+    return "Capacity constrained" if a_c < a_g else "Geography constrained"
+
+
+def _country_inputs(alpha2: str, model: str, t_max: float, custom_rtu: tuple = (), base_locs=None):
+    """Shared set-up for single-country calculations at resolution 5: (gdf, demand,
+    facilities, driving-time matrix or None, km_mode, decay keyword arguments).
+    *km_mode* is True where TravelTime has no coverage and distances are used."""
+    obj = pycountry.countries.get(alpha_2=alpha2)
+    gdf = _load_pop(obj.name, DASHBOARD_RES)
+    dem, _, _ = _build_demand(gdf, obj.alpha_3, "custom" if custom_rtu else "optimal", 0.25, tuple(custom_rtu))
+    if dem is None:
+        raise ValueError(f"{obj.name} has no GLOBOCAN estimate")
+    if base_locs is None:
+        try:
+            base_locs, _ = load_linacs_from_dirac_db(obj.name)
+        except (ValueError, FileNotFoundError):
+            base_locs = []
+    locs = [tuple(x) for x in base_locs]
+    tt = _regional_tt_matrix(obj.alpha_3, locs, list(gdf["h3"]), "driving") if locs else None
+    km_mode = tt is None and obj.alpha_3 in {"CHN", "RUS", "PRK", "KOR"}
+    scale, shape, cutoff = None, 2.0, None
+    if model == "exponential":
+        scale, cutoff = DASHBOARD_EXP_SCALE_MIN, t_max
+    elif model == "power":
+        scale, shape, cutoff = DASHBOARD_POWER_PLATEAU_MIN, DASHBOARD_POWER_BETA, t_max
+    thr = minutes_to_proxy_km(t_max) if km_mode else t_max
+    if km_mode:
+        scale, cutoff = minutes_to_proxy_km(scale), minutes_to_proxy_km(cutoff)
+    kw = dict(model=model, lambda_km=scale if scale is not None else thr, cutoff_km=cutoff, max_distance_km=thr,
+              weibull_k=shape)
+    return gdf, dem, locs, tt, km_mode, kw
+
+
+def centre_loads(alpha2: str, model: str = "gaussian", t_max: float = 120.0, capacity: float = 450.0,
+                 base_locs=None, custom_rtu: tuple = (), allocation: str = "proportional") -> pd.DataFrame:
+    """Per centre (in the order of *base_locs*, or DIRAC): capacity, patients
+    treated and, for capped 3SFCA, the demand Q_f directed to it."""
+    gdf, dem, locs, tt, _, kw = _country_inputs(alpha2, model, t_max, custom_rtu, base_locs)
+    if not locs:
+        return pd.DataFrame(columns=["lat", "lon", "capacity", "treated", "demand"])
+    _, st_ = compute_accessibility(gdf, locs, capacity_per_machine_per_year=capacity, demand=dem,
+                                   h3_resolution=DASHBOARD_RES, travel_time_matrix=tt, allocation=allocation, **kw)
+    q = st_["facility_demand"]
+    return pd.DataFrame({"lat": [x[0] for x in locs], "lon": [x[1] for x in locs],
+                         "capacity": st_["facility_capacity"], "treated": st_["facility_treated"],
+                         "demand": q if q is not None else [np.nan] * len(locs)})
+
+
+def plan_centres(alpha2: str, model: str = "gaussian", t_max: float = 120.0, capacity: float = 450.0,
+                 base_locs=None, n_linacs: Optional[int] = 10, linacs_per_step: int = 1, strategy: str = "deficit",
+                 snap_min: Optional[float] = None, custom_rtu: tuple = (), target_access: Optional[float] = None,
+                 max_steps: int = 200, allocation: str = "proportional", progress_callback=None):
+    """Greedy placement of new linacs in one country (resolution 5; *allocation*
+    "proportional" for capped 3SFCA or "nearest_first").
+
+    At each step the hexagon with the largest unmet demand (*strategy* "deficit")
+    or the largest demand out of geographic reach ("isolation") receives
+    *linacs_per_step* linacs: added to the existing centre nearest to it when one
+    lies within *snap_min* minutes, otherwise as a new centre at its centroid.
+    New centres use the calibrated straight-line equivalent of driving time.
+
+    Stops after *n_linacs* linacs or, with *target_access* (fraction of demand),
+    once national access reaches it; never after more than *max_steps* steps.
+
+    Returns (before, steps, locs): national D, A_C, A_G, A before; one dict per
+    step; and the final ((lat, lon, n_linacs), ...).
+    """
+    gdf, dem, locs, tt, km_mode, kw = _country_inputs(alpha2, model, t_max, custom_rtu, base_locs)
+    hex_ids = list(gdf["h3"])
+    if tt is None and not km_mode:  # no centres yet: every centre will be new
+        tt = np.zeros((len(hex_ids), 0), dtype=np.float32)
+    ll = np.array([h3.cell_to_latlng(c) for c in hex_ids])
+
+    def run():
+        if not locs:
+            z = np.zeros(len(hex_ids))
+            return pd.DataFrame({"rt_untreated": dem, "access_probability": z}), 0.0
+        g, st_ = compute_accessibility(gdf, locs, capacity_per_machine_per_year=capacity, demand=dem,
+                                       h3_resolution=DASHBOARD_RES, travel_time_matrix=tt, allocation=allocation,
+                                       **kw)
+        return g, float(st_["total_rt_treated"])
+
+    def metrics(g, a):
+        D = float(dem.sum())
+        n = float(sum(x[2] for x in locs))
+        return {"D": D, "A_C": min(D, n * capacity), "A_G": float((g["access_probability"] * dem).sum()), "A": a,
+                "n_linacs": n}
+
+    g, a = run()
+    before = metrics(g, a)
+    steps = []
+    added, a_prev = 0, a
+    for i in range(max_steps):
+        if target_access is not None and a >= target_access * before["D"]:
+            break
+        if target_access is None and added >= n_linacs:
+            break
+        k = linacs_per_step if target_access is not None else min(linacs_per_step, n_linacs - added)
+        score = (g["rt_untreated"].to_numpy(np.float64) if strategy == "deficit"
+                 else dem * (1.0 - g["access_probability"].to_numpy(np.float64)))
+        h = int(np.argmax(score))
+        if score[h] <= 0:
+            break
+        j = None
+        if snap_min and locs:
+            if km_mode:
+                d = np.array([_great_circle_km(ll[h:h + 1], la, lo)[0] for la, lo, _ in locs])
+                j = int(np.argmin(d)) if d.min() <= minutes_to_proxy_km(snap_min) else None
+            else:
+                j = int(np.argmin(tt[h])) if tt.shape[1] and tt[h].min() <= snap_min else None
+        if j is not None:
+            la, lo, n = locs[j]
+            locs[j] = (la, lo, n + k)
+            where = "existing centre"
+        else:
+            la, lo = float(ll[h, 0]), float(ll[h, 1])
+            locs.append((la, lo, float(k)))
+            if not km_mode:
+                tt = np.hstack([tt, proxy_minutes_column(hex_ids, la, lo)[:, None]])
+            where = "new centre"
+        g, a = run()
+        added += k
+        m = metrics(g, a)
+        steps.append({"step": i + 1, "lat": round(la, 4), "lon": round(lo, 4), "where": where,
+                      "linacs_added": k, "treated": a, "additional": a - a_prev,
+                      "A/D (%)": 100 * a / m["D"], "deficit": m["D"] - a})
+        a_prev = a
+        if progress_callback is not None:
+            progress_callback(i + 1, 100 * a / m["D"], added)
+    return before, steps, tuple(locs)

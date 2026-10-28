@@ -98,10 +98,14 @@ A template is provided at `.streamlit/secrets.toml.example`.
 
 ---
 
+The earlier full research dashboard (benchmarks, convergence and sensitivity tabs) is kept on the
+[`full-dashboard`](https://github.com/LaurenceWroe/Geospatial-modelling-radiotherapy-access/tree/full-dashboard) branch.
+
 ## Project Structure
 
 ```
-app.py                        # Main Streamlit application
+app.py                        # RadMaps v1.1 Streamlit dashboard
+map_view.py                   # Map layers, colour ramps and colour bar for the dashboard
 requirements.txt              # Python dependencies
 analysis/
   accessibility.py            # H3 accessibility computation (geographic + capacity-limited)
