@@ -41,7 +41,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 from compute import (_country_options, _load_dirac, _region_options, access_profile, centre_loads, compute_members,
-                     plan_centres)
+                     minutes_to_proxy_km, plan_centres)
 from data.cancer import DEFAULT_RTU_SET, DERIVED_CANCER_TYPES, get_cancer_types, get_optimal_rt_fractions
 from data.regions import get_region
 from map_view import (
@@ -105,7 +105,7 @@ ALLOCATIONS = {"proportional": "Capped 3SFCA", "nearest_first": "Nearest-first"}
 _A_PREFIX = {"proportional": "A", "nearest_first": "A_nf"}  # store column prefix per allocation
 
 # The main configuration of the RadMaps paper
-PAPER = {"t_max": 120.0, "capacity": 450.0, "model": "gaussian", "alloc": "proportional",
+PAPER = {"access": "driving", "t_max": 120.0, "capacity": 450.0, "model": "gaussian", "alloc": "proportional",
          "rtu_mode": "Optimal (CCORE 2012)"}
 
 # Access profiles of the paper (Section 3.2), at a nominal 80 % threshold
@@ -146,17 +146,18 @@ def _country_store(iso3: str) -> Optional[pd.DataFrame]:
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def _computed(alpha2_list: tuple, alloc, rtu, model, t_max, capacity, linacs: tuple, custom_rtu: tuple = ()):
+def _computed(alpha2_list: tuple, alloc, rtu, model, t_max, capacity, linacs: tuple, custom_rtu: tuple = (),
+              access: str = "driving"):
     return compute_members(list(alpha2_list), model=model, t_max=t_max, capacity=capacity, rtu_set=rtu,
-                           linacs=dict(linacs), custom_rtu=custom_rtu, allocation=alloc)
+                           linacs=dict(linacs), custom_rtu=custom_rtu, allocation=alloc, access=access)
 
 
 def _country_result(alpha2: str, alloc, rtu, model, t_max, capacity, linacs: dict, allow_compute: bool = False,
-                    custom_rtu: tuple = ()):
+                    custom_rtu: tuple = (), access: str = "driving"):
     """(hexes at resolution 5, one-row country table) for one country, or None
     when no stored result exists and *allow_compute* is False."""
     obj = pycountry.countries.get(alpha_2=alpha2)
-    store = None if (alpha2 in linacs or custom_rtu) else _country_store(obj.alpha_3)
+    store = None if (alpha2 in linacs or custom_rtu or access != "driving") else _country_store(obj.alpha_3)
     world = _world_tables()
     a_col = f"{_A_PREFIX[alloc]}|{rtu}|{model}|{t_max:.0f}|{capacity:.0f}"
     if store is not None and a_col in store.columns and world is not None:
@@ -171,24 +172,24 @@ def _country_result(alpha2: str, alloc, rtu, model, t_max, capacity, linacs: dic
     if not allow_compute:
         return None
     edits = ((alpha2, linacs[alpha2]),) if alpha2 in linacs else ()
-    return _computed((alpha2,), alloc, rtu, model, t_max, capacity, edits, custom_rtu)
+    return _computed((alpha2,), alloc, rtu, model, t_max, capacity, edits, custom_rtu, access)
 
 
 def _region_result(region: str, alloc, rtu, model, t_max, capacity, linacs: dict, allow_compute: bool = False,
-                   custom_rtu: tuple = ()):
+                   custom_rtu: tuple = (), access: str = "driving"):
     """(hexes, country table) for a region, from the World cache except for
     countries with edited linacs, which are computed and summed to resolution 3.
     None when that needs a computation and *allow_compute* is False."""
     members = [a for a in get_region(region).member_alpha2 if pycountry.countries.get(alpha_2=a)]
     world = _world_tables()
-    if world is not None and _select(world[1], alloc, rtu, model, t_max, capacity).empty:
-        world = None  # this allocation is not pre-built
+    if world is not None and (access != "driving" or _select(world[1], alloc, rtu, model, t_max, capacity).empty):
+        world = None  # not pre-built for these inputs
     if (world is None or custom_rtu or any(a in linacs for a in members)) and not allow_compute:
         return None
     if world is None or custom_rtu:
         bar = st.progress(0.0, text="Computing each country")
         out = compute_members(members, model=model, t_max=t_max, capacity=capacity, rtu_set=rtu, linacs=linacs,
-                              custom_rtu=custom_rtu, allocation=alloc, progress_callback=lambda i, n: bar.progress(i / n, text=f"Computing: {i} / {n}"))
+                              custom_rtu=custom_rtu, allocation=alloc, access=access, progress_callback=lambda i, n: bar.progress(i / n, text=f"Computing: {i} / {n}"))
         bar.empty()
         return out
     edited = tuple(sorted(a for a in members if a in linacs))
@@ -196,7 +197,8 @@ def _region_result(region: str, alloc, rtu, model, t_max, capacity, linacs: dict
     hx, ct = (_select(d, alloc, rtu, model, t_max, capacity) for d in world)
     hx, ct = hx[hx["country"].isin(names)], ct[ct["country"].isin(names)]
     if edited:
-        e_hx, e_ct = _computed(edited, alloc, rtu, model, t_max, capacity, tuple((a, linacs[a]) for a in edited))
+        e_hx, e_ct = _computed(edited, alloc, rtu, model, t_max, capacity, tuple((a, linacs[a]) for a in edited),
+                               (), access)
         hx = pd.concat([hx, e_hx.assign(h3=[h3.cell_to_parent(c, 3) for c in e_hx["h3"]])], ignore_index=True)
         ct = pd.concat([ct, e_ct], ignore_index=True)
     return hx, ct
@@ -321,18 +323,23 @@ def _facility_layer(fac: pd.DataFrame, capacity: float, by_load: bool = False, r
 
 
 def _render_profiles(countries: pd.DataFrame, view: pdk.ViewState, extra: list) -> None:
-    """Countries coloured by access profile, with a legend in place of the colour bar."""
+    """Countries coloured by access profile. The legend is a set of buttons: choosing a profile
+    shows its countries in full colour and fades the others."""
+    _sq = {"Strong access": "🟩", "Capacity constrained": "🟦", "Geography constrained": "🟧",
+           "Doubly constrained": "🟥"}
+    pick = st.pills("Highlight a profile (choose again to show all)", list(PROFILES), selection_mode="single",
+                    key="profile_pick", format_func=lambda k: f"{_sq[k]} {k}")
+    col_map, col_lg = st.columns([7, 1])
     gj = _land_geojson_profiles(tuple(sorted(
         (pycountry.countries.get(alpha_3=r["iso3"]).alpha_2,
          _profile(r["A_C"] / r["D"], r["A_G"] / r["D"], r["A"] / r["D"]), r["country"],
-         round(100 * r["A"] / r["D"], 1)) for _, r in countries.iterrows() if r["D"] > 0)))
+         round(100 * r["A"] / r["D"], 1)) for _, r in countries.iterrows() if r["D"] > 0)), pick)
     layer = pdk.Layer("GeoJsonLayer", id="profiles", data=gj, filled=True, stroked=True,
                       get_fill_color="properties.fill", get_line_color=[255, 255, 255], line_width_min_pixels=0.5,
                       pickable=True)
     nd = _build_no_data_fill_layer()
     deck = pdk.Deck(layers=([nd] if nd is not None else []) + [layer] + extra, initial_view_state=view,
                     map_style=_CARTO_LIGHT_NOLABELS, tooltip={"html": "{tip}"})
-    col_map, col_lg = st.columns([7, 1])
     with col_map:
         st.pydeck_chart(deck, width="stretch", height=MAP_HEIGHT, key=f"profiles_{location}")
     with col_lg:
@@ -353,11 +360,15 @@ def _country_geojson(rows: tuple) -> dict:
     return {"type": "FeatureCollection", "features": feats}
 
 
-def _land_geojson_profiles(rows: tuple) -> dict:
-    """Country polygons with a fill colour and tooltip per access profile."""
+def _land_geojson_profiles(rows: tuple, highlight: Optional[str] = None) -> dict:
+    """Country polygons with a fill colour and tooltip per access profile; with *highlight*,
+    countries of other profiles are faded to grey."""
+    def fill(prof):
+        if highlight is None or prof == highlight:
+            return tuple(PROFILES[prof] + [230 if highlight else 210])
+        return (205, 205, 205, 110)
     return _country_geojson(tuple(
-        (a2, tuple(PROFILES[prof] + [210]), f"<b>{name}</b><br/>{prof}<br/>RadMaps access {pct}%")
-        for a2, prof, name, pct in rows))
+        (a2, fill(prof), f"<b>{name}</b><br/>{prof}<br/>RadMaps access {pct}%") for a2, prof, name, pct in rows))
 
 
 # ---------------------------------------------------------------------------
@@ -369,8 +380,8 @@ LOCATIONS = _regions + [SEPARATOR] + _country_options()
 edits: dict = st.session_state.setdefault("centre_edits", {})  # alpha-2 -> list of centre records
 _ver = st.session_state.setdefault("ed_ver", 0)  # bumped to reset the table editors
 
-_URL_KEYS = {"location": str, "res": int, "t_max": float, "capacity": float, "model": str, "alloc": str,
-             "layer": str}
+_URL_KEYS = {"location": str, "res": int, "access": str, "t_max": float, "capacity": float, "model": str,
+             "alloc": str, "layer": str}
 if not st.session_state.get("_url_read"):
     st.session_state["_url_read"] = True
     for k, typ in _URL_KEYS.items():
@@ -379,7 +390,7 @@ if not st.session_state.get("_url_read"):
                 st.session_state[k] = typ(st.query_params[k])
             except ValueError:
                 pass
-for k, ok in [("location", LOCATIONS), ("t_max", TIMES), ("capacity", CAPACITIES), ("model", list(MODELS)),
+for k, ok in [("location", LOCATIONS), ("access", ["driving", "distance"]), ("t_max", TIMES), ("capacity", CAPACITIES), ("model", list(MODELS)),
               ("alloc", list(ALLOCATIONS))]:
     if st.session_state.get(k) not in ok:
         st.session_state.pop(k, None)
@@ -413,19 +424,12 @@ with st.sidebar:
         if st.session_state.get("res") not in res_opts or st.session_state.get("_was_region") != is_region:
             st.session_state["res"] = res_opts[-1]
         st.session_state["_was_region"] = is_region
-        res = st.selectbox("H3 resolution", res_opts, key="res",
-                           format_func=lambda r: f"H{r}",
-                           help="Access is always computed at resolution 5 and summed into larger hexagons.")
-        st.markdown(
-            "<table style='font-size:0.75rem;color:#555;border-collapse:collapse;width:100%'>"
-            "<tr><th style='text-align:left'>H3</th><th style='text-align:right'>Cell area</th>"
-            "<th style='text-align:right'>Centroid spacing</th></tr>"
-            + "".join(f"<tr{' style=\'font-weight:600;color:#222\'' if r == res else ''}><td>H{r}</td>"
-                      f"<td style='text-align:right'>{h3.average_hexagon_area(r, 'km^2'):,.0f} km²</td>"
-                      f"<td style='text-align:right'>"
-                      f"{math.sqrt(3) * h3.average_hexagon_edge_length(r, 'km'):,.0f} km</td></tr>"
-                      for r in res_opts)
-            + "</table>", unsafe_allow_html=True)
+        res = st.selectbox(
+            "H3 resolution", res_opts, key="res",
+            format_func=lambda r: (f"{r} ({math.sqrt(3) * h3.average_hexagon_edge_length(r, 'km'):,.0f} km; "
+                                   f"{h3.average_hexagon_area(r, 'km^2'):,.0f} km²)"),
+            help="Each resolution is shown with its average centroid-to-centroid distance and cell area. "
+                 "Access is always computed at resolution 5 and summed into larger hexagons.")
     alpha2 = None if is_region else pycountry.countries.lookup(location).alpha_2
     _fac = _load_dirac(location)
     dirac = (_fac[1] if _fac[0] is not None
@@ -436,8 +440,15 @@ with st.sidebar:
         st.button("Reset to the paper's configuration", on_click=_reset_to_paper, width="stretch",
                   help="Gaussian decay, 120 min, 450 patients per linac, capped 3SFCA, CCORE 2012 RTU and DIRAC "
                        "centres, as in the RadMaps paper.")
-        t_max = st.selectbox("Driving-time limit", TIMES, key="t_max",
-                             format_func=lambda t: f"{t:.0f} min",
+        access = st.selectbox(
+            "Access variable", ["driving", "distance"], key="access",
+            format_func={"driving": "Driving time", "distance": "Straight-line distance"}.get,
+            help="Driving time (default) from TravelTime, leaving at 08:00 local time on a Wednesday; or "
+                 "great-circle distance, with each time limit replaced by its calibrated straight-line "
+                 "equivalent. Straight-line results are calculated on request.")
+        t_max = st.selectbox("Driving-time limit" if access == "driving" else "Distance limit", TIMES, key="t_max",
+                             format_func=(lambda t: f"{t:.0f} min") if access == "driving"
+                             else (lambda t: f"{minutes_to_proxy_km(t):.1f} km (≈ {t:.0f} min drive)"),
                              help="Longest drive to a radiotherapy centre at which patients are still treated. "
                                   "Driving times leave at 08:00 local time on a Wednesday. Where TravelTime has "
                                   "no coverage (China, Russia, North and South Korea) the calibrated straight-line "
@@ -555,14 +566,18 @@ applied, applied_rtu = applied_state["linacs"], applied_state["rtu"]
 if applied_rtu and location == "World":
     st.sidebar.info("Custom RTUs are applied to a country or a region; the World map uses CCORE 2012.")
     applied_rtu = ()
+if access == "distance" and location == "World":
+    st.info("Straight-line distance is calculated on request for a country or a region; the World view "
+            "is pre-computed for driving time only.")
+    st.stop()
 
-_calc_key = ("calc", location, alloc, model, t_max, capacity)
+_calc_key = ("calc", location, access, alloc, model, t_max, capacity)
 with st.spinner(f"Loading results for {location}…"):
     try:
         allow = bool(st.session_state.get(_calc_key)) or bool(applied) or bool(applied_rtu)
-        res_ = (_region_result(location, alloc, RTU, model, t_max, capacity, applied, allow, applied_rtu)
+        res_ = (_region_result(location, alloc, RTU, model, t_max, capacity, applied, allow, applied_rtu, access)
                 if is_region else
-                _country_result(alpha2, alloc, RTU, model, t_max, capacity, applied, allow, applied_rtu))
+                _country_result(alpha2, alloc, RTU, model, t_max, capacity, applied, allow, applied_rtu, access))
     except ValueError as exc:
         st.error(f"No results for {location}: {exc}")
         st.stop()
@@ -579,7 +594,7 @@ if not is_region and alpha2 in applied and alpha2 in edits:
 else:
     facilities = dirac.assign(capacity=dirac["n_linacs"] * capacity, planned=False)
 facilities = facilities.reset_index(drop=True)
-_loads_key = None if is_region else ("loads", alpha2, alloc, model, t_max, capacity, applied_rtu,
+_loads_key = None if is_region else ("loads", alpha2, access, alloc, model, t_max, capacity, applied_rtu,
                                      applied.get(alpha2))
 _loads = st.session_state.get("loads", {}).get(_loads_key) if _loads_key else None
 if _loads is not None and len(_loads) == len(facilities):
@@ -694,7 +709,7 @@ with tab_map:
                 help="Strong access: A/D ≥ 80%. Otherwise capacity constrained (A_C < A_G), geography constrained "
                      "(A_G < A_C), or doubly constrained when both A_C/D and A_G/D are below 80% (paper, "
                      "Section 3.2).")
-    _diff = [n for n, k, v in [("driving-time limit", "t_max", t_max), ("capacity", "capacity", capacity),
+    _diff = [n for n, k, v in [("access variable", "access", access), ("driving-time limit", "t_max", t_max), ("capacity", "capacity", capacity),
                                ("decay model", "model", model), ("allocation", "alloc", alloc)] if PAPER[k] != v]
     _diff += ["custom RTU"] if applied_rtu else []
     _diff += ["edited centres"] if applied else []
@@ -702,8 +717,11 @@ with tab_map:
         st.caption("⚠️ Differs from the paper's main configuration in: " + ", ".join(_diff) + ".")
     st.caption(
         f"{int(round(tot['n_linacs'])):,} linacs{' (edited)' if applied else ''}"
-        f"{', custom RTU' if applied_rtu else ''}. Driving-time limit {t_max:.0f} min, "
-        f"{MODELS[model]} decay, {capacity:.0f} patients per linac per year, {'custom' if applied_rtu else '2012 CCORE optimal'} RTU, {ALLOCATIONS[alloc]} "
+        f"{', custom RTU' if applied_rtu else ''}. "
+        + (f"Driving-time limit {t_max:.0f} min, " if access == "driving" else
+           f"Straight-line distance limit {minutes_to_proxy_km(t_max):.1f} km (calibrated equivalent of "
+           f"{t_max:.0f} min), ")
+        + f"{MODELS[model]} decay, {capacity:.0f} patients per linac per year, {'custom' if applied_rtu else '2012 CCORE optimal'} RTU, {ALLOCATIONS[alloc]} "
         f"allocation; computed at H3 resolution 5 and shown at resolution {res}."
         + (f" Straight-line equivalent of driving time used for {', '.join(proxy)}." if proxy else "")
     )
@@ -771,13 +789,13 @@ with tab_plan:
             before, steps, locs = plan_centres(
                 alpha2, model, t_max, capacity, base_locs, n_add, per_step,
                 "deficit" if strategy == "Largest unmet demand" else "isolation", snap, applied_rtu,
-                target_access=target, max_steps=MAX_STEPS, allocation=alloc, progress_callback=_progress)
+                target_access=target, max_steps=MAX_STEPS, allocation=alloc, access=access, progress_callback=_progress)
             other = None
             if compare:
                 _, other, _ = plan_centres(
                     alpha2, model, t_max, capacity, base_locs, n_add, per_step,
                     "isolation" if strategy == "Largest unmet demand" else "deficit", snap, applied_rtu,
-                    target_access=target, max_steps=MAX_STEPS, allocation=alloc, progress_callback=_progress)
+                    target_access=target, max_steps=MAX_STEPS, allocation=alloc, access=access, progress_callback=_progress)
             bar.empty()
             if target and steps and steps[-1]["A/D (%)"] < 100 * target:
                 st.warning(f"Stopped after {MAX_STEPS} steps at {steps[-1]['A/D (%)']:.1f}% access; increase the "
@@ -899,7 +917,7 @@ with tab_data:
                              for r in (edits[alpha2] if alpha2 in applied and alpha2 in edits
                                        else _dirac_rows(dirac)))
                 st.session_state.setdefault("loads", {})[_loads_key] = centre_loads(
-                    alpha2, model, t_max, capacity, base, applied_rtu, alloc)
+                    alpha2, model, t_max, capacity, base, applied_rtu, alloc, access)
             st.rerun()
         cols = ["name", "city", "n_linacs", "capacity"] + (["demand", "treated", "load"] if "load" in facilities else [])
         st.dataframe(facilities[cols + ["lat", "lon"]].assign(
@@ -1018,5 +1036,5 @@ H3 resolution-6 hexagon to each radiotherapy centre. Access is computed at H3 re
     )
 
 # shareable link: the current view in the URL
-st.query_params.from_dict({"location": location, "res": res, "t_max": t_max, "capacity": capacity,
+st.query_params.from_dict({"location": location, "res": res, "access": access, "t_max": t_max, "capacity": capacity,
                            "model": model, "alloc": alloc, "layer": layer})

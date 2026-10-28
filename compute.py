@@ -980,14 +980,16 @@ DASHBOARD_POWER_BETA = 1.0
 
 def compute_members(alpha2_list, model: str = "gaussian", t_max: float = 120.0,
                     capacity: float = 450.0, rtu_set: str = DEFAULT_RTU_SET, linacs: Optional[dict] = None,
-                    custom_rtu: tuple = (), allocation: str = "proportional", progress_callback=None):
+                    custom_rtu: tuple = (), allocation: str = "proportional", access: str = "driving",
+                    progress_callback=None):
     """Capped-3SFCA access for each member country at resolution 5, on stored
     local-08:00 driving times (calibrated straight-line proxy where TravelTime
     has no coverage) and the optimal RTU of *rtu_set* (CCORE 2012 by default).
     *linacs* maps alpha-2 codes to ((lat, lon, n_linacs), ...) replacing that
     country's DIRAC facilities. *custom_rtu* ((cancer, percent), ...) replaces
     the optimal RTUs. *allocation* is "proportional" (capped 3SFCA) or
-    "nearest_first".
+    "nearest_first". *access* "distance" uses great-circle distance everywhere,
+    with every time parameter replaced by its calibrated km equivalent.
 
     *t_max* is the driving-time limit in minutes: the catchment of the step and
     Gaussian models and the cut-off of the exponential (scale 60 min) and power
@@ -1003,13 +1005,16 @@ def compute_members(alpha2_list, model: str = "gaussian", t_max: float = 120.0,
         scale, cutoff = DASHBOARD_EXP_SCALE_MIN, t_max
     elif model == "power":
         scale, shape, cutoff = DASHBOARD_POWER_PLATEAU_MIN, DASHBOARD_POWER_BETA, t_max
+    thr = t_max
+    if access == "distance":
+        thr, scale, cutoff = (minutes_to_proxy_km(x) for x in (t_max, scale, cutoff))
     hexes, rows = [], []
     for i, a2 in enumerate(alpha2_list):
         res = _compute_access_one_country_for_region(
-            a2, scale if scale is not None else t_max, model, t_max, capacity,
+            a2, scale if scale is not None else thr, model, thr, capacity,
             "custom" if custom_rtu else "optimal", 0.25,
             DASHBOARD_RES, False, shape, tuple(custom_rtu), rtu_set=rtu_set, allocation=allocation, cutoff_km=cutoff,
-            tt_mode="driving", linac_locs=(linacs or {}).get(a2),
+            tt_mode="driving" if access == "driving" else None, linac_locs=(linacs or {}).get(a2),
         )
         if progress_callback is not None:
             progress_callback(i + 1, len(alpha2_list))
@@ -1046,7 +1051,8 @@ def access_profile(a_c: float, a_g: float, a: float, thr: float = 0.8) -> str:
     return "Capacity constrained" if a_c < a_g else "Geography constrained"
 
 
-def _country_inputs(alpha2: str, model: str, t_max: float, custom_rtu: tuple = (), base_locs=None):
+def _country_inputs(alpha2: str, model: str, t_max: float, custom_rtu: tuple = (), base_locs=None,
+                    access: str = "driving"):
     """Shared set-up for single-country calculations at resolution 5: (gdf, demand,
     facilities, driving-time matrix or None, km_mode, decay keyword arguments).
     *km_mode* is True where TravelTime has no coverage and distances are used."""
@@ -1061,8 +1067,9 @@ def _country_inputs(alpha2: str, model: str, t_max: float, custom_rtu: tuple = (
         except (ValueError, FileNotFoundError):
             base_locs = []
     locs = [tuple(x) for x in base_locs]
-    tt = _regional_tt_matrix(obj.alpha_3, locs, list(gdf["h3"]), "driving") if locs else None
-    km_mode = tt is None and obj.alpha_3 in {"CHN", "RUS", "PRK", "KOR"}
+    tt = (_regional_tt_matrix(obj.alpha_3, locs, list(gdf["h3"]), "driving")
+          if locs and access == "driving" else None)
+    km_mode = access == "distance" or (tt is None and obj.alpha_3 in {"CHN", "RUS", "PRK", "KOR"})
     scale, shape, cutoff = None, 2.0, None
     if model == "exponential":
         scale, cutoff = DASHBOARD_EXP_SCALE_MIN, t_max
@@ -1077,10 +1084,11 @@ def _country_inputs(alpha2: str, model: str, t_max: float, custom_rtu: tuple = (
 
 
 def centre_loads(alpha2: str, model: str = "gaussian", t_max: float = 120.0, capacity: float = 450.0,
-                 base_locs=None, custom_rtu: tuple = (), allocation: str = "proportional") -> pd.DataFrame:
+                 base_locs=None, custom_rtu: tuple = (), allocation: str = "proportional",
+                 access: str = "driving") -> pd.DataFrame:
     """Per centre (in the order of *base_locs*, or DIRAC): capacity, patients
     treated and, for capped 3SFCA, the demand Q_f directed to it."""
-    gdf, dem, locs, tt, _, kw = _country_inputs(alpha2, model, t_max, custom_rtu, base_locs)
+    gdf, dem, locs, tt, _, kw = _country_inputs(alpha2, model, t_max, custom_rtu, base_locs, access)
     if not locs:
         return pd.DataFrame(columns=["lat", "lon", "capacity", "treated", "demand"])
     _, st_ = compute_accessibility(gdf, locs, capacity_per_machine_per_year=capacity, demand=dem,
@@ -1094,7 +1102,8 @@ def centre_loads(alpha2: str, model: str = "gaussian", t_max: float = 120.0, cap
 def plan_centres(alpha2: str, model: str = "gaussian", t_max: float = 120.0, capacity: float = 450.0,
                  base_locs=None, n_linacs: Optional[int] = 10, linacs_per_step: int = 1, strategy: str = "deficit",
                  snap_min: Optional[float] = None, custom_rtu: tuple = (), target_access: Optional[float] = None,
-                 max_steps: int = 200, allocation: str = "proportional", progress_callback=None):
+                 max_steps: int = 200, allocation: str = "proportional", access: str = "driving",
+                 progress_callback=None):
     """Greedy placement of new linacs in one country (resolution 5; *allocation*
     "proportional" for capped 3SFCA or "nearest_first").
 
@@ -1110,7 +1119,7 @@ def plan_centres(alpha2: str, model: str = "gaussian", t_max: float = 120.0, cap
     Returns (before, steps, locs): national D, A_C, A_G, A before; one dict per
     step; and the final ((lat, lon, n_linacs), ...).
     """
-    gdf, dem, locs, tt, km_mode, kw = _country_inputs(alpha2, model, t_max, custom_rtu, base_locs)
+    gdf, dem, locs, tt, km_mode, kw = _country_inputs(alpha2, model, t_max, custom_rtu, base_locs, access)
     hex_ids = list(gdf["h3"])
     if tt is None and not km_mode:  # no centres yet: every centre will be new
         tt = np.zeros((len(hex_ids), 0), dtype=np.float32)
