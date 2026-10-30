@@ -879,6 +879,18 @@ with tab_plan:
                     st.session_state.pop("plan", None)
                     st.rerun()
 
+def _rtu_table() -> None:
+    """The RTU table, shown below the countries or centres table."""
+    st.subheader("Radiotherapy utilisation rates")
+    st.caption("Share of each cancer site that should receive external-beam radiotherapy (curative and palliative "
+               "first courses): the optimal rates of the 2012 CCORE model (Barton et al. 2014; Wong et al. 2016), "
+               "mapped to the GLOBOCAN sites as in Appendix A.5 of the paper.")
+    _rt = _default_rtu_table().rename(columns={"RTU (%)": "Optimal RTU, CCORE 2012 (%)"})
+    if applied_rtu:
+        _rt["Custom RTU in use (%)"] = _rt["Cancer site"].map(dict(applied_rtu))
+    st.dataframe(_rt, hide_index=True, width="stretch", height=300)
+
+
 with tab_data:
     if is_region:
         st.subheader(f"Countries — {location}")
@@ -900,6 +912,7 @@ with tab_data:
                      | {c: st.column_config.NumberColumn(format="localized") for c in ["RT demand", "Linacs", "Deficit"]})
         st.download_button("⬇️ Download country table (CSV)", t.to_csv(index=False).encode(),
                            file_name=f"radmaps_{location.replace(' ', '_')}_countries.csv")
+        _rtu_table()
 
         st.subheader("RadMaps access against the single-constraint metrics")
         st.caption("Each country with at least one linac, as in Figure 5 of the paper. Points below the diagonal "
@@ -948,6 +961,7 @@ with tab_data:
         if "load" in facilities and alloc == "nearest_first":
             st.caption("Nearest-first fills centres in order of travel time, so the load shown is the share of "
                        "capacity used.")
+        _rtu_table()
 
     # ---- sensitivity of this location to the pre-computed inputs
     st.subheader(f"Sensitivity — {location}")
@@ -985,14 +999,6 @@ with tab_data:
             fig.update_yaxes(range=[0, 100], title_text="RadMaps access, A/D (%)", row=1, col=1)
             fig.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h", y=-0.25))
             st.plotly_chart(fig, width="stretch")
-    st.subheader("Radiotherapy utilisation rates")
-    st.caption("Share of each cancer site that should receive external-beam radiotherapy (curative and palliative "
-               "first courses): the optimal rates of the 2012 CCORE model (Barton et al. 2014; Wong et al. 2016), "
-               "mapped to the GLOBOCAN sites as in Appendix A.5 of the paper.")
-    _rt = _default_rtu_table().rename(columns={"RTU (%)": "Optimal RTU, CCORE 2012 (%)"})
-    if applied_rtu:
-        _rt["Custom RTU in use (%)"] = _rt["Cancer site"].map(dict(applied_rtu))
-    st.dataframe(_rt, hide_index=True, width="stretch", height=300)
 
     hx = g[["h3", "country", "population", "D", "A", "A_G", "deficit"]].rename(
         columns={"D": "rt_demand", "A": "rt_treated", "A_G": "geo_accessible_demand", "deficit": "rt_deficit"})
