@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import tempfile
 import urllib.request
@@ -236,6 +237,32 @@ def _view(lats, lons, pitch: float) -> pdk.ViewState:
                          zoom=max(0.2, min(12.0, zoom)), max_zoom=13, pitch=pitch, bearing=0)
 
 
+# Streamlit HTML-escapes the values substituted into a pydeck tooltip (since 1.6x), so the markup lives
+# in the template and each picked object carries plain text: a bold title and a body split by newlines.
+_TOOLTIP = {"html": "<b>{tip_title}</b><br/>{tip_body}", "style": {"whiteSpace": "pre-line"}}
+
+
+def _tip_parts(tip) -> tuple[str, str]:
+    """Plain title and body of an HTML tooltip '<b>title</b><br/>line<br/>line...'."""
+    s = str(tip)
+    m = re.match(r"\s*<b>(.*?)</b>(?:<br\s*/?>)?(.*)", s, re.S)
+    title, body = (m.group(1), m.group(2)) if m else (s, "")
+    body = re.sub(r"<br\s*/?>|<hr[^>]*>", "\n", body)
+    return re.sub(r"<[^>]+>", "", title), re.sub(r"<[^>]+>", "", body).strip("\n")
+
+
+def _plain_tips(layers: list) -> list:
+    """Replace each object's (or GeoJSON feature's) HTML 'tip' by plain tip_title / tip_body."""
+    for layer in layers:
+        data = getattr(layer, "data", None)
+        rows = ([f.setdefault("properties", {}) for f in data.get("features", [])] if isinstance(data, dict)
+                else data if isinstance(data, list) else [])
+        for r in rows:
+            if isinstance(r, dict) and "tip" in r:
+                r["tip_title"], r["tip_body"] = _tip_parts(r.pop("tip"))
+    return layers
+
+
 def _render(layers: list, view: pdk.ViewState, cmap_fn, vmin: float, vmax: float, label: str, region: bool,
             log_scale: bool = False) -> None:
     """Map with the colour bar to its right, the full dashboard's layout."""
@@ -243,8 +270,8 @@ def _render(layers: list, view: pdk.ViewState, cmap_fn, vmin: float, vmax: float
         nd = _build_no_data_fill_layer()
         bl = _build_borders_layer(False)
         layers = ([nd] if nd is not None else []) + layers + ([bl] if bl is not None else [])
-    deck = pdk.Deck(layers=layers, initial_view_state=view, map_style=_CARTO_LIGHT_NOLABELS,
-                    tooltip={"html": "{tip}"})
+    deck = pdk.Deck(layers=_plain_tips(layers), initial_view_state=view, map_style=_CARTO_LIGHT_NOLABELS,
+                    tooltip=_TOOLTIP)
     col_map, col_cb = st.columns([7, 1])
     with col_map:
         st.pydeck_chart(deck, width="stretch", height=MAP_HEIGHT, key=f"map_{location}_{res}")
@@ -333,8 +360,8 @@ def _render_profiles(countries: pd.DataFrame, view: pdk.ViewState, extra: list) 
                       get_fill_color="properties.fill", get_line_color=[255, 255, 255], line_width_min_pixels=0.5,
                       pickable=True)
     nd = _build_no_data_fill_layer()
-    deck = pdk.Deck(layers=([nd] if nd is not None else []) + [layer] + extra, initial_view_state=view,
-                    map_style=_CARTO_LIGHT_NOLABELS, tooltip={"html": "{tip}"})
+    deck = pdk.Deck(layers=_plain_tips(([nd] if nd is not None else []) + [layer] + extra), initial_view_state=view,
+                    map_style=_CARTO_LIGHT_NOLABELS, tooltip=_TOOLTIP)
     with col_map:
         st.pydeck_chart(deck, width="stretch", height=MAP_HEIGHT, key=f"profiles_{location}")
     with col_lg:
